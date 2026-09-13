@@ -58,7 +58,7 @@ in place of a real runner + parser, so the loop advances against the Forest fixt
 Requires Python 3.10+. Pick one:
 
 ```bash
-# 1) clone
+# 1) clone — NOT with sudo (a root-owned checkout can't write obol's state)
 git clone https://github.com/platocres/o.b.o.l.git && cd o.b.o.l
 
 # 2a) install with pipx (recommended — isolated, puts `obol` on your PATH)
@@ -75,7 +75,11 @@ pip install -e ".[rich]"
 
 ### Try it in 20 seconds
 
+obol keeps its state (`.obol/`) in the **current directory**, so run it from an
+engagement directory you own — not the source checkout:
+
 ```bash
+mkdir -p ~/labs/forest && cd ~/labs/forest
 obol init --demo     # seed the HTB Forest walkthrough (post-nmap)
 obol next            # proven facts · ranked next actions · blocked paths
 obol run 1           # run the top action, ingest it, update facts
@@ -85,7 +89,11 @@ obol serve           # read-only web view at http://127.0.0.1:8765
 
 ### Run without installing
 
+Point `PYTHONPATH` at the checkout, but still work in a lab directory:
+
 ```bash
-git clone https://github.com/platocres/o.b.o.l.git && cd o.b.o.l
-PYTHONPATH=. python3 -m obol init --demo && PYTHONPATH=. python3 -m obol next
+git clone https://github.com/platocres/o.b.o.l.git      # no sudo
+OBOL="$PWD/o.b.o.l"
+mkdir -p ~/labs/forest && cd ~/labs/forest
+PYTHONPATH="$OBOL" python3 -m obol init --demo && PYTHONPATH="$OBOL" python3 -m obol next
 ```
