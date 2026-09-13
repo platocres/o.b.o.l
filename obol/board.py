@@ -1,17 +1,17 @@
-"""Terminal rendering — the board and command views.
+"""Terminal rendering — the board and command/explain views.
 
-Uses rich when available for panels/tables; degrades to clean ASCII otherwise,
-so obol runs on any box (the same fallback discipline Charon uses for non-UTF-8
-consoles). Everything is printed to scrollback, never a full-screen live layout —
-the transcript is the operator's evidence log.
+Uses rich when available; degrades to clean ASCII otherwise, so obol runs on any
+box. Everything prints to scrollback (never a full-screen live layout) — the
+transcript is the operator's evidence log.
 """
 from __future__ import annotations
 
+import re
+
 from .facts import FactSet
-from .pack import Action, next_actions, blocked_actions
+from .pack import Action, friendly, next_actions, blocked_actions
 from .workspace import Workspace
 
-# Semantic ASCII markers (borrowed idea from Charon's _shared symbols).
 SYM_NEXT = ">>"
 SYM_OK = "*"
 SYM_BLOCK = "·"
@@ -28,67 +28,67 @@ except Exception:                   # pragma: no cover
 
 
 # --------------------------------------------------------------------------- #
-# command templating                                                           #
+# command templating — old-obol cards use {{placeholder}} tokens               #
 # --------------------------------------------------------------------------- #
 def command_context(ws: Workspace) -> dict:
     f = ws.facts
-    ctx = {"target": ws.target or "{target}"}
-    domains = f.values("ad.domain")
-    if domains:
-        name = domains[0].get("name", "")
+    ctx = {"target": ws.target or "<target>"}
+    dom = f.values("ad.domain_known")
+    if dom and dom[0].get("name"):
+        name = dom[0]["name"]
         ctx["domain"] = name
-        ctx["basedn"] = ",".join(f"DC={p}" for p in name.split(".")) if name else "{basedn}"
-    creds = f.values("cred.valid")
+        ctx["basedn"] = ",".join(f"DC={p}" for p in name.split("."))
+        ctx["dc"] = name
+    creds = f.values("credential.available") or f.values("credential.plaintext")
     if creds:
-        ctx["user"] = creds[0].get("user", "{user}")
-        ctx["password"] = creds[0].get("password", "{password}")
-    asrep = f.values("cred.material.asrep_hash")
-    if asrep:
-        ctx.setdefault("user", asrep[0].get("user", "{user}"))
-        ctx["hash"] = asrep[0].get("hash", "{hash}")
-    nt = f.values("cred.material.nt_hash")
-    if nt:
-        ctx["hash"] = nt[0].get("hash", "{hash}")
-    users = f.values("ad.user")
-    if users and "user" not in ctx:
-        ctx["user"] = users[0].get("sam", "{user}")
+        ctx["user"] = creds[0].get("user", "<user>")
+        ctx["password"] = creds[0].get("password", "<password>")
     return ctx
 
 
 def fill_command(action: Action, ws: Workspace) -> str:
-    """Best-effort substitution; unknown placeholders are left visible."""
-    class _Safe(dict):
-        def __missing__(self, key):
-            return "{" + key + "}"
-    return action.command.format_map(_Safe(command_context(ws)))
+    """Substitute known {{tokens}}; leave operator-supplied placeholders visible."""
+    cmd = action.command
+    for key, val in command_context(ws).items():
+        cmd = cmd.replace("{{" + key + "}}", str(val))
+    return cmd
 
 
 # --------------------------------------------------------------------------- #
 # board                                                                        #
 # --------------------------------------------------------------------------- #
+_NOTABLE = [
+    ("host.up", "host    up"),
+    ("ad.domain_known", "domain  known"),
+    ("ad.anonymous_bind", "ad      anonymous LDAP bind allowed"),
+    ("ad.user_list", "ad      domain user list obtained"),
+    ("ad.graph.collected", "ad      BloodHound graph collected"),
+    ("ad.control_paths", "ad      object-control paths mapped"),
+    ("hash.asrep", "cred    AS-REP hash (crackable material)"),
+    ("hash.tgs", "cred    Kerberoast hash (crackable material)"),
+    ("credential.candidate", "cred    candidate credentials (unvalidated)"),
+    ("credential.available", "cred    validated credential"),
+    ("access.admin", "access  administrative access"),
+    ("access.system", "access  SYSTEM"),
+    ("foothold.windows", "access  Windows foothold"),
+    ("loot.ntds", "loot    NTDS secrets"),
+]
+
+
 def _proven_lines(facts: FactSet) -> list[str]:
     lines: list[str] = []
-    if facts.has("host.up"):
-        os = (facts.values("host.up")[0] or {}).get("os", "")
-        lines.append(f"host    up{(' · ' + os) if os else ''}")
-    if facts.has("ad.domain"):
-        dn = facts.values("ad.naming_context")
-        ctx = f"  (naming ctx {dn[0]['dn']})" if dn else ""
-        lines.append(f"domain  {facts.values('ad.domain')[0]['name']}{ctx}")
-    if facts.has("ad.anon_bind"):
-        n = len(facts.values("ad.user"))
-        lines.append(f"ad      anonymous LDAP bind allowed · {n} users found")
-    if facts.has("cred.material.asrep_hash"):
-        lines.append(f"cred    AS-REP hash for {facts.values('cred.material.asrep_hash')[0]['user']} (crackable material)")
-    if facts.has("cred.valid"):
-        c = facts.values("cred.valid")[0]
-        lines.append(f"cred    valid: {c['user']}:{c['password']}")
-    if facts.has("access.authenticated"):
-        a = facts.values("access.authenticated")[0]
-        adm = "ADMIN" if a.get("admin") else "user (not admin)"
-        lines.append(f"access  authenticated as {a['user']} — {adm}")
-    if not facts.has("cred.valid") and not facts.has("access.authenticated"):
-        lines.append("——  no credentials proven  ——")
+    for kind, label in _NOTABLE:
+        if facts.has(kind):
+            extra = ""
+            if kind == "host.up":
+                os = (facts.values(kind)[0] or {}).get("os", "")
+                extra = f" · {os}" if os else ""
+            if kind == "ad.domain_known":
+                nm = (facts.values(kind)[0] or {}).get("name", "")
+                extra = f": {nm}" if nm else ""
+            lines.append(label + extra)
+    if not (facts.has("credential.available") or facts.has("access.admin") or facts.has("access.system")):
+        lines.append("——  no validated credential or privileged access  ——")
     return lines
 
 
@@ -108,9 +108,9 @@ def render_board(ws: Workspace) -> None:
             t.add_row(str(i), a.title, f"proves: {a.proves}\nnot: {a.does_not_prove}")
         _console.print(Panel(t, title=f"{SYM_NEXT} NEXT ACTIONS", border_style="cyan"))
         if blk:
-            _console.print(Panel("\n".join(f"{SYM_BLOCK}  {a.title} — {a.unmet(facts)}" for a in blk),
-                                 title="blocked", border_style="grey37"))
-        _console.print(f"[dim]run an action:[/dim] obol run <#>   ·   explain: obol explain <#>")
+            rows = "\n".join(f"{SYM_BLOCK}  {a.title} — {a.unmet(facts)}" for a in blk[:8])
+            _console.print(Panel(rows, title="blocked", border_style="grey37"))
+        _console.print("[dim]run:[/dim] obol run <#>   [dim]explain:[/dim] obol explain <#>")
     else:
         print(f"\n== obol · {ws.name} · {ws.target} ==")
         print(f"\n{SYM_OK} PROVEN")
@@ -123,18 +123,46 @@ def render_board(ws: Workspace) -> None:
             print(f"       not:    {a.does_not_prove}")
         if blk:
             print("\n   blocked")
-            for a in blk:
+            for a in blk[:8]:
                 print(f"   {SYM_BLOCK}  {a.title} — {a.unmet(facts)}")
-        print("\nrun an action:  obol run <#>    ·    explain:  obol explain <#>\n")
+        print("\nrun: obol run <#>   ·   explain: obol explain <#>\n")
 
 
 def render_command(action: Action, ws: Workspace) -> None:
-    cmd = fill_command(action, ws)
+    """`explain` — the full Orange card: reasoning, every command variant, refs."""
+    primary = fill_command(action, ws)
+    ctx = command_context(ws)
+
+    def _fill(run: str) -> str:
+        for k, v in ctx.items():
+            run = run.replace("{{" + k + "}}", str(v))
+        return run
+
     if _RICH:
-        body = f"[bold]{cmd}[/bold]\n\n[green]proves:[/green]   {action.proves}\n[yellow]does NOT:[/yellow] {action.does_not_prove}"
-        _console.print(Panel(body, title=f"{action.title}  ·  {action.tool}", border_style="cyan"))
+        body = [f"[dim]{action.hypothesis}[/dim]\n" if action.hypothesis else ""]
+        body.append(f"[green]proves:[/green]   {action.proves}")
+        body.append(f"[yellow]does NOT:[/yellow] {action.does_not_prove}\n")
+        body.append("[bold]commands[/bold] (you run these):")
+        for c in action.commands:
+            body.append(f"  [cyan]${_fill(c['run'])}[/cyan]")
+            if c.get("note"):
+                body.append(f"    [dim]{c['note']}[/dim]")
+        if action.refs:
+            body.append("\n[dim]refs: " + " · ".join(action.refs) + "[/dim]")
+        _console.print(Panel("\n".join(x for x in body if x is not None),
+                             title=f"{action.title}  ·  {', '.join(action.tools) or action.tool}",
+                             border_style="cyan"))
     else:
-        print(f"\n{action.title}  ({action.tool})")
-        print(f"  {cmd}")
+        print(f"\n{action.title}  ({', '.join(action.tools) or action.tool})")
+        if action.hypothesis:
+            print(f"  {action.hypothesis}")
         print(f"  proves:   {action.proves}")
-        print(f"  does NOT: {action.does_not_prove}\n")
+        print(f"  does NOT: {action.does_not_prove}")
+        print("  commands:")
+        for c in action.commands:
+            print(f"    $ {_fill(c['run'])}")
+            if c.get("note"):
+                print(f"        {c['note']}")
+        if action.refs:
+            print("  refs: " + " · ".join(action.refs))
+        print()
