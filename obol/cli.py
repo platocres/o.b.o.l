@@ -34,17 +34,32 @@ def _pick(ws: Workspace, n: int):
 
 
 def cmd_init(args) -> None:
-    ws = Workspace(Path.cwd())
+    cwd = Path.cwd()
+    ws = Workspace(cwd)
     if ws.exists():
         print(f"workspace already initialized at {ws.dir}")
         return
+    # A workspace is an engagement directory, not the code checkout. Warn (don't
+    # block) if someone runs `init` inside the obol source tree.
+    if (cwd / "obol" / "pack.py").exists() and (cwd / "pyproject.toml").exists():
+        print("note: this looks like the obol source tree — obol keeps its state in the\n"
+              "      current directory. Prefer an engagement dir: "
+              "`mkdir -p ~/labs/box && cd ~/labs/box`.", file=sys.stderr)
     if args.demo:
         seed_forest(ws)
-        print("initialized demo workspace (HTB Forest, post-nmap).")
+        msg = "initialized demo workspace (HTB Forest, post-nmap)."
     else:
         ws.target = args.target or ""
-        print("initialized empty workspace.")
-    ws.save()
+        msg = "initialized empty workspace."
+    try:
+        ws.save()
+    except OSError as e:
+        print(f"error: cannot create the workspace at {ws.dir}\n  {e}\n"
+              "Pick a directory you can write to. If you cloned with `sudo`, the checkout\n"
+              "is root-owned — re-clone without sudo (or chown it) and run obol from a\n"
+              "normal directory you own.", file=sys.stderr)
+        raise SystemExit(1)
+    print(msg)
     print("next: obol next")
 
 
