@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obol"
+version = "0.0.1"
+description = "Evidence-driven OSCP operator companion: proven facts in, honest next actions out."
+requires-python = ">=3.10"
+# rich is the presentation layer, but obol degrades to plain text without it,
+# so it stays an optional extra rather than a hard dependency.
+dependencies = []
+
+[project.optional-dependencies]
+rich = ["rich>=13"]
+
+[project.scripts]
+obol = "obol.cli:main"
+
+[tool.setuptools]
+packages = ["obol"]

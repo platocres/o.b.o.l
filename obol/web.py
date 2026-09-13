@@ -1,0 +1,97 @@
+"""Read-only local web view: findings + the path graph.
+
+A single self-contained page built from the current workspace state. It never
+executes anything and binds to localhost only — the terminal is the sole actor;
+this is just a neat mirror for eyeballing findings and the path before writing
+the report. mermaid is loaded from a CDN here for the skeleton; a production
+build should vendor it so the page works offline on an exam box.
+"""
+from __future__ import annotations
+
+import html
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from .graph import build_mermaid
+from .pack import next_actions, blocked_actions
+from .workspace import Workspace
+
+_TEMPLATE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>obol · {name}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font: 14px/1.5 system-ui, sans-serif; margin: 0; background: #0b0f14; color: #e6edf3; }}
+  header {{ padding: 16px 20px; background: #111820; border-bottom: 1px solid #223; }}
+  h1 {{ font-size: 16px; margin: 0; }} h1 small {{ color: #8b98a5; font-weight: 400; }}
+  main {{ max-width: 1100px; margin: 0 auto; padding: 20px; }}
+  section {{ margin-bottom: 28px; }}
+  h2 {{ font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b98a5; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td, th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #1c2530; vertical-align: top; }}
+  .kind {{ color: #58a6ff; font-family: ui-monospace, monospace; white-space: nowrap; }}
+  .not {{ color: #d29922; }} .proves {{ color: #3fb950; }}
+  .blocked {{ color: #8b98a5; }}
+  .graph {{ background: #0d1117; border: 1px solid #1c2530; border-radius: 8px; padding: 12px; overflow-x: auto; }}
+</style></head><body>
+<header><h1>obol <small>· {name} · {target}</small></h1></header>
+<main>
+  <section><h2>Path</h2><div class="graph"><pre class="mermaid">{mermaid}</pre></div></section>
+  <section><h2>Proven facts</h2><table>{facts_rows}</table></section>
+  <section><h2>Next actions</h2><table>{next_rows}</table></section>
+  <section><h2>Blocked</h2><table>{blocked_rows}</table></section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
+</body></html>"""
+
+
+def build_page(ws: Workspace) -> str:
+    facts = ws.facts
+    fact_rows = "".join(
+        f"<tr><td class='kind'>{html.escape(f.kind)}</td>"
+        f"<td>{html.escape(str(f.value))}</td>"
+        f"<td class='blocked'>{html.escape(f.source)}</td></tr>"
+        for f in sorted(facts.facts, key=lambda x: x.kind)
+    ) or "<tr><td>none yet</td></tr>"
+
+    next_rows = "".join(
+        f"<tr><td>{i}</td><td>{html.escape(a.title)}</td>"
+        f"<td><span class='proves'>proves:</span> {html.escape(a.proves)}<br>"
+        f"<span class='not'>not:</span> {html.escape(a.does_not_prove)}</td></tr>"
+        for i, a in enumerate(next_actions(facts), 1)
+    ) or "<tr><td>none</td></tr>"
+
+    blocked_rows = "".join(
+        f"<tr><td class='kind'>{html.escape(a.title)}</td><td class='blocked'>{html.escape(a.unmet(facts))}</td></tr>"
+        for a in blocked_actions(facts)
+    ) or "<tr><td>none</td></tr>"
+
+    return _TEMPLATE.format(
+        name=html.escape(ws.name), target=html.escape(ws.target),
+        mermaid=html.escape(build_mermaid(facts)),
+        facts_rows=fact_rows, next_rows=next_rows, blocked_rows=blocked_rows,
+    )
+
+
+def serve(ws: Workspace, port: int = 8765) -> None:
+    page = build_page  # rebuilt per request so it reflects the latest state on disk
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            fresh = Workspace(ws.root).load()
+            body = page(fresh).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", port), Handler)
+    print(f"obol web view (read-only) at http://127.0.0.1:{port}  ·  Ctrl-C to stop")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped.")
