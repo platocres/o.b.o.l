@@ -98,7 +98,29 @@ graph).
   `ldapsearch -x -H ldap://{target}`). That shallowness is exactly what obol's
   proof-gated packs replace.
 
-## 5. HTB Forest — the reference box
+## 5. Pentest Companion — web robustness & playbooks reference
+
+`Poellie01/PentestCompanion` — a Flask engagement-workspace app. The reference for
+obol's **robust web surface** and **playbooks** (`docs/ROADMAP.md` item 5).
+
+- What to learn from (reimplement, separate project — check its LICENSE before
+  reusing any code):
+  - **Playbook engine** (`tools/playbook_engine.py`): `BUILTIN_PLAYBOOKS` is a
+    library of named playbooks; each step is
+    `{label, tool, args_extra, require_approval, condition}`; a daemon thread runs
+    steps in order via a generic runner; modes **live** and **dry_run**;
+    **credential propagation** injects workspace creds into authed steps;
+    **per-step approval** pauses before risky steps. This is exactly obol's
+    playbook shape (a playbook = an ordered sequence of pack actions).
+  - **Manifest-driven tools + generic runner/parser** (`tools/manifest.py`,
+    `profiles.py`, `generic_runner.py`, `generic_parser.py`).
+  - **Web that launches tools/playbooks** and shows tool availability
+    (`blueprints/`, `templates/playbooks.html`, `kali_tools.html`,
+    `tools_status.html`).
+- What to reject: its heavier direction (teams/auth/SaaS surface). obol stays a
+  single-operator, local, terminal-first tool with a web mirror.
+
+## 6. HTB Forest — the reference box
 
 The demo fixture (`obol/seed.py`) and tests are built against HTB **Forest**:
 `nmap → anonymous LDAP enum → AS-REP roast (svc-alfresco) → crack → WinRM (user,

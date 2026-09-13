@@ -62,11 +62,34 @@ path diagram. Output markdown first; the report must cite evidence (each claim �
 the command/output that produced it) and must never present project metadata as
 engagement proof.
 
-## 5. Web view refinements
+## 5. Robust web surface — run-from-site, playbooks, path-map redesign
 
-The mermaid graph gets busy at the full frontier. Options: rank-group by phase,
-collapse settled chains, or filter to the near frontier more aggressively. Add
-live refresh (poll or manual) if desired — keep it read-only and localhost-only.
+The web view should become a real second surface (still localhost-only), modeled
+on PentOS and Pentest Companion (`docs/SOURCES.md`). Depends on item 1's runner.
+
+- **Run from the site.** Let the user launch an action's command from the web
+  page; it goes through the *same* scope-enforced runner + parser as the terminal,
+  writes to the *same* `.obol` store, and both surfaces reflect it. Do not add a
+  second state store or a second runner. This needs the current stdlib
+  `http.server` to grow small POST endpoints (or move to a tiny FastAPI/Flask app
+  like PentOS's) — keep it localhost-bound and never expose execution off-box.
+- **Playbooks (both surfaces).** A playbook is a named, ordered list of steps,
+  each `{label, action/tool, args_extra?, require_approval?}`, stored as data
+  alongside packs. Run live or dry-run; pause for approval before noisy/risky
+  steps; propagate creds from workspace facts into steps. Pentest Companion's
+  `tools/playbook_engine.py` (`BUILTIN_PLAYBOOKS`, daemon-thread step runner,
+  approval + dry-run + credential propagation) is the reference design — learn
+  from it, don't copy (it's a separate project). Playbooks let a user get back a
+  useful batch of evidence in one move and present it neatly.
+- **Path-map redesign.** Keep the map (users like it) but make it clearer. The
+  current `graph.py` is a light top-down declutter (path walked + live moves, no
+  blocked branches). The reference for "much more straightforward" is the prior
+  **platocres/obol** path view — study how it lays out the methodology path
+  (phase/lane progression rather than a dependency DAG) and match that feel. This
+  likely means adding a phase/stage to pack actions and grouping the map by it.
+- **Tool availability** (nice-to-have, from Pentest Companion `kali_tools` /
+  `tools_status`): show which referenced tools are installed on the box.
+- Live refresh (poll or manual). Keep it simple for a single local user.
 
 ## Known smaller issues
 
