@@ -59,6 +59,92 @@ def test_winrm_login_proves_foothold_and_records_live_session(tmp_path, monkeypa
     assert "s3rvice" in ws2.sessions[0]["login_command"]  # not redacted
 
 
+# ── pass-the-hash logins (§6a: hash-only logins, -H) ─────────────────────────
+def test_pth_login_from_dumped_hash_offers_and_proves_foothold(tmp_path, monkeypatch):
+    """With only an NT hash (a dumped SAM/NTDS entry) and no password, WinRM is
+    offered as a pass-the-hash login and proves a foothold via `nxc winrm -H`."""
+    ws = _ws(tmp_path)
+    ws.facts.add(Fact("winrm.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("hash.ntlm", "domain:htb.local",
+                      {"count": 1, "entries": [
+                          {"user": "administrator", "rid": 500,
+                           "nthash": "32ed87bdb5fdc5e9cba88547376818d4"}]}, source="secretsdump"))
+    ws.save()
+
+    offers = {o["kind"]: o for o in sessions.eligible_sessions(ws, "10.10.10.161")}
+    assert offers["winrm"]["ready"] is True
+    assert offers["winrm"]["pth"] is True and offers["winrm"]["method"] == "pth"
+    assert offers["winrm"]["user"] == "administrator"
+
+    captured = {}
+    def run(ws, command, tool, **kw):
+        captured["command"] = command
+        return RunResult(command, command.split(), 0,
+                         "WINRM 10.10.10.161 5985 FOREST [+] htb\\administrator "
+                         "(Pwn3d!)\nnt authority\\system\n", "",
+                         ws.runs_dir / "o.txt", ws.runs_dir / "e.txt", 5.0, 1)
+    monkeypatch.setattr(service, "run_command", run)
+
+    res = sessions.open_session(ws, "10.10.10.161", "winrm")
+    assert res["ok"] and res["method"] == "pth"
+    # the proof used -H with the hash, never -p
+    assert "-H 32ed87bdb5fdc5e9cba88547376818d4" in captured["command"]
+    assert "-p " not in captured["command"]
+    # the handoff is evil-winrm -H, ready to paste
+    assert "evil-winrm" in res["login_command"] and "-H 32ed87bdb5fdc5e9cba88547376818d4" in res["login_command"]
+    assert ws.facts.has("foothold.windows")
+    assert res["session"]["method"] == "pth"
+
+
+def test_password_is_preferred_over_hash_when_both_exist(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    ws.facts.add(Fact("winrm.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("credential.available", "host:10.10.10.161",
+                      {"user": "svc", "password": "pw"}, source="crack"))
+    ws.facts.add(Fact("hash.ntlm", "domain:htb.local",
+                      {"count": 1, "entries": [
+                          {"user": "administrator", "rid": 500,
+                           "nthash": "32ed87bdb5fdc5e9cba88547376818d4"}]}, source="dump"))
+    ws.save()
+    offer = {o["kind"]: o for o in sessions.eligible_sessions(ws, "10.10.10.161")}["winrm"]
+    assert offer["method"] == "password" and offer["pth"] is False
+
+    captured = {}
+    def run(ws, command, tool, **kw):
+        captured["c"] = command
+        return RunResult(command, command.split(), 0, "[+] htb\\svc\nhtb\\svc\n", "",
+                         ws.runs_dir / "o.txt", ws.runs_dir / "e.txt", 5.0, 1)
+    monkeypatch.setattr(service, "run_command", run)
+    res = sessions.open_session(ws, "10.10.10.161", "winrm")
+    assert res["method"] == "password" and "-p pw" in captured["c"]
+    # …but an operator can force pass-the-hash explicitly
+    res2 = sessions.open_session(ws, "10.10.10.161", "winrm", method="pth")
+    assert res2["method"] == "pth"
+
+
+def test_pth_forced_without_a_hash_is_refused(tmp_path):
+    ws = _ws(tmp_path)
+    ws.facts.add(Fact("winrm.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("credential.available", "host:10.10.10.161",
+                      {"user": "svc", "password": "pw"}, source="x"))
+    ws.save()
+    with pytest.raises(sessions.SessionError):
+        sessions.open_session(ws, "10.10.10.161", "winrm", method="pth")
+
+
+def test_hash_cred_skips_machine_and_krbtgt_accounts(tmp_path):
+    ws = _ws(tmp_path)
+    ws.facts.add(Fact("winrm.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("hash.ntlm", "domain:htb.local",
+                      {"count": 3, "entries": [
+                          {"user": "krbtgt", "rid": 502, "nthash": "a" * 32},
+                          {"user": "DC01$", "rid": 1000, "nthash": "b" * 32},
+                          {"user": "jdoe", "rid": 1103, "nthash": "c" * 32}]}, source="dump"))
+    ws.save()
+    offer = {o["kind"]: o for o in sessions.eligible_sessions(ws, "10.10.10.161")}["winrm"]
+    assert offer["ready"] is True and offer["user"] == "jdoe"   # not krbtgt, not the machine account
+
+
 def test_proven_badge_is_per_kind_not_a_shared_foothold(tmp_path, monkeypatch):
     """A WinRM login yields the shared foothold.windows; RDP (a sibling that also
     produces it) must NOT be marked proven or offered off that — it is not reachable."""

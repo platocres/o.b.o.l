@@ -281,8 +281,8 @@ function onClick(e) {
     case "ev-add": addEvidence(host); break;
     case "evdel": delEvidence(el.dataset.id); break;
     case "find-host": state.findHost = el.dataset.host || ""; render(); break;
-    case "login": runLogin(el.dataset.host || state.target, el.dataset.kind); break;
-    case "reveal-login": revealLogin(el.dataset.host || state.target, el.dataset.kind); break;
+    case "login": runLogin(el.dataset.host || state.target, el.dataset.kind, el.dataset.method || ""); break;
+    case "reveal-login": revealLogin(el.dataset.host || state.target, el.dataset.kind, el.dataset.method || ""); break;
     case "probe-session": probeSession(el.dataset.id); break;
     case "close-session": closeSession(el.dataset.id); break;
   }
@@ -650,9 +650,10 @@ function sessionsCard(b) {
   const sessions = b.sessions || [];
   if (!logins.length && !sessions.length) return "";
   const offers = logins.map((o) => {
-    const title = o.ready ? `Validate ${o.label} access and open a session` : esc(o.reason || "");
-    return `<button class="btn sm ${o.ready ? "primary" : ""}" data-act="login" data-host="${esc(b.meta.host)}" data-kind="${esc(o.kind)}" ${o.ready ? "" : "disabled"} title="${title}">${o.ready ? "Log in — " : ""}${esc(o.label)}${o.proven ? " ✓" : ""}</button>`;
-  }).join("") || `<span class="muted">No logins available yet — need a validated credential and a reachable service (winrm / ssh / rdp).</span>`;
+    const pth = o.pth ? " · pass-the-hash" : "";
+    const title = o.ready ? `Validate ${o.label} access${o.pth ? " with the NT hash (pass-the-hash)" : ""} and open a session` : esc(o.reason || "");
+    return `<button class="btn sm ${o.ready ? "primary" : ""}" data-act="login" data-host="${esc(b.meta.host)}" data-kind="${esc(o.kind)}" data-method="${esc(o.method || "")}" ${o.ready ? "" : "disabled"} title="${title}">${o.ready ? "Log in — " : ""}${esc(o.label)}${esc(pth)}${o.proven ? " ✓" : ""}</button>`;
+  }).join("") || `<span class="muted">No logins available yet — need a validated credential (password or NT hash) and a reachable service (winrm / ssh / rdp).</span>`;
   const rows = sessions.map((s) => {
     const dot = s.status === "active" ? "good" : (s.status === "dead" ? "bad" : "wait");
     return `<div class="sess-row">
@@ -672,17 +673,18 @@ function sessionsCard(b) {
     ${sessions.length ? `<div class="sess-list" style="margin-top:12px">${rows}</div>` : ""}
     <div class="muted" style="margin-top:10px;font-size:11px">obol validates access non-interactively, then hands you the ready-to-paste interactive command to run in your terminal.</div></div>`;
 }
-async function runLogin(host, kind) {
+async function runLogin(host, kind, method) {
   if (!host || !kind) return;
   suppressEventToastsUntil = Date.now() + 2500;
   state.lastRun = { target: host, pending: true, action_id: `login (${kind})` };
   if (state.view === "target" && state.target === host) render();
   try {
-    const r = await apiPost("/api/run/login", { target: host, kind });
+    const r = await apiPost("/api/run/login", { target: host, kind, method: method || "" });
     state.lastRun = { target: host, pending: false, outcome: r.outcome };
     if (r.ok) {
-      toast("Session opened", `${kind} access proven — launching handoff`, "ok");
-      await revealLogin(host, kind);          // copy the command to paste immediately
+      const via = r.method === "pth" ? " (pass-the-hash)" : "";
+      toast("Session opened", `${kind} access proven${via} — launching handoff`, "ok");
+      await revealLogin(host, kind, r.method || method);   // copy the command to paste immediately
     } else {
       toast("Login not confirmed", r.reason || "validation did not confirm access", "err");
     }
@@ -693,9 +695,10 @@ async function runLogin(host, kind) {
     if (state.view === "target" && state.target === host) render();
   }
 }
-async function revealLogin(host, kind) {
+async function revealLogin(host, kind, method) {
   try {
-    const r = await api(`/api/session/login_command?target=${encodeURIComponent(host)}&kind=${encodeURIComponent(kind)}`);
+    const q = `target=${encodeURIComponent(host)}&kind=${encodeURIComponent(kind)}&method=${encodeURIComponent(method || "")}`;
+    const r = await api(`/api/session/login_command?${q}`);
     copyText(r.command);   // copies + shows the command in a toast
   } catch (e) { toast("Could not build login command", e.message, "err"); }
 }

@@ -256,7 +256,8 @@ The build sequence (each a reviewable PR):
 - **(a) Sessions layer + one-click login — DONE.** `obol/sessions.py`: a login
   registry (winrm/ssh/rdp) with, per kind, a non-interactive **proof** command and
   the interactive **login** command. `eligible_sessions` offers a login when a
-  validated password credential + a reachable service exist; `open_session` runs the
+  validated credential (a password, or an NT hash for pass-the-hash) + a reachable
+  service exist; `open_session` runs the
   proof through the shared `service.run_action` (same runner/parser/scope gate/
   ledger), and only once the captured output establishes the access fact
   (`foothold.windows` via `nxc winrm -x whoami`, `foothold.linux` via `sshpass … ssh
@@ -266,16 +267,28 @@ The build sequence (each a reviewable PR):
   re-runs the proof to refresh status (the manual form of the periodic probe). Two
   narrow proof parsers were added (ssh `uid=` → linux shell, `uid=0` → admin; `nxc
   rdp [+]` → rdp auth, `(Pwn3d!)` → admin), reusing the existing evil-winrm/exec
-  parsers for WinRM. Terminal: `obol login [host] [--kind]`, `obol sessions`, `obol
-  session probe|close|rm`. Web: the target Overview has an **Access & sessions**
-  card (offer buttons + live sessions with the interactive command), `POST
-  /api/run/login`, `/api/session/probe|close`, `DELETE /api/session`. The proof
-  keeps facts the source of truth — the shell is proven by a captured command, never
-  by the unparseable interactive handoff, and this module produces no facts of its
-  own. **Still open in (a):** hash-only pass-the-hash logins (needs `-H`), penelope
-  reverse-shell **listeners** (an async start-and-watch flow, not a credentialed
-  login), tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic
-  periodic probe loop (the manual `probe` exists).
+  parsers for WinRM. Terminal: `obol login [host] [--kind] [--method]`, `obol
+  sessions`, `obol session probe|close|rm`. Web: the target Overview has an
+  **Access & sessions** card (offer buttons + live sessions with the interactive
+  command), `POST /api/run/login`, `/api/session/probe|close`, `DELETE
+  /api/session`. The proof keeps facts the source of truth — the shell is proven by
+  a captured command, never by the unparseable interactive handoff, and this module
+  produces no facts of its own.
+- **(a′) Pass-the-hash logins — DONE.** Hash-only logins (`-H`) close the AD
+  endgame: a dumped SAM/NTDS NT hash (`hash.ntlm` entries) or a validated
+  credential carrying an `nthash` logs in over WinRM (`nxc winrm -u u -H h` proof →
+  `evil-winrm -u u -H h` handoff) — and over RDP via Restricted Admin — with no
+  cracking. `eligible_sessions`/`open_session` auto-pick a password when one exists,
+  else pass-the-hash; the operator can force either with `obol login --method
+  password|pth` (web: the login `method`). Credential recording stays honest — a
+  `user:<hash>` auth line is recorded as an `nthash` (`method: pth`), never
+  mislabeled as a plaintext password (`parsers._add_authenticated_service`,
+  evil-winrm `-H`). The chosen credential is pinned into the proof/login command via
+  a template `context` override, so the exact hash is used rather than whichever
+  credential sorts first. **Still open in (a):** penelope reverse-shell
+  **listeners** (an async start-and-watch flow, not a credentialed login),
+  tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic periodic
+  probe loop (the manual `probe` exists).
 - **(b) Unlocks the privesc pack.** The `access.*`/`foothold.*` fact from (a) gates
   the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
   login and privesc are two halves of one milestone.

@@ -669,7 +669,8 @@ def cmd_login(args) -> None:
     kind = _pick_login_kind(ws, host, args.kind)
     print(f"\n$ validating {kind} access on {host} …")
     try:
-        res = sessions.open_session(ws, host, kind, dry_run=args.dry_run, surface="cli")
+        res = sessions.open_session(ws, host, kind, method=args.method,
+                                    dry_run=args.dry_run, surface="cli")
     except (SessionError, ActionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
@@ -684,7 +685,8 @@ def cmd_login(args) -> None:
         print(f"\n✗ {res['reason']}")
         raise SystemExit(1)
     s = res["session"]
-    print(f"\n{board.SYM_OK} access proven ({s['proof_fact']}) — session {s['id']} recorded (status: {s['status']}).")
+    via = " via pass-the-hash" if res.get("method") == "pth" else ""
+    print(f"\n{board.SYM_OK} access proven{via} ({s['proof_fact']}) — session {s['id']} recorded (status: {s['status']}).")
     print("\nlaunch the interactive session in your terminal:")
     print(f"   $ {res['login_command']}")
     print("\nprivesc moves for this host are now unlocked — `obol next`.")
@@ -819,6 +821,9 @@ try:
     plogin.add_argument("target", nargs="?", default="", help="host to log into (default: active target)")
     plogin.add_argument("--kind", default="", choices=[k.key for k in sessions.SESSION_KINDS],
                         help="login kind; inferred when only one is ready")
+    plogin.add_argument("--method", default="", choices=["password", "pth"],
+                        help="auth method: password or pth (pass-the-hash); "
+                             "default prefers a password, else an NT hash")
     plogin.add_argument("--dry-run", action="store_true", help="show the proof + login commands without running")
     plogin.set_defaults(func=cmd_login)
 

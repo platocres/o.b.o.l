@@ -415,13 +415,13 @@ class Workspace:
 
     def add_session(self, *, host: str, kind: str, user: str = "", os: str = "",
                     login_command: str = "", proof_run: str = "", proof_fact: str = "",
-                    label: str = "", status: str = "active") -> dict:
+                    label: str = "", status: str = "active", method: str = "password") -> dict:
         norm = normalize_target(host)
         now = time.time()
         sid = f"sess{int(now * 1000)}_{len(self.sessions)}"
         rec = {
             "id": sid, "host": norm, "kind": kind, "status": status,
-            "user": user, "os": os, "label": label or kind,
+            "user": user, "os": os, "label": label or kind, "method": method,
             "login_command": login_command, "proof_run": proof_run, "proof_fact": proof_fact,
             "created_at": now, "updated_at": now,
         }

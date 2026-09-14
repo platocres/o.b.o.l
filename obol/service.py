@@ -51,10 +51,12 @@ def find_action(action_id: str, pack: list[Action] | None = None) -> Action:
 
 
 def build_command(action: Action, ws: Workspace, *, command_index: int = 0,
-                  args_extra: str = "", target: str = "") -> tuple[str, str]:
+                  args_extra: str = "", target: str = "",
+                  context: dict | None = None) -> tuple[str, str]:
     """Render the exact argv-string the runner will build (no execution), plus the
-    tool label. `target` renders the preview for a specific host. Raises ActionError
-    on a bad command variant."""
+    tool label. `target` renders the preview for a specific host. `context` pins
+    specific {{token}} values (e.g. the exact credential a session login chose).
+    Raises ActionError on a bad command variant."""
     commands = action.commands or [{"tool": action.tool, "run": action.command}]
     if not 0 <= command_index < len(commands):
         raise ActionError(
@@ -62,8 +64,8 @@ def build_command(action: Action, ws: Workspace, *, command_index: int = 0,
             f"cannot use #{command_index + 1}."
         )
     command_meta = commands[command_index]
-    cmd = board.fill_command(action, ws, command_index, target)
-    extra = board.fill_template(args_extra, ws, target).strip() if args_extra else ""
+    cmd = board.fill_command(action, ws, command_index, target, context)
+    extra = board.fill_template(args_extra, ws, target, context).strip() if args_extra else ""
     if extra:
         cmd = f"{cmd} {extra}"
     tool = command_meta.get("tool") or action.tool or (cmd.split()[0] if cmd.split() else "")
@@ -81,7 +83,7 @@ def eligible_actions(facts: FactSet, pack: list[Action] | None = None) -> list[A
 
 def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
                timeout: int = 300, dry_run: bool = False, allow_shell: bool = False,
-               args_extra: str = "", target: str = "",
+               args_extra: str = "", target: str = "", context: dict | None = None,
                ledger_extra: dict | None = None) -> RunOutcome:
     """Execute one action's command through the shared runner, parse its output into
     the narrowest supported facts, append them and a ledger row to the workspace,
@@ -95,7 +97,8 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
     """
     if target:
         ws.set_active_target(target) or ws.add_target(target)
-    cmd, tool = build_command(action, ws, command_index=command_index, args_extra=args_extra)
+    cmd, tool = build_command(action, ws, command_index=command_index, args_extra=args_extra,
+                              context=context)
     # run_command raises RunnerError on an unfilled token, shell metacharacters,
     # a missing binary, or an out-of-scope target — the hard scope gate applies
     # to web-launched runs exactly as it does to terminal runs.
