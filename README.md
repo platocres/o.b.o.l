@@ -22,6 +22,9 @@ obol explain 1            # first real target move is nmap open-port discovery
 obol run 1                # run it, ingest ports/services, record new facts
 obol run 1 --cmd 2        # choose a different command variant from the card
 obol next                 # recompute from the new facts
+obol playbooks            # named, ordered action sequences (e.g. AD initial recon)
+obol playbook ad-recon    # show the command plan; --step N runs one step
+obol report               # OSCP-style markdown report from the evidence ledger
 obol serve                # read-only web view (findings + path graph) on localhost
 ```
 
@@ -60,6 +63,13 @@ moves. For AD, finding `389`/LDAP leads into the NetExec-first DC/LDAP smoke tes
 and anonymous LDAP enumeration. Most Orange actions still need dedicated parsers
 before they can be considered fully executable; until then, `obol explain` is the
 command reference and `obol run` will save raw evidence without inventing facts.
+
+**Playbooks** bundle that flow into one deliberate move: a playbook is a named,
+ordered list of pack actions stored as data. `obol playbook ad-recon` renders the
+exact command plan; `obol playbook ad-recon --step N` runs one step through the
+*same* scope-enforced runner, parser, and `.obol` store as `obol run` (no second
+engine). Noisy steps are marked `require_approval` and refuse to run without
+`--approve`.
 
 ## Install
 

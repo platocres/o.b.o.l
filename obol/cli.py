@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import board
 from .facts import Fact
-from .pack import next_actions
+from .pack import load_pack, next_actions
 from .parsers import parse_action_output
 from .runner import RunnerError, run_command
 from .seed import seed_forest
@@ -91,27 +91,30 @@ def cmd_explain(args) -> None:
     board.render_command(_pick(ws, args.n), ws)
 
 
-def cmd_run(args) -> None:
-    ws = _load_or_exit()
-    _apply_input_overrides(ws, args.set)
-    action = _pick(ws, args.n)
-    command_index = max(0, args.cmd - 1)
+def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
+                args_extra="", ledger_extra=None):
+    """Shared run -> parse -> record path for `obol run` and playbook steps.
+
+    There is deliberately one runner and one parser and one store: a playbook step
+    is executed exactly the way `obol run` executes an action. Returns
+    (RunResult, added_facts); exits with a clear message on a runner error or a
+    bad command variant.
+    """
     commands = action.commands or [{"tool": action.tool, "run": action.command}]
-    if command_index >= len(commands):
-        print(f"action has {len(commands)} command variant(s); cannot run #{args.cmd}.", file=sys.stderr)
+    if not 0 <= command_index < len(commands):
+        print(f"action has {len(commands)} command variant(s); cannot run #{command_index + 1}.", file=sys.stderr)
         raise SystemExit(1)
     command_meta = commands[command_index]
     cmd = board.fill_command(action, ws, command_index)
+    extra = board.fill_template(args_extra, ws).strip() if args_extra else ""
+    if extra:
+        cmd = f"{cmd} {extra}"
     tool = command_meta.get("tool") or action.tool or cmd.split()[0]
     print(f"\n$ {cmd}")
     try:
         result = run_command(
-            ws,
-            command=cmd,
-            tool=tool,
-            timeout=args.timeout,
-            dry_run=args.dry_run,
-            allow_shell_tokens=args.allow_shell,
+            ws, command=cmd, tool=tool, timeout=timeout,
+            dry_run=dry_run, allow_shell_tokens=allow_shell,
         )
     except RunnerError as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
@@ -123,17 +126,16 @@ def cmd_run(args) -> None:
         if ws.facts.add(fact):
             added.append(fact)
     ws.record_run(
-        tool,
-        cmd,
-        [f.kind for f in added],
+        tool, cmd, [f.kind for f in added],
         action_id=action.id,
-        command_index=args.cmd,
+        command_index=command_index + 1,
         returncode=result.returncode,
         timed_out=result.timed_out,
         dry_run=result.dry_run,
         stdout=str(result.stdout_path),
         stderr=str(result.stderr_path),
         duration_ms=result.duration_ms,
+        **(ledger_extra or {}),
     )
     ws.save()
     if result.dry_run:
@@ -145,7 +147,82 @@ def cmd_run(args) -> None:
             print(f"   + {f.kind}" + (f"  ({detail})" if detail else ""))
     else:
         print("\n(no new facts parsed — raw output was still saved)")
+    return result, added
+
+
+def cmd_run(args) -> None:
+    ws = _load_or_exit()
+    _apply_input_overrides(ws, args.set)
+    action = _pick(ws, args.n)
+    _run_action(
+        ws, action,
+        command_index=max(0, args.cmd - 1),
+        timeout=args.timeout,
+        dry_run=args.dry_run,
+        allow_shell=args.allow_shell,
+    )
     print("\nnext: obol next")
+
+
+def cmd_playbooks(args) -> None:
+    from . import playbook
+    pbs = playbook.list_playbooks()
+    if not pbs:
+        print("no playbooks available.")
+        return
+    print("\nplaybooks:")
+    for pb in pbs:
+        print(f"  {pb.name:14} {pb.title}")
+        if pb.description:
+            print(f"  {'':14} {pb.description}")
+    print("\nplan a playbook: obol playbook <name>")
+    print("run one step:    obol playbook <name> --step N [--approve]")
+
+
+def cmd_playbook(args) -> None:
+    from . import playbook
+    ws = _load_or_exit()
+    _apply_input_overrides(ws, args.set)
+    try:
+        pb = playbook.load_playbook(args.name)
+    except FileNotFoundError:
+        names = ", ".join(p.name for p in playbook.list_playbooks()) or "(none)"
+        print(f"no playbook named {args.name!r}. available: {names}", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        steps = playbook.resolve_steps(pb, load_pack())
+    except KeyError as exc:
+        print(f"playbook {pb.name!r} references unknown pack action {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # No --step: plan view only. This never executes anything.
+    if args.step is None:
+        board.render_playbook(pb, steps, ws)
+        return
+
+    n = args.step
+    if not 1 <= n <= len(steps):
+        print(f"playbook {pb.name!r} has {len(steps)} step(s); no step #{n}.", file=sys.stderr)
+        raise SystemExit(1)
+    step, action = steps[n - 1]
+    if step.require_approval and not args.approve and not args.dry_run:
+        print(f"step {n} ({step.label}) is marked require_approval — it is noisy or intrusive.")
+        print("re-run with --approve to execute it, or --dry-run to preview the command.")
+        raise SystemExit(2)
+
+    _run_action(
+        ws, action,
+        command_index=max(0, (step.cmd or 1) - 1),
+        timeout=args.timeout,
+        dry_run=args.dry_run,
+        allow_shell=args.allow_shell,
+        args_extra=step.args_extra,
+        ledger_extra={"playbook": pb.name, "playbook_step": n},
+    )
+    if not args.dry_run and n < len(steps):
+        print(f"\nnext: obol next   ·   continue: obol playbook {pb.name} --step {n + 1}")
+    else:
+        print("\nnext: obol next")
 
 
 def cmd_facts(args) -> None:
@@ -215,6 +292,18 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--dry-run", action="store_true", help="print and validate the command without executing it")
     pr.add_argument("--allow-shell", action="store_true", help="allow shell metacharacters in guided handoff commands")
     pr.set_defaults(func=cmd_run)
+
+    sub.add_parser("playbooks", help="list available playbooks (named, ordered action sequences)").set_defaults(func=cmd_playbooks)
+
+    pp = sub.add_parser("playbook", help="show a playbook's command plan, or run one step of it")
+    pp.add_argument("name", help="playbook name (see `obol playbooks`)")
+    pp.add_argument("--step", type=int, help="run this step through the same runner/parser as `obol run`")
+    pp.add_argument("--approve", action="store_true", help="approve a step marked require_approval (noisy/risky)")
+    pp.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="set command template input for this workspace")
+    pp.add_argument("--timeout", type=int, default=300)
+    pp.add_argument("--dry-run", action="store_true", help="print and validate the step's command without executing it")
+    pp.add_argument("--allow-shell", action="store_true", help="allow shell metacharacters in guided handoff commands")
+    pp.set_defaults(func=cmd_playbook)
 
     sub.add_parser("facts", help="list all proven facts").set_defaults(func=cmd_facts)
 
