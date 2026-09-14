@@ -20,6 +20,7 @@ import re
 
 from .facts import FactSet
 from .pack import Action, load_packs, next_actions, friendly as _friendly
+from .scope import target_in_scope
 
 # Engagement phases, in order. A fact/action is placed in the latest phase any of
 # its kinds map to, so the flow reads left (early recon) to right (loot/dominance).
@@ -75,6 +76,147 @@ def _phase_of_action(action: Action) -> str:
 
 def _nid(text: str) -> str:
     return "n_" + re.sub(r"[^a-zA-Z0-9]", "_", text)
+
+
+_PORT_LABELS = {
+    21: "FTP", 22: "SSH", 25: "SMTP", 53: "DNS", 80: "HTTP",
+    88: "Kerberos", 135: "RPC", 139: "NetBIOS", 389: "LDAP",
+    443: "HTTPS", 445: "SMB", 464: "Kerberos", 636: "LDAPS",
+    3268: "GC LDAP", 3269: "GC LDAPS", 3389: "RDP",
+    5985: "WinRM", 5986: "WinRM SSL", 8000: "HTTP", 8080: "HTTP",
+    8443: "HTTPS",
+}
+_SERVICE_ALIASES = {
+    "microsoft-ds": "SMB", "netbios-ssn": "SMB", "ldap": "LDAP",
+    "kerberos-sec": "Kerberos", "domain": "DNS", "http": "HTTP",
+    "https": "HTTPS", "ssl-http": "HTTPS", "ms-wbt-server": "RDP",
+    "wsman": "WinRM", "winrm": "WinRM",
+}
+_REACHABLE_LABELS = {
+    "ldap.reachable": "LDAP",
+    "smb.reachable": "SMB",
+    "kerberos.reachable": "Kerberos",
+    "winrm.reachable": "WinRM",
+    "http.reachable": "HTTP",
+}
+
+
+def _supported(fact) -> bool:
+    return getattr(fact.state, "value", fact.state) == "supported"
+
+
+def _host_factset(ws, host: str) -> FactSet:
+    return FactSet([
+        f for f in ws.facts.facts
+        if _supported(f) and f.scope == f"host:{host}"
+    ])
+
+
+def _first_value(facts: FactSet, kind: str, *keys: str) -> str:
+    for value in facts.values(kind):
+        for key in keys:
+            if value.get(key):
+                return str(value[key])
+    return ""
+
+
+def _target_identity(target: dict, facts: FactSet) -> dict:
+    hostname = (
+        target.get("hostname")
+        or _first_value(facts, "host.hostname", "name", "hostname")
+        or _first_value(facts, "host.fqdn", "hostname")
+        or _first_value(facts, "ad.dc_candidate", "name")
+        or ""
+    )
+    fqdn = target.get("fqdn") or _first_value(facts, "host.fqdn", "fqdn", "name") or ""
+    domain = (
+        target.get("domain")
+        or _first_value(facts, "host.domain", "domain", "name")
+        or _first_value(facts, "host.fqdn", "domain")
+        or _first_value(facts, "ad.dc_candidate", "domain")
+        or ""
+    )
+    return {"hostname": hostname, "fqdn": fqdn, "domain": str(domain).lower() if domain else ""}
+
+
+def _service_label(kind: str, value: dict) -> str:
+    if kind in _REACHABLE_LABELS:
+        return _REACHABLE_LABELS[kind]
+    service = str(value.get("service") or "").lower()
+    if service:
+        return _SERVICE_ALIASES.get(service, service.replace("-", " ").title())
+    port = value.get("port")
+    if isinstance(port, int):
+        return _PORT_LABELS.get(port, f"Port {port}")
+    if kind.startswith("service."):
+        raw = kind.split(".", 1)[1]
+        return _SERVICE_ALIASES.get(raw, raw.replace("-", " ").title())
+    return ""
+
+
+def _host_services(facts: FactSet) -> list[dict]:
+    services: dict[tuple[str, int, str], dict] = {}
+    for fact in facts.facts:
+        if not (
+            fact.kind.startswith("port:")
+            or fact.kind.startswith("service.")
+            or fact.kind in _REACHABLE_LABELS
+        ):
+            continue
+        value = dict(fact.value or {})
+        port = value.get("port")
+        if not isinstance(port, int):
+            try:
+                port = int(str(port)) if port not in (None, "") else 0
+            except ValueError:
+                port = 0
+        proto = value.get("protocol") or ("tcp" if port else "")
+        label = _service_label(fact.kind, value)
+        if not label:
+            continue
+        key = (label.lower(), port, proto)
+        row = {"label": label, "port": port, "protocol": proto, "kind": fact.kind}
+        if value.get("version"):
+            row["version"] = value["version"]
+        services[key] = row
+    return sorted(services.values(), key=lambda s: (s.get("port") or 99999, s["label"].lower()))
+
+
+def _has_port(facts: FactSet, *ports: int) -> bool:
+    wanted = set(ports)
+    for fact in facts.facts:
+        value = fact.value or {}
+        if isinstance(value.get("ports"), list):
+            for item in value["ports"]:
+                try:
+                    if int(item) in wanted:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+        port = value.get("port")
+        try:
+            if int(port) in wanted:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def _is_domain_controller(facts: FactSet) -> bool:
+    if not facts.has("ad.dc_candidate"):
+        return False
+    return (
+        facts.has("ldap.reachable")
+        or facts.has("kerberos.reachable")
+        or _has_port(facts, 88, 389, 636, 3268, 3269)
+    )
+
+
+def _add_edge(edges: list[dict], seen: set[tuple[str, str, str]], source: str, target: str, kind: str) -> None:
+    key = (source, target, kind)
+    if key not in seen:
+        seen.add(key)
+        edges.append({"from": source, "to": target, "kind": kind})
 
 
 def build_graph_model(facts: FactSet, pack: list[Action] | None = None) -> dict:
@@ -148,61 +290,109 @@ def target_phase(facts: FactSet) -> str:
 
 
 def build_engagement_graph(ws) -> dict:
-    """The engagement-wide map: every target as a node, stitched to the shared domain
-    and to each other by the evidence that connects them (a validated credential that
-    spans hosts, a BloodHound domain overlay). Tiered top-to-bottom: domain / loot at
-    tier 0, targets at tier 1, principals & credentials below.
+    """The engagement-wide map populated from proven scan and path facts.
+
+    Targets hang from the scope ranges or domains that evidence actually ties them
+    to. Nmap/nxc/LDAP identity facts create hostname/domain metadata; port/service
+    facts create service nodes under each target. No host-to-host edge is invented
+    from a shared subnet alone.
 
     Returns ``{"nodes": [...], "edges": [...]}`` where nodes carry
     ``{"id","type","label","tier","meta"}`` and edges ``{"from","to","kind"}``.
     """
     nodes: list[dict] = []
     edges: list[dict] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+    domain_ids: dict[str, str] = {}
 
-    domain = ws.facts.values("ad.domain_known")
-    domain_name = (domain[0].get("name") if domain else "") or ""
-    dom_id = None
-    if domain_name:
-        dom_id = _nid("dom_" + domain_name)
-        nodes.append({"id": dom_id, "type": "domain", "tier": 0,
-                      "label": domain_name, "meta": {}})
+    def add_domain(domain: str) -> str:
+        domain = str(domain or "").strip().lower()
+        if not domain:
+            return ""
+        if domain not in domain_ids:
+            did = _nid("dom_" + domain)
+            domain_ids[domain] = did
+            nodes.append({"id": did, "type": "domain", "tier": 0,
+                          "label": domain, "meta": {"domain": domain}})
+        return domain_ids[domain]
+
+    for value in ws.facts.values("ad.domain_known"):
+        add_domain(value.get("name") or value.get("domain") or "")
+    if (ws.bloodhound or {}).get("domain"):
+        add_domain(ws.bloodhound["domain"])
+    for target in ws.targets:
+        if target.get("domain"):
+            add_domain(target["domain"])
+
+    scope_ids: dict[str, str] = {}
+    target_hosts = {t.get("host") for t in ws.targets}
+    for entry in ws.scope:
+        if not entry or entry in target_hosts:
+            continue
+        sid = _nid("scope_" + entry)
+        scope_ids[entry] = sid
+        nodes.append({"id": sid, "type": "scope", "tier": 0,
+                      "label": entry, "meta": {"scope": entry}})
 
     # A validated credential reused across hosts is the classic cross-target link.
     cred_facts = ws.facts.values("credential.available") + ws.facts.values("credential.plaintext")
     cred_id = None
     if cred_facts:
         who = cred_facts[0].get("user") or "credential"
-        cred_id = _nid("cred_" + str(who))
+        cred_domain = str(cred_facts[0].get("domain") or "").lower()
+        cred_id = _nid("cred_" + str(who) + "_" + cred_domain)
         nodes.append({"id": cred_id, "type": "credential", "tier": 2,
                       "label": f"cred: {who}", "meta": {}})
-        if dom_id:
-            edges.append({"from": dom_id, "to": cred_id, "kind": "domain"})
+        did = add_domain(cred_domain) if cred_domain else next(iter(domain_ids.values()), "")
+        if did:
+            _add_edge(edges, seen_edges, did, cred_id, "credential")
 
     for t in ws.targets:
         host = t["host"]
-        tf = ws.facts_for_target(host)
+        tf = _host_factset(ws, host)
+        identity = _target_identity(t, tf)
+        services = _host_services(tf)
         level = target_access_level(tf)
+        is_dc = _is_domain_controller(tf)
         tid = _nid("tgt_" + host)
         nodes.append({
             "id": tid, "type": "target", "tier": 1,
             "label": t.get("label") or host,
             "meta": {"host": host, "access": level, "phase": target_phase(tf),
-                     "os": t.get("os", ""), "dc": tf.has("ad.dc_candidate")},
+                     "os": t.get("os", ""), "dc": is_dc,
+                     "hostname": identity["hostname"], "fqdn": identity["fqdn"],
+                     "domain": identity["domain"], "services": services[:8],
+                     "service_count": len(services)},
         })
-        if dom_id and (tf.has("ad.dc_candidate") or tf.has("ad.domain_known")
-                       or tf.has("smb.reachable") or tf.has("ldap.reachable")):
-            edges.append({"from": dom_id, "to": tid, "kind": "domain-joined"})
+
+        did = add_domain(identity["domain"])
+        if did:
+            kind = "domain-controller" if is_dc else "domain-service"
+            _add_edge(edges, seen_edges, did, tid, kind)
+        for entry, sid in scope_ids.items():
+            allowed, _ = target_in_scope(host, [entry])
+            if allowed:
+                _add_edge(edges, seen_edges, sid, tid, "in-scope")
+
+        for service in services[:8]:
+            port = service.get("port") or 0
+            proto = service.get("protocol") or ""
+            sid = _nid(f"svc_{host}_{service['label']}_{port}_{proto}")
+            label = f"{service['label']} {port}" if port else service["label"]
+            nodes.append({
+                "id": sid, "type": "service", "tier": 2, "label": label,
+                "meta": {"host": host, **service},
+            })
+            _add_edge(edges, seen_edges, tid, sid, "exposes")
+
         # a validated credential that granted access on this host links them
         if cred_id and level in ("foothold", "privileged"):
-            edges.append({"from": cred_id, "to": tid, "kind": "credential"})
+            _add_edge(edges, seen_edges, cred_id, tid, "authenticates")
 
     # BloodHound overlay (engagement-wide): high-value groups + roastable principals.
     bh = ws.bloodhound or {}
     if bh.get("domain") or bh.get("computers") or bh.get("domain_admins"):
-        if not dom_id and bh.get("domain"):
-            dom_id = _nid("dom_" + bh["domain"])
-            nodes.append({"id": dom_id, "type": "domain", "tier": 0,
-                          "label": bh["domain"], "meta": {}})
+        dom_id = add_domain(bh.get("domain", "")) or next(iter(domain_ids.values()), "")
         for grp in ("domain_admins", "enterprise_admins"):
             members = bh.get(grp) or []
             if not members:
@@ -212,7 +402,7 @@ def build_engagement_graph(ws) -> dict:
                           "label": f"{grp.replace('_', ' ').title()} ({len(members)})",
                           "meta": {"members": members[:40]}})
             if dom_id:
-                edges.append({"from": dom_id, "to": gid, "kind": "controls"})
+                _add_edge(edges, seen_edges, dom_id, gid, "controls")
         for kind, label in (("kerberoastable", "Kerberoastable"), ("asrep_roastable", "AS-REP-roastable")):
             items = bh.get(kind) or []
             if not items:
@@ -221,7 +411,7 @@ def build_engagement_graph(ws) -> dict:
             nodes.append({"id": kid, "type": "roastable", "tier": 3,
                           "label": f"{label} ({len(items)})", "meta": {"items": items[:40]}})
             if dom_id:
-                edges.append({"from": dom_id, "to": kid, "kind": kind})
+                _add_edge(edges, seen_edges, dom_id, kid, kind)
 
     return {"nodes": nodes, "edges": edges}
 

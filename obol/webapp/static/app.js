@@ -25,7 +25,8 @@ const ACCESS = {
   credentialed: { c: "#EAB308", t: "Credentialed" }, foothold: { c: "#14B8A6", t: "Foothold" },
   privileged: { c: "#10B981", t: "Privileged" },
 };
-const NODE_COLOR = { domain: "#6366F1", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
+const NODE_COLOR = { scope: "#64748B", domain: "#6366F1", target: "#38BDF8",
+  service: "#14B8A6", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
 const state = { view: "engagement", target: null, tab: "overview", secrets: false,
   toolTarget: "", lastRun: null, playbook: null, scrollTo: null };
@@ -422,11 +423,13 @@ async function buildEngagement() {
   const tiles = [["Targets", s.targets.length], ["Facts proven", t.facts], ["Commands run", t.runs], ["Open ports", t.ports]]
     .map(([l, v]) => `<div class="stat"><div class="stat-label">${l}</div><div class="stat-val">${v}</div></div>`).join("");
 
-  const tgtCards = s.targets.length ? s.targets.map((tg) => {
+  const targetCard = (tg) => {
     const a = ACCESS[tg.access] || ACCESS.discovered;
+    const identity = tg.fqdn || tg.hostname || tg.domain || "";
     return `<div class="tcard" data-act="open" data-open="${esc(tg.host)}">
       <div class="tcard-h"><span class="tdot" style="background:${a.c}"></span><span class="t">${esc(tg.label)}</span>
         <span class="spacer" style="flex:1"></span><span class="mono muted" style="font-size:11px">${esc(tg.host)}</span></div>
+      ${identity ? `<div class="mono muted" style="font-size:12px;margin-top:5px">${esc(identity)}</div>` : ""}
       <div class="row" style="margin-top:8px;gap:6px">
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
@@ -434,7 +437,15 @@ async function buildEngagement() {
         <span class="pill">${(tg.findings || []).length} findings</span>
         <span class="spacer" style="flex:1"></span><button class="btn primary sm" data-act="quickstart" data-host="${esc(tg.host)}">Quick Start</button>
       </div></div>`;
-  }).join("") : `<div class="empty">No targets yet. <a href="#" data-act="add-target">Add one</a>.</div>`;
+  };
+  const tgtCards = s.targets.length ? Object.entries(s.targets.reduce((groups, tg) => {
+    const key = tg.domain || "No domain yet";
+    (groups[key] = groups[key] || []).push(tg);
+    return groups;
+  }, {})).map(([domain, targets]) => `<section class="target-domain-group">
+      <div class="target-domain-head"><span>${esc(domain)}</span><span class="muted mono">${targets.length} host${targets.length === 1 ? "" : "s"}</span></div>
+      <div class="tgrid">${targets.map(targetCard).join("")}</div>
+    </section>`).join("") : `<div class="empty">No targets yet. <a href="#" data-act="add-target">Add one</a>.</div>`;
 
   const bh = s.bloodhound || {};
   const bhBlock = bh.domain ? `<div class="row" style="gap:14px;flex-wrap:wrap">
@@ -467,13 +478,13 @@ async function buildEngagement() {
       <div class="muted" style="margin-bottom:10px;font-size:12px">Hosts and CIDR ranges the runner is authorized to touch. Everything obol runs is gated on this list.</div>
       <div class="row" style="gap:8px;flex-wrap:wrap">${scopeChips}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Targets</h2><button class="btn sm primary" data-act="add-target">＋ Add target</button></div>
-      <div class="tgrid">${tgtCards}</div></div>
+      ${tgtCards}</div>
     <div class="grid-2" style="margin-top:16px">
       <div class="card"><div class="panel-h"><h2>Evidence by category</h2><span class="muted mono">${catTotal}</span></div>${catBody}</div>
       <div class="card"><div class="panel-h"><h2>Domain (BloodHound)</h2><button class="btn sm" data-act="bh-pick">Ingest export</button></div>
         ${bhBlock}<input type="file" id="bh-file" data-act="bh-upload" multiple accept=".zip,.json" hidden></div>
     </div>
-    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Engagement attack path</h2><button class="btn ghost sm" data-act="view" data-view="engpath">full view →</button></div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Engagement map</h2><button class="btn ghost sm" data-act="view" data-view="engpath">full view →</button></div>
       <div class="flow-scroll">${engagementSVG(s.engagement_graph)}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Activity</h2></div><div class="feed">${feed}</div></div>`;
 }
@@ -530,10 +541,12 @@ async function buildTargets() {
   const s = await api("/api/overview");
   const cards = s.targets.map((tg) => {
     const a = ACCESS[tg.access] || ACCESS.discovered;
+    const identity = tg.fqdn || tg.hostname || tg.domain || "";
     return `<div class="tcard" data-act="open" data-open="${esc(tg.host)}">
       <div class="tcard-h"><span class="tdot" style="background:${a.c}"></span><span class="t">${esc(tg.label)}</span>
         <span class="spacer" style="flex:1"></span><button class="btn ghost sm tdel" data-act="del-target" data-host="${esc(tg.host)}" title="Remove">✕</button></div>
       <div class="mono muted" style="font-size:12px;margin:4px 0">${esc(tg.host)}${tg.os ? " · " + esc(tg.os) : ""}</div>
+      ${identity ? `<div class="mono muted" style="font-size:12px;margin:-1px 0 6px">${esc(identity)}</div>` : ""}
       <div class="row" style="gap:6px">
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
@@ -554,6 +567,7 @@ async function buildTarget() {
   const host = state.target;
   const b = await api(`/api/target?target=${encodeURIComponent(host)}`);
   const a = ACCESS[b.access] || ACCESS.discovered;
+  const identity = [b.meta.fqdn || b.meta.hostname || "", b.meta.domain || ""].filter(Boolean).join(" · ");
   $("#crumb").innerHTML = `<a href="#" data-act="view" data-view="targets">Targets</a> / ${esc(b.meta.label)}`;
   const tabs = TABS.map(([id, label]) => `<button class="tab ${state.tab === id ? "active" : ""}" data-act="tab" data-tab="${id}">${label}</button>`).join("");
   const tabBody = await renderTab(b);
@@ -562,7 +576,7 @@ async function buildTarget() {
       <div class="row" style="gap:12px;align-items:center">
         <span class="tdot lg" style="background:${a.c}"></span>
         <div><div style="font-size:18px;font-weight:700">${esc(b.meta.label)}</div>
-          <div class="mono muted" style="font-size:12px">${esc(b.meta.host)}${b.meta.os ? " · " + esc(b.meta.os) : ""}</div></div>
+          <div class="mono muted" style="font-size:12px">${esc(b.meta.host)}${identity ? " · " + esc(identity) : ""}${b.meta.os ? " · " + esc(b.meta.os) : ""}</div></div>
         <span class="spacer" style="flex:1"></span>
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
         <button class="btn primary sm" data-act="quickstart" data-host="${esc(b.meta.host)}">Quick Start</button>
@@ -850,23 +864,25 @@ async function runPlaybookStep(name, step, needsApproval, host) {
   }
 }
 
-// ── engagement attack path ──────────────────────────────────────────────────
+// ── engagement map ──────────────────────────────────────────────────────────
 async function buildEngPath() {
   const g = await api("/api/engagement/graph");
-  return `<div class="card"><div class="panel-h"><h2>Engagement attack path</h2></div>
-    <div class="flow-legend"><span class="flk"><span class="sw rect" style="background:${NODE_COLOR.domain}"></span>domain</span>
+  return `<div class="card"><div class="panel-h"><h2>Engagement map</h2></div>
+    <div class="flow-legend"><span class="flk"><span class="sw rect" style="background:${NODE_COLOR.scope}"></span>scope</span>
+      <span class="flk"><span class="sw rect" style="background:${NODE_COLOR.domain}"></span>domain</span>
       <span class="flk"><span class="sw rect" style="background:${ACCESS.foothold.c}"></span>target (by access)</span>
+      <span class="flk"><span class="sw rect" style="background:${NODE_COLOR.service}"></span>service</span>
       <span class="flk"><span class="sw rect" style="background:${NODE_COLOR.credential}"></span>credential</span>
       <span class="flk"><span class="sw rect" style="background:${NODE_COLOR.highvalue}"></span>high-value</span>
       <span class="flk"><span class="sw rect" style="background:${NODE_COLOR.roastable}"></span>roastable</span></div>
     <div class="flow-scroll">${engagementSVG(g)}</div></div>`;
 }
 
-// tiered top-down graph: domain (0) → targets (1) → creds/high-value (2) → roastable (3)
+// tiered top-down graph: scope/domain -> targets -> services/BloodHound overlay
 function engagementSVG(g) {
-  if (!g.nodes.length) return `<div class="empty">Add targets (and ingest BloodHound) to see the engagement path.</div>`;
+  if (!g.nodes.length) return `<div class="empty">Add scope, sweep a range, or add targets to start the engagement map.</div>`;
   const tiers = {}; g.nodes.forEach((n) => (tiers[n.tier] = tiers[n.tier] || []).push(n));
-  const NW = 190, NH = 46, GAPX = 30, ROWY = 110, PADX = 24, PADY = 24;
+  const NW = 210, NH = 64, GAPX = 30, ROWY = 120, PADX = 24, PADY = 24;
   const maxRow = Math.max(...Object.values(tiers).map((r) => r.length));
   const width = Math.max(560, PADX * 2 + maxRow * (NW + GAPX) - GAPX);
   const tierKeys = Object.keys(tiers).map(Number).sort((a, b) => a - b);
@@ -879,15 +895,28 @@ function engagementSVG(g) {
   let edges = "";
   g.edges.forEach((e) => { const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
     const x1 = a.x + NW / 2, y1 = a.y + NH, x2 = b.x + NW / 2, y2 = b.y;
-    edges += `<path d="M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}" fill="none" stroke="#3D4D75" stroke-width="1.5"/>`; });
+    const stroke = e.kind === "in-scope" ? "#64748B" : (e.kind === "exposes" ? "#14B8A6" : "#3D4D75");
+    const dash = e.kind === "in-scope" ? ' stroke-dasharray="4 4"' : "";
+    edges += `<path d="M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}" fill="none" stroke="${stroke}" stroke-width="1.5"${dash}/>`; });
   let nodes = "";
   Object.values(pos).forEach(({ x, y, node }) => {
-    let fill = NODE_COLOR[node.type] || "#334155", sub = "";
-    if (node.type === "target") { const a = ACCESS[node.meta.access] || ACCESS.discovered; fill = a.c; sub = a.t + (node.meta.dc ? " · DC" : ""); }
+    let fill = NODE_COLOR[node.type] || "#334155", sub = "", extra = "";
+    if (node.type === "target") {
+      const a = ACCESS[node.meta.access] || ACCESS.discovered; fill = a.c;
+      const domain = node.meta.domain ? ` · ${node.meta.domain}` : "";
+      sub = a.t + (node.meta.dc ? " · DC" : "") + domain;
+      const svc = (node.meta.services || []).slice(0, 4).map((s) => s.label).join(" · ");
+      extra = svc ? `<span class="egs muted">${esc(svc)}${node.meta.service_count > 4 ? " …" : ""}</span>` : `<span class="egs muted">${esc(node.meta.host || "")}</span>`;
+    } else if (node.type === "service") {
+      sub = node.meta.protocol || "";
+      extra = node.meta.version ? `<span class="egs muted">${esc(node.meta.version)}</span>` : "";
+    } else if (node.type === "scope") {
+      sub = "authorized scope";
+    }
     const click = node.type === "target" ? ` data-act="open" data-open="${esc(node.meta.host)}" style="cursor:pointer"` : "";
     nodes += `<foreignObject x="${x}" y="${y}" width="${NW}" height="${NH}"${click}>
       <div xmlns="http://www.w3.org/1999/xhtml" class="egnode" style="border-color:${fill};box-shadow:inset 0 0 0 9999px ${fill}22" title="${esc(node.label)}">
-      <span class="egt">${esc(node.label)}</span>${sub ? `<span class="egs" style="color:${fill}">${esc(sub)}</span>` : ""}</div></foreignObject>`;
+      <span class="egt">${esc(node.label)}</span>${sub ? `<span class="egs" style="color:${fill}">${esc(sub)}</span>` : ""}${extra}</div></foreignObject>`;
   });
   return `<svg class="flow" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMin meet">${edges}${nodes}</svg>`;
 }
@@ -938,7 +967,7 @@ async function buildReport() {
       <a class="btn sm primary" href="/api/report.md?include_secrets=${state.secrets ? "1" : "0"}&token=${encodeURIComponent(TOKEN)}">Download .md</a></div>
       <div class="muted" style="margin-top:6px">Generated ${esc(m.generated_at)} · ${m.include_secrets ? "secrets shown" : "secrets redacted"} · every finding is only as strong as its cited evidence.</div>
       <div class="stat-grid" style="margin-top:16px">${statRow}</div></div>
-    <div class="card"><div class="panel-h"><h2>Engagement attack path</h2></div><div class="flow-scroll">${engagementSVG(r.engagement_graph)}</div></div>
+    <div class="card"><div class="panel-h"><h2>Engagement map</h2></div><div class="flow-scroll">${engagementSVG(r.engagement_graph)}</div></div>
     ${targets || `<div class="card"><div class="empty">No targets yet.</div></div>`}`;
 }
 

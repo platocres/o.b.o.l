@@ -28,6 +28,9 @@ def seed_forest(ws: Workspace) -> Workspace:
         Fact("port:88", f"host:{FOREST_TARGET}", {"port": 88, "protocol": "tcp", "service": "kerberos-sec"}, source=src),
         Fact("port:389", f"host:{FOREST_TARGET}", {"port": 389, "protocol": "tcp", "service": "ldap"}, source=src),
         Fact("port:445", f"host:{FOREST_TARGET}", {"port": 445, "protocol": "tcp", "service": "microsoft-ds"}, source=src),
+        Fact("host.hostname", f"host:{FOREST_TARGET}", {"name": "FOREST-DC"}, source=src),
+        Fact("host.domain", f"host:{FOREST_TARGET}", {"domain": "htb.local"}, source=src),
+        Fact("host.fqdn", f"host:{FOREST_TARGET}", {"fqdn": "forest-dc.htb.local", "hostname": "FOREST-DC", "domain": "htb.local"}, source=src),
         Fact("ad.dc_candidate", f"host:{FOREST_TARGET}", {}, source=src),
         Fact("ad.domain_known", "domain:htb.local", {"name": "htb.local"}, source=src),
         Fact("kerberos.reachable", f"host:{FOREST_TARGET}", {"port": 88}, source=src),
@@ -35,5 +38,6 @@ def seed_forest(ws: Workspace) -> Workspace:
         Fact("smb.reachable", f"host:{FOREST_TARGET}", {"port": 445}, source=src),
     ]:
         ws.facts.add(fact)
+    ws.apply_fact_enrichment()
     ws.record_run("nmap", src, ["host.up", "ad.dc_candidate", "ad.domain_known"])
     return ws

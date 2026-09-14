@@ -606,7 +606,9 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
                 for r in ws.runs if r.get("target") == host or (not r.get("target") and host == ws.target)][::-1][:60]
 
     return {
-        "meta": {"host": host, "label": t.get("label") or host, "os": t.get("os", ""),
+        "meta": {"host": host, "label": t.get("label") or host,
+                 "hostname": t.get("hostname", ""), "fqdn": t.get("fqdn", ""),
+                 "domain": t.get("domain", ""), "os": t.get("os", ""),
                  "status": t.get("status", ""), "notes": t.get("notes", ""),
                  "active": host == ws.target},
         "access": target_access_level(tf), "phase": cur,

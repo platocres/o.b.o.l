@@ -5,7 +5,7 @@ import pytest
 
 from obol import service
 from obol.pack import Action
-from obol.runner import RunnerError
+from obol.runner import RunResult, RunnerError
 from obol.service import ActionError
 from obol.workspace import Workspace
 
@@ -61,3 +61,35 @@ def test_unfilled_token_is_refused(tmp_path):
     # {{user}} has no value -> the command still carries a placeholder -> refused.
     with pytest.raises(RunnerError):
         service.run_action(ws, action, dry_run=True)
+
+
+def test_run_action_enriches_target_identity_from_parser(tmp_path, monkeypatch):
+    ws = Workspace(tmp_path)
+    ws.add_target("10.10.10.5")
+    action = Action(
+        id="ad-dc-identify",
+        title="DC identify",
+        tool="nxc",
+        commands=[{"tool": "nxc", "run": "nxc ldap {{target}} -u '' -p ''"}],
+    )
+
+    def fake_run_command(*args, **kwargs):
+        return RunResult(
+            kwargs["command"],
+            ["nxc"],
+            0,
+            "LDAP        10.10.10.5     389    DC01         [*] Windows Server 2019 (name:DC01) (domain:corp.local)",
+            "",
+            tmp_path / "out.txt",
+            tmp_path / "err.txt",
+            0.0,
+            5,
+        )
+
+    monkeypatch.setattr(service, "run_command", fake_run_command)
+    outcome = service.run_action(ws, action, target="10.10.10.5")
+    assert {"host.hostname", "host.domain"} <= {f.kind for f in outcome.added}
+    rec = ws.get_target("10.10.10.5")
+    assert rec["label"] == "DC01"
+    assert rec["hostname"] == "DC01"
+    assert rec["domain"] == "corp.local"

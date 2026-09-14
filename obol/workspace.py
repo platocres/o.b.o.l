@@ -18,6 +18,7 @@ migration, the offline `obol web` snapshot, and the debug package.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -28,6 +29,34 @@ from .store import STATE_DB, Store, fact_hash
 
 STATE_DIR = ".obol"
 LEGACY_STATE_FILE = "state.json"
+
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
+
+
+def _clean_hostname(value: str) -> str:
+    text = str(value or "").strip().strip(".")
+    if not text or not _HOSTNAME_RE.match(text):
+        return ""
+    return text
+
+
+def _clean_domain(value: str) -> str:
+    return _clean_hostname(value).lower()
+
+
+def _fqdn_parts(value: str) -> tuple[str, str]:
+    fqdn = _clean_domain(value)
+    if not fqdn:
+        return "", ""
+    parts = [p for p in fqdn.split(".") if p]
+    if len(parts) < 2:
+        return "", ""
+    return parts[0], ".".join(parts[1:])
+
+
+def _is_default_label(label: str, host: str) -> bool:
+    label = str(label or "").strip()
+    return not label or label.lower() == str(host or "").lower()
 
 
 def has_state(engagement_dir: Path) -> bool:
@@ -46,7 +75,7 @@ class Workspace:
         self.name: str = self.root.name
         self.created_at: float = 0.0
         self.target: str = ""            # the ACTIVE target host (per-target pivot)
-        self.targets: list[dict] = []    # [{host, label, os, status, notes, added_at}]
+        self.targets: list[dict] = []    # [{host, label, hostname, fqdn, domain, os, status, notes, added_at}]
         self.scope: list[str] = []
         self.inputs: dict[str, str] = {}
         self.facts = FactSet()
@@ -134,7 +163,11 @@ class Workspace:
         self.name = data.get("name", self.name)
         self.created_at = data.get("created_at", 0.0)
         self.target = data.get("target", "")
-        self.targets = list(data.get("targets", []))
+        self.targets = [
+            self._target_record(t)
+            for t in data.get("targets", [])
+            if t.get("host")
+        ]
         self.scope = list(data.get("scope", []))
         self.inputs = dict(data.get("inputs", {}))
         self.facts = FactSet([Fact.from_json(f) for f in data.get("facts", [])])
@@ -146,6 +179,7 @@ class Workspace:
             fact_hash(f.kind, f.scope, f.value) for f in self.facts.facts
         }
         self._persisted_run_ids = {r["id"] for r in self.runs if r.get("id")}
+        self.apply_fact_enrichment()
         return self
 
     def export_json(self, *, indent: int | None = 2) -> str:
@@ -173,6 +207,20 @@ class Workspace:
         self.inputs[str(key)] = str(value)
 
     # ---- targets -------------------------------------------------------------
+    def _target_record(self, data: dict) -> dict:
+        host = normalize_target(data.get("host", ""))
+        return {
+            "host": host,
+            "label": data.get("label") or host,
+            "hostname": _clean_hostname(data.get("hostname", "")),
+            "fqdn": _clean_domain(data.get("fqdn", "")),
+            "domain": _clean_domain(data.get("domain", "")),
+            "os": data.get("os", "") or "",
+            "status": data.get("status", "") or "active",
+            "notes": data.get("notes", "") or "",
+            "added_at": data.get("added_at", 0.0) or 0.0,
+        }
+
     def get_target(self, host: str) -> dict | None:
         norm = normalize_target(host)
         for t in self.targets:
@@ -190,7 +238,8 @@ class Workspace:
                 existing["label"] = label
             return existing
         rec = {
-            "host": norm, "label": label or norm, "os": "",
+            "host": norm, "label": label or norm, "hostname": "",
+            "fqdn": "", "domain": "", "os": "",
             "status": "active", "notes": "", "added_at": time.time(),
         }
         self.targets.append(rec)
@@ -220,6 +269,79 @@ class Workspace:
             return False
         self.target = rec["host"]
         return True
+
+    def enrich_target_identity(
+        self,
+        host: str,
+        *,
+        hostname: str = "",
+        fqdn: str = "",
+        domain: str = "",
+        os: str = "",
+    ) -> bool:
+        """Attach scan-proven identity metadata to a target record.
+
+        The IP/host remains the stable key. The human label is upgraded from the
+        raw host to the hostname/FQDN only when the operator has not supplied a
+        custom label.
+        """
+        rec = self.get_target(host)
+        if not rec:
+            return False
+
+        fqdn = _clean_domain(fqdn)
+        fqdn_host, fqdn_domain = _fqdn_parts(fqdn)
+        hostname = _clean_hostname(hostname or fqdn_host)
+        domain = _clean_domain(domain or fqdn_domain)
+        os = str(os or "").strip()
+
+        changed = False
+        for key, value in (
+            ("hostname", hostname),
+            ("fqdn", fqdn),
+            ("domain", domain),
+            ("os", os),
+        ):
+            if value and rec.get(key) != value:
+                rec[key] = value
+                changed = True
+
+        preferred_label = hostname or fqdn
+        if preferred_label and _is_default_label(rec.get("label", ""), rec["host"]):
+            rec["label"] = preferred_label
+            changed = True
+        return changed
+
+    def apply_fact_enrichment(self, facts: list[Fact] | None = None) -> bool:
+        """Fold host-scoped identity facts into target records for display/grouping."""
+        changed = False
+        for fact in facts if facts is not None else self.facts.facts:
+            if fact.state.value != "supported" or not fact.scope.startswith("host:"):
+                continue
+            host = fact.scope[5:]
+            value = fact.value or {}
+            if fact.kind == "host.hostname":
+                changed |= self.enrich_target_identity(
+                    host, hostname=value.get("name") or value.get("hostname") or "")
+            elif fact.kind == "host.fqdn":
+                changed |= self.enrich_target_identity(
+                    host,
+                    hostname=value.get("hostname") or "",
+                    fqdn=value.get("fqdn") or value.get("name") or "",
+                    domain=value.get("domain") or "",
+                )
+            elif fact.kind == "host.domain":
+                changed |= self.enrich_target_identity(
+                    host, domain=value.get("domain") or value.get("name") or "")
+            elif fact.kind == "host.up":
+                changed |= self.enrich_target_identity(host, os=value.get("os") or "")
+            elif fact.kind == "ad.dc_candidate":
+                changed |= self.enrich_target_identity(
+                    host,
+                    hostname=value.get("name") or "",
+                    domain=value.get("domain") or "",
+                )
+        return changed
 
     def facts_for_target(self, host: str) -> FactSet:
         """Facts relevant to one target: everything scoped to that host, plus shared
