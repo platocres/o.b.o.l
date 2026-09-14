@@ -2,6 +2,7 @@
 bundle, run-from-site, evidence, and BloodHound ingestion — all token-gated and over
 one shared store."""
 import io
+import time
 import zipfile
 from pathlib import Path
 
@@ -161,13 +162,28 @@ def test_quickstart_runs_nmap_then_nxc_when_unlocked(cx, monkeypatch):
     monkeypatch.setattr(server.shutil, "which", fake_which)
     monkeypatch.setattr(server, "run_action", fake_run_action)
 
-    out = cx.post("/api/run/quickstart", json={"target": "10.10.10.161"}, headers=H).json()
+    started = cx.post("/api/run/quickstart", json={"target": "10.10.10.161"}, headers=H).json()
 
-    assert out["quickstart"] is True
+    assert started["quickstart"] is True
+    assert started["pending"] is True
+    assert started["job_id"]
+    assert started["steps"][0]["status"] in {"queued", "running"}
+
+    out = started
+    for _ in range(50):
+        out = cx.get(f"/api/quickstart/jobs/{started['job_id']}", headers=H).json()
+        if not out["pending"]:
+            break
+        time.sleep(0.02)
+
+    assert out["pending"] is False
     assert out["status"] == "success"
     assert calls[0] == ("nmap-fast-open-ports", 0)
     assert ("gpp-passwords", 0) in calls  # nxc smb --shares is the first SMB/GPP variant
     assert {f["kind"] for f in out["facts"]} >= {"port:445", "smb.reachable"}
+    steps = {step["action_id"]: step for step in out["steps"]}
+    assert steps["nmap-fast-open-ports"]["status"] == "success"
+    assert steps["gpp-passwords"]["added_count"] >= 1
 
 
 def test_checklist_toggle_persists(cx):
