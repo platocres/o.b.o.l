@@ -10,7 +10,7 @@ const PHASE_COLOR = { recon: "#38BDF8", enum: "#818CF8", creds: "#F59E0B",
   access: "#34D399", escalate: "#F472B6", loot: "#A855F7" };
 const SEV_COLOR = { critical: "#E11D48", high: "#F97316", medium: "#EAB308", low: "#3B82F6", info: "#6B7591" };
 const CAT_COLOR = { target: "#38BDF8", scan: "#818CF8", service: "#22D3EE", ad: "#F472B6",
-  credential: "#F59E0B", access: "#34D399", loot: "#A855F7", config: "#94A3B8", other: "#6B7591" };
+  credential: "#F59E0B", access: "#34D399", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
 const ACCESS = {
   discovered: { c: "#6B7591", t: "Discovered" }, enumerated: { c: "#3B82F6", t: "Enumerated" },
   credentialed: { c: "#EAB308", t: "Credentialed" }, foothold: { c: "#14B8A6", t: "Foothold" },
@@ -127,32 +127,70 @@ function variantRows(a, host) {
     </div>`;
   }).join("")}</div>`;
 }
+function stepDotClass(s) {
+  const st = String((s && s.status) || "").toLowerCase();
+  if (st === "running") return "live";
+  if (s && (s.success === true || st === "success" || st === "done")) return "good";
+  if (s && (s.success === false || ["failed", "timeout", "refused", "blocked", "missing"].includes(st))) return "bad";
+  return "wait";
+}
+function quickStartStepsHtml(steps) {
+  const items = steps || [];
+  if (!items.length) return "";
+  return `<div class="run-steps"><div class="rp-label">Quick Start steps (${items.length})</div>${items.map((s) => {
+    const facts = s.facts || [];
+    const detail = s.reason || s.summary || "";
+    return `<div class="step-card ${esc(s.status || "")}">
+      <div class="step-card-h"><span class="status-dot ${stepDotClass(s)}"></span><span class="step-title">${esc(s.title || s.action_id)}</span>
+        <span class="muted mono">${esc(s.status || "")}${s.added_count ? ` · +${s.added_count}` : ""}</span></div>
+      ${detail ? `<div class="step-detail">${esc(detail)}</div>` : ""}
+      ${s.command ? `<pre class="cmd sm">$ ${esc(s.command)}</pre>` : ""}
+      ${facts.length ? `<div class="fact-chip-grid compact step-facts">${facts.map(factChip).join("")}</div>` : ""}
+    </div>`;
+  }).join("")}</div>`;
+}
+function quickStartToast(job) {
+  if (job.success) toast("Quick Start complete", `stored ${job.added_count || 0} fact(s)`, "ok");
+  else if (job.status === "partial") toast("Quick Start partially complete", job.message || "some commands failed or were skipped", "");
+  else toast("Quick Start blocked", job.message || "no command could run", "err");
+}
 function runStatusPanel(host) {
   const r = state.lastRun;
   if (!r || r.target !== host) return "";
-  if (r.pending) {
-    const title = r.quickstart ? "Quick Start running" : "Running command";
-    const detail = r.quickstart ? "Running nmap first, then service-aware baseline enumeration as facts unlock it." : "Waiting for the shared runner to return…";
-    return `<div class="run-panel pending"><div class="run-head"><span class="pulse"></span><div><b>${esc(title)}</b><div class="muted">${esc(detail)}</div></div></div>
+  const o = r.outcome || {};
+  const isQuickStart = r.quickstart || o.quickstart;
+  const isPending = !!(r.pending || o.pending);
+
+  if (isPending && !isQuickStart) {
+    return `<div class="run-panel pending"><div class="run-head"><span class="pulse"></span><div><b>Running command</b><div class="muted">Waiting for the shared runner to return...</div></div></div>
       <div class="muted mono" style="margin-top:8px">${esc(r.action_id || "")}</div></div>`;
   }
   if (r.error) {
     return `<div class="run-panel failed"><div class="run-head"><span class="status-dot bad"></span><div><b>Run refused</b><div class="muted">${esc(r.error)}</div></div></div></div>`;
   }
-  const o = r.outcome || {};
+
   const facts = o.facts || o.added || [];
+  if (isQuickStart) {
+    const okClass = isPending ? "pending" : (o.success ? "ok" : (o.status === "partial" ? "pending" : "failed"));
+    const title = isPending ? "Quick Start running" : (o.success ? "Quick Start complete" : (o.status === "partial" ? "Quick Start partially complete" : "Quick Start blocked"));
+    const dot = isPending ? "live" : (o.success ? "good" : "bad");
+    return `<div class="run-panel ${okClass}">
+      <div class="run-head"><span class="status-dot ${dot}"></span>
+        <div><b>${esc(title)}</b><div class="muted">${esc(o.message || "Running nmap first, then service-aware baseline enumeration.")}${o.job_id ? ` · job ${esc(o.job_id)}` : ""}</div></div></div>
+      ${quickStartStepsHtml(o.steps || [])}
+      ${facts.length ? `<div class="run-facts"><div class="rp-label">Facts stored (${facts.length})</div><div class="fact-chip-grid compact">${facts.map(factChip).join("")}</div></div>` : `<div class="muted" style="margin-top:8px">Facts will appear here as commands complete and parsers store them.</div>`}
+    </div>`;
+  }
+
   const okClass = o.success ? (o.dry_run ? "pending" : "ok") : (o.status === "partial" ? "pending" : "failed");
-  const title = o.quickstart ? (o.success ? "Quick Start complete" : (o.status === "partial" ? "Quick Start partially complete" : "Quick Start blocked")) : (o.dry_run ? "Preview complete" : (o.success ? "Command succeeded" : "Command failed"));
+  const title = o.dry_run ? "Preview complete" : (o.success ? "Command succeeded" : "Command failed");
   const preview = (!o.success || !facts.length)
     ? `<div class="run-previews">${o.stderr_preview ? `<div><div class="rp-label">stderr preview</div><pre>${esc(o.stderr_preview)}</pre></div>` : ""}${o.stdout_preview ? `<div><div class="rp-label">stdout preview</div><pre>${esc(o.stdout_preview)}</pre></div>` : ""}</div>`
     : "";
-  const steps = (o.steps || []).length ? `<div class="run-steps"><div class="rp-label">Commands run (${o.steps.length})</div>${o.steps.map((s) => `<div class="step-row"><span class="status-dot ${s.success ? "good" : "bad"}"></span><span>${esc(s.title || s.action_id)}</span><span class="muted mono">${esc(s.status || "")}${s.added_count ? ` · +${s.added_count}` : ""}</span></div>`).join("")}</div>` : "";
-  const skipped = (o.skipped || []).length ? `<details class="skipped"><summary>${o.skipped.length} skipped quick-start step${o.skipped.length === 1 ? "" : "s"}</summary>${o.skipped.map((s) => `<div class="muted">${esc(s.title || s.action_id)} · ${esc(s.reason || s.status || "skipped")}</div>`).join("")}</details>` : "";
   return `<div class="run-panel ${okClass}">
     <div class="run-head"><span class="status-dot ${o.success ? "good" : "bad"}"></span>
       <div><b>${esc(title)}</b><div class="muted">${esc(o.message || "")}${o.duration_ms ? ` · ${o.duration_ms}ms` : ""}${o.returncode !== null && o.returncode !== undefined ? ` · rc ${o.returncode}` : ""}</div></div></div>
     ${o.command ? `<pre class="cmd run-cmd">$ ${esc(o.command)}</pre>` : ""}
-    ${steps}${skipped}
     ${facts.length ? `<div class="run-facts"><div class="rp-label">Facts stored (${facts.length})</div><div class="fact-chip-grid compact">${facts.map(factChip).join("")}</div></div>` : `<div class="muted" style="margin-top:8px">No new facts were parsed and stored from this output.</div>`}
     ${preview}
     ${o.stdout_path || o.stderr_path ? `<div class="muted mono" style="font-size:11px;margin-top:8px">${o.stdout_path ? `stdout ${esc(o.stdout_path)}` : ""}${o.stderr_path ? ` · stderr ${esc(o.stderr_path)}` : ""}</div>` : ""}
@@ -198,7 +236,7 @@ function connectEvents() {
   const dot = $("#conn-dot"), txt = $("#conn-text");
   const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
   es.addEventListener("hello", () => { dot.className = "dot live"; txt.textContent = "live"; });
-  es.addEventListener("state", async () => { flash(); await refreshEngList(); render(); });
+  es.addEventListener("state", async () => { flash(); await refreshEngList(); await refreshQuickStartJob(); render(); });
   es.onerror = () => { dot.className = "dot stale"; txt.textContent = "reconnecting…"; };
   es.onopen = () => { dot.className = "dot live"; txt.textContent = "live"; };
 }
@@ -618,16 +656,30 @@ async function runAction(actionId, host, cmdIndex) {
     if (state.view === "target" && state.target === host) render();
   }
 }
+async function refreshQuickStartJob() {
+  const r = state.lastRun;
+  if (!r || !r.quickstart || !r.job_id) return;
+  try {
+    const job = await api(`/api/quickstart/jobs/${encodeURIComponent(r.job_id)}`);
+    const wasPending = !!r.pending;
+    state.lastRun = { target: job.target, pending: !!job.pending, quickstart: true, job_id: job.job_id || job.id, outcome: job, notified: r.notified };
+    if (wasPending && !job.pending && !state.lastRun.notified) {
+      quickStartToast(job);
+      state.lastRun.notified = true;
+    }
+  } catch (e) {
+    if (r.pending) state.lastRun = { target: r.target, pending: false, quickstart: true, job_id: r.job_id, error: e.message };
+  }
+}
 async function runQuickStart(host) {
   if (!host) return;
   state.lastRun = { target: host, pending: true, action_id: "Quick Start", quickstart: true };
   if (state.view === "target" && state.target === host) render();
   try {
-    const o = await apiPost("/api/run/quickstart", { target: host });
-    state.lastRun = { target: host, pending: false, outcome: o };
-    if (o.success) toast("Quick Start complete", `ran ${o.steps.length} command(s), stored ${o.added_count} fact(s)`, "ok");
-    else if (o.status === "partial") toast("Quick Start partially complete", o.message || "some commands failed or were skipped", "");
-    else toast("Quick Start blocked", o.message || "no command could run", "err");
+    const job = await apiPost("/api/run/quickstart", { target: host });
+    state.lastRun = { target: job.target || host, pending: !!job.pending, quickstart: true, job_id: job.job_id || job.id, outcome: job, notified: false };
+    toast(job.pending ? "Quick Start started" : "Quick Start ready", job.message || "watching the live step timeline", job.pending ? "ok" : "");
+    if (!job.pending) { quickStartToast(job); state.lastRun.notified = true; }
     render();
   } catch (e) {
     state.lastRun = { target: host, pending: false, error: e.message };
