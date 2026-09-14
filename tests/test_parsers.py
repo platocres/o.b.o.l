@@ -442,3 +442,90 @@ SMB         10.10.10.10     445    DC01     [+] Dumped 3 NTDS.DIT secrets
     # hash.ntlm unlocks lateral movement by pass-the-hash; hash.krbtgt unlocks golden ticket.
     assert "lateral-exec" in unlocked
     assert "golden-ticket" in unlocked
+
+
+def test_nxc_exec_whoami_system_proves_access_system():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+SMB         10.10.10.10     445    DC01     [+] acme.corp\svc_backup:Passw0rd! (Pwn3d!)
+SMB         10.10.10.10     445    DC01     [+] Executed command via wmiexec
+SMB         10.10.10.10     445    DC01     nt authority\system
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc smb 10.10.10.10 -u svc_backup -p 'Passw0rd!' -x 'whoami'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"access.system", "foothold.windows"} <= kinds
+    system = next(fact for fact in facts if fact.kind == "access.system")
+    assert system.value["identity"] == "nt authority\\system"
+
+
+def test_winrm_exec_normal_user_proves_foothold_not_system_or_admin():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+WINRM       10.10.10.10     5985   WEB02    [+] acme.corp\jdoe:Summer2026!
+WINRM       10.10.10.10     5985   WEB02    acme.corp\jdoe
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc winrm 10.10.10.10 -u jdoe -p 'Summer2026!' -X 'whoami'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "foothold.windows" in kinds
+    foothold = next(fact for fact in facts if fact.kind == "foothold.windows")
+    assert foothold.value.get("identity") == "acme.corp\\jdoe"
+    # A non-privileged shell is code execution, not SYSTEM or admin on its own.
+    assert "access.system" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_wmiexec_interactive_shell_system_proves_access_system():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+[*] SMBv3.0 dialect used
+[!] Launching semi-interactive shell - Careful what you execute
+C:\Windows\system32>whoami
+nt authority\system
+C:\Windows\system32>
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "impacket-wmiexec 'acme.corp/svc_backup:Passw0rd!'@10.10.10.10",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"access.system", "foothold.windows"} <= kinds
+
+
+def test_non_exec_command_with_identity_text_does_not_prove_foothold():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "ad-anon-ldap-enum")
+    # An enum command whose output merely mentions a domain\user must not be
+    # mistaken for command execution.
+    out = "dn: CN=jdoe\nsAMAccountName: jdoe\nmemberOf: CN=Admins\nCORP\\jdoe\n"
+    facts = parse_action_output(
+        action,
+        ws,
+        "ldapsearch -x -H ldap://10.10.10.10 -b dc=acme,dc=corp '(objectClass=user)'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "foothold.windows" not in kinds
+    assert "access.system" not in kinds

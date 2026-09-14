@@ -42,6 +42,17 @@ _TGS_USER_RE = re.compile(r"\$krb5tgs\$\d+\$\*?([^$*:]+)", re.IGNORECASE)
 _NTDS_HASH_RE = re.compile(
     r"(?:(?P<domain>[^\s\\:]+)\\)?(?P<user>[^\s\\:]+):(?P<rid>\d+):[0-9a-fA-F]{32}:(?P<nt>[0-9a-fA-F]{32}):::"
 )
+# whoami-style identity from command-execution output, tolerating an nxc row prefix.
+_NXC_ROW_PREFIX = r"(?:(?:SMB|WINRM|WMI|RPC|SSH)\s+\S+\s+\d+\s+\S+\s+)?"
+_SYSTEM_ID_RE = re.compile(r"\bnt authority\\system\b", re.IGNORECASE)
+_WHOAMI_ID_RE = re.compile(
+    rf"^{_NXC_ROW_PREFIX}(?P<id>nt authority\\system|[A-Za-z0-9][A-Za-z0-9.-]*\\[A-Za-z0-9._$-]{{2,}})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_EXEC_SUCCESS_RE = re.compile(
+    r"\bexecuted command\b|\[\+\]\s+executed|Microsoft Windows \[Version|^[A-Za-z]:\\.*>",
+    re.IGNORECASE | re.MULTILINE,
+)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
@@ -214,6 +225,19 @@ def _is_cracking_command(command: str) -> bool:
     return " hashcat " in lowered or re.search(r"(^|[\s/])john(\s|$)", lowered) is not None
 
 
+def _is_exec_command(command: str) -> bool:
+    lowered = command.lower()
+    is_nxc = "nxc " in lowered or lowered.startswith("nxc ")
+    # -x/-X is NetExec command execution; other tools (e.g. ldapsearch -x = simple
+    # auth) use -x for unrelated things, so only treat it as exec for nxc.
+    if is_nxc and re.search(r"\s-x(\s|'|\")", lowered):
+        return True
+    return any(
+        tool in lowered
+        for tool in ("wmiexec", "psexec", "atexec", "smbexec", "evil-winrm", "enter-pssession")
+    )
+
+
 def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
     lowered = command.lower()
     if action.id == "ad-anon-ldap-enum":
@@ -297,6 +321,9 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if _is_cracking_command(command):
         _parse_cracked_credentials(text, ws, command, source, facts)
+
+    if _is_exec_command(command):
+        _parse_command_execution(text, ws, command, source, facts)
 
     return facts
 
@@ -841,3 +868,58 @@ def _parse_bloodhound_analysis(text: str, ws: Workspace, source: str, facts: lis
     if not _ATTACK_PATH_RE.search(text):
         return
     _add(facts, Fact("ad.attack_paths", _scope_for_domain(ws), {"tool": "bloodhound", "evidence": "analysis_output"}, ProofState.SUPPORTED, source))
+
+
+def _exec_tool(command: str) -> str:
+    lowered = command.lower()
+    for tool in ("evil-winrm", "wmiexec", "psexec", "atexec", "smbexec"):
+        if tool in lowered:
+            return tool
+    if "enter-pssession" in lowered:
+        return "winrs"
+    if "nxc " in lowered or lowered.startswith("nxc "):
+        return "nxc"
+    return "exec"
+
+
+def _parse_command_execution(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Prove code execution and SYSTEM from command-execution output.
+
+    Triggered only for execution commands (nxc -x/-X, impacket psexec/wmiexec,
+    evil-winrm, Enter-PSSession). Returned `whoami`/command output showing
+    `nt authority\\system` proves `access.system`; any confirmed command
+    execution proves a Windows foothold. A normal-user shell proves the
+    foothold only — never admin or SYSTEM on its own.
+    """
+    identities = [_normalize_identity(match.group("id")) for match in _WHOAMI_ID_RE.finditer(text)]
+    identities = [ident for ident in identities if ident]
+    is_system = bool(_SYSTEM_ID_RE.search(text))
+    executed = bool(identities) or bool(_EXEC_SUCCESS_RE.search(text))
+    if not executed:
+        return
+
+    tool = _exec_tool(command)
+    foothold_value = {"method": tool}
+    non_system = [ident for ident in identities if ident.lower() != "nt authority\\system"]
+    if non_system:
+        foothold_value["identity"] = non_system[0]
+    _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold_value, ProofState.SUPPORTED, source))
+
+    if is_system:
+        _add(
+            facts,
+            Fact(
+                "access.system",
+                f"host:{ws.target}",
+                {"identity": "nt authority\\system", "method": tool},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+
+
+def _normalize_identity(identity: str) -> str:
+    identity = identity.strip()
+    if identity.lower() == "nt authority\\system":
+        return "nt authority\\system"
+    return identity
