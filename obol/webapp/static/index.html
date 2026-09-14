@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>O.B.O.L · console</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div id="app">
+  <aside class="rail">
+    <div class="brand" title="Offensive Box Operations Ledger">
+      <span class="brand-mark">◆</span>
+      <span class="brand-text">O.B.O.L</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="engagement"><span class="ni-ic">◉</span><span>Overview</span></button>
+      <button class="nav-item" data-view="targets"><span class="ni-ic">⊞</span><span>Targets</span></button>
+      <button class="nav-item" data-view="tools"><span class="ni-ic">⚒</span><span>Tools</span></button>
+      <button class="nav-item" data-view="engpath"><span class="ni-ic">⌖</span><span>Attack path</span></button>
+      <button class="nav-item" data-view="report"><span class="ni-ic">▤</span><span>Report</span></button>
+    </nav>
+    <div class="rail-foot">
+      <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <header class="topbar">
+      <select id="eng-select" class="eng-select" title="Active engagement"></select>
+      <button id="eng-new" class="btn ghost sm" title="New engagement">＋</button>
+      <span class="crumb" id="crumb"></span>
+      <span class="spacer"></span>
+      <span class="flash" id="flash">live update ✓</span>
+    </header>
+    <section class="content" id="content"><div class="loading">Loading…</div></section>
+  </main>
+</div>
+<div class="toast-wrap" id="toasts"></div>
+
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

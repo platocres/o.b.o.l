@@ -5,6 +5,28 @@ and reference code live) and [`docs/ROADMAP.md`](docs/ROADMAP.md) (what to build
 next). The same contract applies to any coding agent (Claude, ChatGPT, etc.).
 `CLAUDE.md` points here.
 
+## Naming — "obol local" vs "obol web" (canonical, use these terms)
+
+From this point forward, agents MUST distinguish the two projects by these names:
+
+- **obol local** — THIS repo (`platocres/o.b.o.l`), *O.B.O.L — Offensive Box
+  Operations Ledger*. The terminal-first, on-box operator tool that *runs* an
+  engagement (executes tools, ingests evidence, keeps the ledger). Also fine:
+  "o.b.o.l".
+- **obol web** — the OLDER project at `platocres/obol`: the browser-based, static
+  methodology planning app that obol local mines for its packs (see
+  `docs/SOURCES.md §2`).
+
+When the user says "obol local" they mean this repo; "obol web" means
+`platocres/obol`. Never conflate them.
+
+Note on the docs' tone: some earlier "always keep it read-only / zero-dependency"
+caution was over-conservative. o.b.o.l is a real, dependency-using tool (the web
+surface uses FastAPI); the "zero-dependency" ideal belonged to the *web* Obol, not
+here. The non-negotiables below (facts discipline, scope enforcement, one store,
+UX guardrails) still hold; blanket "never add a dependency / keep the web read-only"
+statements do not.
+
 ## What obol is
 
 An **evidence-driven OSCP operator companion**. Terminal-first, PentOS-style shell
@@ -20,8 +42,9 @@ are the ones that actually matter *now*. The gating is an internal engine detail
 the UI shows clean, ranked **live options only** — it does NOT lecture users with
 "proves / does not prove" or "blocked until X" text (a deliberate product
 decision: this is a fast OSCP-exam tool). And **one state, multiple synced
-views**: the terminal drives, a web page mirrors it (and, planned, can drive it
-too), and an OSCP report is narrated from the same fact/run ledger.
+views**: the terminal and a localhost web surface both drive the engagement over
+one store (either can launch a scope-enforced run; the web updates in real time),
+and an OSCP report is narrated from the same fact/run ledger.
 
 ## The non-negotiable principles (the "always/never")
 
@@ -38,18 +61,21 @@ too), and an OSCP report is narrated from the same fact/run ledger.
    loaded by the planner. Add methodology by adding pack entries, **never** by
    putting box-specific or branch-specific logic in the planner.
 3. **Terminal and web are both actors over one shared state.** Either surface may
-   launch a run through the same scope-enforced runner; both stay synced through
-   the single `.obol` store (the web is localhost-only). The web is read-only
-   today; running-from-site is planned — until it lands, keep the web read-only.
-   Never create a second state store for the web.
+   launch a run through the same shared service (`service.run_action`) — one runner,
+   one parser, one `.obol` store. Run-from-site has landed: the web triggers a run by
+   action id, the server fills the command from workspace facts (secrets never go to
+   the browser), and the same scope gate applies. Both surfaces stay synced in real
+   time (the web watches the state file via SSE). The web is localhost-only and
+   token-gated. Never create a second state store or a second runner for the web.
 4. **Scope enforcement is mandatory for the runner** (`obol/scope.py`,
    `obol/runner.py`). It may only touch an authorized target — a hard gate, not a
    noise tier — and it applies equally to terminal-, web-, and playbook-launched
    runs. **Playbooks** are named, ordered sequences of pack actions, stored as
    data, runnable from terminal and web, with per-step approval for noisy/risky
    steps (see `docs/ROADMAP.md`, modeled on Pentest Companion).
-5. **The path graph is projected once** (`graph.py`) and rendered to every surface
-   (terminal board, web mermaid, report), so surfaces never disagree.
+5. **The path graph is projected once** (`graph.py` → `build_graph_model`) and
+   rendered to every surface — terminal/report as mermaid (`build_mermaid`), the web
+   as an SVG flow chart grouped by engagement phase — so surfaces never disagree.
 6. **Tool/action contract** (inherited from the prior obol): an action is only
    "real" when it generates realistic commands (no fabricated seed values),
    ingests output as evidence, respects proof boundaries, and carries operator
@@ -65,8 +91,15 @@ too), and an OSCP report is narrated from the same fact/run ledger.
 ```
 obol/
   facts.py       Fact + ProofState + FactSet (the source of truth)
-  workspace.py   .obol/state.json load/save; find_workspace() walks up like git
-                 target/scope/input persistence; raw run ledger paths
+  library.py     engagement library: many engagements under an app-managed base dir
+                 ($OBOL_HOME); create/list/active-select (the web + `obol engagement`)
+  workspace.py   an engagement's .obol/state.json: targets, per-target fact view,
+                 scope, inputs, run ledger, evidence attachments, checklist ticks,
+                 BloodHound summary; find_workspace() walks up like git
+  bloodhound.py  tolerant SharpHound/BloodHound export parser -> domain overlay facts
+  tools.py       tool inventory: curated registry of the packs' tools + detection
+                 (which/default Kali paths/auto-locate), overrides in tools.json,
+                 install hints; the runner resolves found/added tools through it
   pack.py        Action model + planner (next_actions / blocked_actions /
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)
@@ -75,11 +108,25 @@ obol/
                  explain view shows the full card (hypothesis, commands, refs)
   scope.py       target normalization + exact/CIDR scope checks
   runner.py      fixed-argv runner; timeout, dry-run, raw output capture
+  service.py     run -> parse -> record -> save; the ONE path both surfaces call
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
-  graph.py       facts+actions -> mermaid path graph (the single projection)
-  web.py         read-only localhost web view (findings + path graph)
+  graph.py       facts+actions -> per-target graph model + mermaid (one projection);
+                 build_engagement_graph stitches all targets + BloodHound overlay
+  service.py     run -> parse -> record -> save; the ONE path both surfaces call
+                 (target=... pins a run to a host); eligible_actions = tool palette
+  report.py      OSCP markdown report + build_report_context (per-target rollup +
+                 evidence + engagement graph, structured for the web)
+  web.py         self-contained read-only static HTML snapshot (`obol web`)
+  webapp/        live localhost web surface (`obol serve`) — optional [web] extra
+    server.py      FastAPI over the engagement library: engagements/targets CRUD,
+                   per-target bundle, run-from-site, evidence + BloodHound upload,
+                   token gate, SSE real-time
+    static/        vanilla-JS SPA: engagement overview, targets, tabbed target view
+                   (Overview/Tools/Playbooks/Checklist/Findings/Evidence/Commands),
+                   engagement attack path, report; vendored chart.umd.min.js (no CDN)
   seed.py        Forest demo fixture (post-nmap facts)
-  cli.py         subcommands: init / next / explain / run / scope / facts / serve / web
+  cli.py         subcommands: init / engagement / target / next / explain / run /
+                 playbook(s) / scope / facts / report / serve / web
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
 tests/
@@ -103,7 +150,10 @@ caught by penelope; `foothold.linux` is its Linux counterpart to
 **Built & working:** the fact model; the planner (fact-gating, priority ranking,
 blocked-with-reason); the Orange AD pack (30 actions); the terminal board;
 `explain` (full Orange card — genuinely useful as a live command reference);
-the read-only web view with key findings + the mermaid path graph; target/scope
+the OSCP markdown report (`obol report`); the live web surface (`obol serve`) —
+overview with findings charts, the phase-column flow chart, run-from-site for
+actions and playbook steps through the shared service, and the report as its main
+interface, all updating in real time via SSE; target/scope
 persistence; a fixed-argv runner with timeout, dry-run, raw output capture under
 `.obol/runs/`; and the first generic parsers for nmap port/service output,
 NetExec LDAP/SMB, ldapsearch naming contexts, LDAP user output, and AS-REP hashes.
@@ -120,16 +170,18 @@ action's declared `produces`; that was only a scaffold. A port fact is not a win
 `389/tcp open` may unlock LDAP actions, but it does not prove anonymous bind,
 users, credentials, access, or privilege.
 
-**Still missing:** report generation, richer target/input management, parser
-coverage across the rest of the Orange AD pack, sibling packs (web/privesc/etc.),
-and Charon-style tool-provider/degradation behavior.
+**Still missing:** parser coverage across the rest of the Orange AD pack, sibling
+packs (privesc/pivoting/cracking/…), web-surface tool-availability display, richer
+target/input management, and Charon-style tool-provider/degradation behavior.
 
 ## Run / test / regenerate
 
 ```bash
-pip install -e ".[rich]"          # rich optional; obol degrades without it
+pip install -e ".[all]"           # rich + web extras; core has no hard deps
 # work in an ENGAGEMENT directory, not the source checkout:
 mkdir -p ~/labs/box && cd ~/labs/box && obol init --demo && obol next
+obol serve                        # live web surface (needs the [web] extra)
+pip install -e ".[test]"          # pytest + FastAPI TestClient for the web tests
 python3 -m pytest tests/ -q       # from the repo root
 # target slice:
 mkdir -p ~/labs/box && cd ~/labs/box && obol init --target 10.10.10.10

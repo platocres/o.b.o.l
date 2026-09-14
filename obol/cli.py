@@ -11,19 +11,22 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import board
+from . import board, library, service
 from .facts import Fact
 from .pack import load_packs, next_actions
-from .parsers import parse_action_output
-from .runner import RunnerError, run_command
+from .runner import RunnerError
 from .seed import seed_forest
+from .service import ActionError
 from .workspace import Workspace, find_workspace
 
 
 def _load_or_exit() -> Workspace:
-    ws = find_workspace()
+    """Resolve the working engagement: a `.obol` in the current directory tree, else
+    the active engagement in the app-managed library."""
+    ws = find_workspace() or library.resolve_active()
     if ws is None:
-        print("no obol workspace here. run `obol init` first.", file=sys.stderr)
+        print("no obol workspace here. run `obol init`, or `obol engagement new <name>`.",
+              file=sys.stderr)
         raise SystemExit(1)
     return ws
 
@@ -93,52 +96,33 @@ def cmd_explain(args) -> None:
 
 def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
                 args_extra="", ledger_extra=None):
-    """Shared run -> parse -> record path for `obol run` and playbook steps.
+    """Terminal wrapper over the shared run service (`service.run_action`).
 
-    There is deliberately one runner and one parser and one store: a playbook step
-    is executed exactly the way `obol run` executes an action. Returns
-    (RunResult, added_facts); exits with a clear message on a runner error or a
-    bad command variant.
+    The service is the one runner/parser/store path — the web run-from-site surface
+    calls the same function. Here we only add scrollback output; on a bad command
+    variant or a runner refusal we exit with a clear message.
     """
-    commands = action.commands or [{"tool": action.tool, "run": action.command}]
-    if not 0 <= command_index < len(commands):
-        print(f"action has {len(commands)} command variant(s); cannot run #{command_index + 1}.", file=sys.stderr)
+    try:
+        cmd, _tool = service.build_command(
+            action, ws, command_index=command_index, args_extra=args_extra
+        )
+    except ActionError as exc:
+        print(f"{exc}", file=sys.stderr)
         raise SystemExit(1)
-    command_meta = commands[command_index]
-    cmd = board.fill_command(action, ws, command_index)
-    extra = board.fill_template(args_extra, ws).strip() if args_extra else ""
-    if extra:
-        cmd = f"{cmd} {extra}"
-    tool = command_meta.get("tool") or action.tool or cmd.split()[0]
     print(f"\n$ {cmd}")
     try:
-        result = run_command(
-            ws, command=cmd, tool=tool, timeout=timeout,
-            dry_run=dry_run, allow_shell_tokens=allow_shell,
+        outcome = service.run_action(
+            ws, action,
+            command_index=command_index, timeout=timeout,
+            dry_run=dry_run, allow_shell=allow_shell,
+            args_extra=args_extra, ledger_extra=ledger_extra,
         )
     except RunnerError as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
-    new = [] if result.dry_run else parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd)
-    added = []
-    for fact in new:
-        if ws.facts.add(fact):
-            added.append(fact)
-    ws.record_run(
-        tool, cmd, [f.kind for f in added],
-        action_id=action.id,
-        command_index=command_index + 1,
-        returncode=result.returncode,
-        timed_out=result.timed_out,
-        dry_run=result.dry_run,
-        stdout=str(result.stdout_path),
-        stderr=str(result.stderr_path),
-        duration_ms=result.duration_ms,
-        **(ledger_extra or {}),
-    )
-    ws.save()
-    if result.dry_run:
+    added = outcome.added
+    if outcome.dry_run:
         print("\ndry run only — command was not executed and no facts were ingested.")
     elif added:
         print(f"\n{board.SYM_OK} ingested — new facts:")
@@ -147,7 +131,7 @@ def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
             print(f"   + {f.kind}" + (f"  ({detail})" if detail else ""))
     else:
         print("\n(no new facts parsed — raw output was still saved)")
-    return result, added
+    return outcome.result, added
 
 
 def cmd_run(args) -> None:
@@ -246,8 +230,68 @@ def cmd_scope(args) -> None:
 
 
 def cmd_serve(args) -> None:
-    from . import web
-    web.serve(_load_or_exit(), port=args.port)
+    from . import webapp
+    ws = find_workspace()   # optional: link a cwd engagement into the library
+    try:
+        webapp.serve(ws, host=args.host, port=args.port)
+    except SystemExit:
+        raise
+    except OSError as exc:
+        print(f"error: could not bind {args.host}:{args.port} — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def cmd_engagement(args) -> None:
+    sub = getattr(args, "engagement_cmd", "list")
+    if sub == "new":
+        ws = library.create_engagement(args.name)
+        print(f"created engagement {ws.name!r} (slug {ws.root.name}) and set it active")
+        print("add a target: obol target add <ip>")
+        return
+    if sub == "use":
+        if not library.get_engagement(args.slug):
+            print(f"no engagement {args.slug!r}. see `obol engagement list`.", file=sys.stderr)
+            raise SystemExit(1)
+        library.set_active(args.slug)
+        print(f"active engagement: {args.slug}")
+        return
+    engs = library.list_engagements()
+    if not engs:
+        print("no engagements yet. create one: obol engagement new <name>")
+        return
+    for e in engs:
+        mark = "*" if e["active"] else " "
+        print(f" {mark} {e['slug']:22} {e['name']}  ({e['targets']} targets, {e['facts']} facts)")
+
+
+def cmd_target(args) -> None:
+    ws = _load_or_exit()
+    sub = getattr(args, "target_cmd", "list")
+    if sub == "add":
+        rec = ws.add_target(args.host, args.label or "")
+        ws.save()
+        print(f"added target {rec['label']} ({rec['host']})" + ("  [active]" if ws.target == rec["host"] else ""))
+        return
+    if sub == "use":
+        if not ws.set_active_target(args.host):
+            print(f"no target {args.host!r} in this engagement.", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"active target: {ws.target}")
+        return
+    if sub == "rm":
+        if not ws.remove_target(args.host):
+            print(f"no target {args.host!r}.", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"removed target {args.host}")
+        return
+    if not ws.targets:
+        print("no targets yet. add one: obol target add <ip>")
+        return
+    for t in ws.targets:
+        mark = "*" if t["host"] == ws.target else " "
+        print(f" {mark} {t['host']:16} {t.get('label', '')}")
 
 
 def cmd_web(args) -> None:
@@ -315,11 +359,38 @@ def build_parser() -> argparse.ArgumentParser:
     padd.set_defaults(func=cmd_scope, scope_cmd="add")
     pscope.set_defaults(func=cmd_scope, scope_cmd="list")
 
-    ps = sub.add_parser("serve", help="serve the read-only web view on localhost")
+    peng = sub.add_parser("engagement", help="manage engagements in the app-managed library")
+    eng_sub = peng.add_subparsers(dest="engagement_cmd")
+    eng_sub.add_parser("list", help="list engagements").set_defaults(func=cmd_engagement, engagement_cmd="list")
+    e_new = eng_sub.add_parser("new", help="create an engagement and make it active")
+    e_new.add_argument("name")
+    e_new.set_defaults(func=cmd_engagement, engagement_cmd="new")
+    e_use = eng_sub.add_parser("use", help="set the active engagement")
+    e_use.add_argument("slug")
+    e_use.set_defaults(func=cmd_engagement, engagement_cmd="use")
+    peng.set_defaults(func=cmd_engagement, engagement_cmd="list")
+
+    ptgt = sub.add_parser("target", help="manage targets in the current/active engagement")
+    tgt_sub = ptgt.add_subparsers(dest="target_cmd")
+    tgt_sub.add_parser("list", help="list targets").set_defaults(func=cmd_target, target_cmd="list")
+    t_add = tgt_sub.add_parser("add", help="add a target host (unlocks the nmap prelude)")
+    t_add.add_argument("host")
+    t_add.add_argument("--label", help="friendly label for the target")
+    t_add.set_defaults(func=cmd_target, target_cmd="add")
+    t_use = tgt_sub.add_parser("use", help="set the active target")
+    t_use.add_argument("host")
+    t_use.set_defaults(func=cmd_target, target_cmd="use")
+    t_rm = tgt_sub.add_parser("rm", help="remove a target")
+    t_rm.add_argument("host")
+    t_rm.set_defaults(func=cmd_target, target_cmd="rm")
+    ptgt.set_defaults(func=cmd_target, target_cmd="list")
+
+    ps = sub.add_parser("serve", help="serve the live web surface on localhost (mirrors and drives the workspace)")
+    ps.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1; keep local — the web can launch tools)")
     ps.add_argument("--port", type=int, default=8765)
     ps.set_defaults(func=cmd_serve)
 
-    pw = sub.add_parser("web", help="write the read-only web view to a static HTML file")
+    pw = sub.add_parser("web", help="write a self-contained read-only snapshot to a static HTML file")
     pw.add_argument("--out", help="output path (default .obol/web/index.html)")
     pw.set_defaults(func=cmd_web)
 

@@ -6,6 +6,21 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
 
 - **Vertical slice** (PR #1's base): fact model, planner, terminal board, read-only
   web view + mermaid path graph, `explain`, tests.
+- **Multi-target engagement platform:** an app-managed engagement library
+  (`obol/library.py`, `$OBOL_HOME`) of engagements, each holding many targets
+  (`workspace.targets`, per-target fact scoping via `facts_for_target`). The web is
+  a tabbed per-target console (Overview with an attack-chain bar + per-target path,
+  a service-aware point-and-click Tools palette, Playbooks, a static Checklist,
+  Findings, Evidence/screenshots, Commands), plus an engagement-wide attack path
+  that stitches targets to the shared domain and a **BloodHound** overlay
+  (`obol/bloodhound.py`). Per-target findings and evidence roll up into the report.
+  `obol engagement` / `obol target` manage it from the terminal.
+- **Robust web surface (item 5, largely done):** localhost FastAPI app
+  (`obol/webapp/`, optional `web` extra) that mirrors AND drives the one `.obol`
+  store — run-from-site for actions and playbook steps through the shared
+  `service.py`, real-time SSE sync across surfaces, a phase-column SVG flow chart
+  from `graph.build_graph_model`, findings charts (vendored Chart.js), and the
+  report as its main interface. See item 5 for the one remaining piece.
 - **Orange AD pack** (30 Orange-derived actions plus 3 local nmap prelude actions)
   driving the planner; proof boundaries test-locked. See `docs/SOURCES.md`.
 - **init robustness**: friendly error on an unwritable/`sudo`-owned directory;
@@ -83,32 +98,36 @@ engagement proof.
 
 ## 5. Robust web surface — run-from-site, playbooks, path-map redesign
 
-The web view should become a real second surface (still localhost-only), modeled
-on PentOS and Pentest Companion (`docs/SOURCES.md`). It reuses the *same*
-scope-enforced runner + parsers + `.obol` store as the terminal.
+**LARGELY DONE.** The web view is now a real second surface (`obol/webapp/`, a
+localhost FastAPI app behind the optional `web` extra), modeled on PentOS and
+Pentest Companion (`docs/SOURCES.md`). It reuses the *same* scope-enforced runner +
+parsers + `.obol` store as the terminal, via the shared `obol/service.py`.
 
-- **Run from the site.** Let the user launch an action's command from the web
-  page; it goes through the same runner/parser and writes the same store, so both
-  surfaces reflect it. This needs the current stdlib `http.server` to grow small
-  POST endpoints (or move to a tiny FastAPI/Flask app like PentOS's) — keep it
-  localhost-bound; never expose execution off-box. Do not add a second runner or
-  a second state store.
-- **Playbooks (both surfaces).** A playbook is a named, ordered list of steps,
-  each `{label, action_id, cmd?, args_extra?, require_approval?}`, stored as data
-  alongside packs. Run live or dry-run; pause for approval before noisy/risky
-  steps; creds propagate from workspace facts via the shared command context.
-  Pentest Companion's `tools/playbook_engine.py` is the reference (learn, don't
-  copy). Playbooks get a useful batch of evidence back in one move and present it
-  neatly. **The terminal side has landed** (`obol/playbook.py`, `ad-recon`); the
-  web still needs to render the plan and run steps once run-from-site exists.
-- **Path-map redesign.** Keep the map (users like it) but make it clearer. The
-  current `graph.py` is a light top-down declutter (path walked + live moves, no
-  blocked branches). The reference for "much more straightforward" is the prior
-  **platocres/obol** path view — study how it lays out the methodology path
-  (phase/lane progression rather than a dependency DAG) and match that feel; this
-  likely means adding a phase/stage to pack actions and grouping the map by it.
-- **Tool availability** (from Pentest Companion `kali_tools`/`tools_status`): show
-  which referenced tools are installed. Live refresh (poll or manual) — simple.
+- **Run from the site — DONE.** The web launches an action or playbook step by
+  action id; the server fills the command from workspace facts and runs it through
+  `service.run_action` (same runner/parser/store), so both surfaces reflect it.
+  Secrets never travel to the browser. Localhost-bound + per-start access token.
+- **Real-time — DONE.** `/api/events` (SSE) watches the state file and pushes a tick
+  on any change — web- OR terminal-launched — so every open page refreshes itself.
+- **Playbooks (both surfaces) — DONE.** The web renders each playbook's plan and
+  runs steps through the shared service, with the same `require_approval` gate
+  (a confirm on the web, a 409 from the API without approval).
+- **Path-map redesign — DONE.** `graph.py` now emits a structured model
+  (`build_graph_model`) with an engagement `phase` per node; the web draws it as an
+  SVG flow chart grouped into phase columns (recon → enum → creds → access →
+  escalate → loot) — the phase/lane progression the prior obol used. Mermaid
+  (terminal/report) renders from the same model.
+- **Findings charts + report interface — DONE.** Overview charts evidence by
+  category and finding severity (Chart.js, vendored locally — no CDN); the Report
+  view is the primary report interface (stat row, progress ladder, path, severity-
+  badged next steps, evidence with lineage, timeline) with a Markdown download and
+  a secrets toggle. `report.build_report_context` is the shared structured source.
+- **Tool availability — DONE** (from Pentest Companion `kali_tools`/`tools_status`):
+  `obol/tools.py` is a curated registry of the tools the packs invoke; the web Tools
+  page scans the host (`which` + default Kali paths + shallow auto-locate), shows a
+  found/total counter, greys out the missing with one-click Install (apt/pipx) or an
+  add-path override, and runs any available tool against a chosen target. The runner
+  resolves found/added tools so a "found" tool is guaranteed to launch.
 
 ## UX guardrails (product decision — keep these)
 
@@ -121,7 +140,12 @@ blocked/proof panels in `board.py` or `web.py`.
 ## Known smaller issues
 
 - `run`'s "new facts" detail line is still sparse for port/service facts.
-- The web view has key findings + a path map, but is not yet the final OSCP-style
-  evidence report.
 - Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
   ahead of roasting).
+- `obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its
+  path graph is blank offline. The live `obol serve` surface is fully offline
+  (vendored Chart.js, SVG flow chart); porting the static snapshot onto
+  `build_graph_model`'s SVG renderer would close the gap.
+- The web surface loads the whole `.obol/state.json` per request — fine for a single
+  box / the exam, but see the state-model note before scaling to large multi-host
+  engagements (flat fact list, whole-file rewrites, single-target shape).

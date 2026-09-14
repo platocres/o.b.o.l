@@ -7,18 +7,25 @@ name = "obol"
 version = "0.0.1"
 description = "Evidence-driven OSCP operator companion: proven facts in, honest next actions out."
 requires-python = ">=3.10"
-# rich is the presentation layer, but obol degrades to plain text without it,
-# so it stays an optional extra rather than a hard dependency.
+# The terminal core has no hard runtime dependencies. rich (nicer terminal output)
+# and web (the FastAPI web surface) are optional extras, installed only when wanted.
 dependencies = []
 
 [project.optional-dependencies]
 rich = ["rich>=13"]
+# python-multipart backs the web surface's file uploads (evidence + BloodHound)
+web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+# convenience: everything an operator typically wants
+all = ["rich>=13", "fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+# extras needed to run the test suite (the web tests use FastAPI's TestClient)
+test = ["pytest>=8", "fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27", "python-multipart>=0.0.9"]
 
 [project.scripts]
 obol = "obol.cli:main"
 
 [tool.setuptools]
-packages = ["obol"]
+packages = ["obol", "obol.webapp"]
 
 [tool.setuptools.package-data]
 obol = ["packs/*.json", "packs/*.md", "playbooks/*.json", "playbooks/*.md"]
+"obol.webapp" = ["static/*.html", "static/*.css", "static/*.js", "static/vendor/*.js"]
