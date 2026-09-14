@@ -29,6 +29,10 @@ _NXC_RID_USER_RE = re.compile(
 _RPC_USER_RE = re.compile(r"\buser:\[(?P<user>[^\]]+)\]\s+rid:\[[^\]]+\]", re.IGNORECASE)
 _BASE_DN_RE = re.compile(r"\bnamingContexts:\s*([A-Za-z0-9_=,.-]+)", re.IGNORECASE)
 _ASREP_RE = re.compile(r"(\$krb5asrep\$[^\s]+)", re.IGNORECASE)
+_ASREP_USER_RE = re.compile(r"\$krb5asrep\$\d+\$([^:@$]+)(?:@([^:$]+))?:", re.IGNORECASE)
+_TGS_RE = re.compile(r"(\$krb5tgs\$[^\s]+)", re.IGNORECASE)
+_TGS_USER_RE = re.compile(r"\$krb5tgs\$\d+\$\*?([^$*:]+)", re.IGNORECASE)
+_JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
 _NMAP_OPEN_RE = re.compile(
@@ -54,6 +58,18 @@ _NOISE_USERS = {
 }
 _SHARE_HEADER_WORDS = {"share", "sharename", "-----", "---------", "name"}
 _SHARE_PERMISSION_WORDS = {"READ", "WRITE", "READ,WRITE", "WRITE,READ", "NO ACCESS", "NONE"}
+_JOHN_NOISE_PREFIXES = (
+    "loaded ",
+    "session.",
+    "cost ",
+    "will run ",
+    "press ",
+    "use the ",
+    "warning:",
+    "no password hashes",
+    "password hash",
+    "password hashes",
+)
 
 
 def _scope_for_domain(ws: Workspace, domain: str = "") -> str:
@@ -106,6 +122,16 @@ def _valid_username(user: str, *, allow_machine: bool = True) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9._$-]{2,}", user))
 
 
+def _valid_password(password: str) -> bool:
+    password = password.strip()
+    if not password or password in {"?", "*", "<password>", "{{password}}"}:
+        return False
+    lowered = password.lower()
+    if lowered.startswith(("status", "recovered", "progress", "guess")):
+        return False
+    return True
+
+
 def _usernames(text: str) -> list[str]:
     users: set[str] = set()
     for regex in (_SAM_RE, _UPN_RE, _NXC_USER_ROW_RE):
@@ -136,6 +162,11 @@ def _is_ldap_command(command: str) -> bool:
 def _is_smb_command(command: str) -> bool:
     cmd = f" {command.lower()} "
     return " smb " in cmd or "smbclient" in cmd or "rpcclient" in cmd or "enum4linux" in cmd or "smbmap" in cmd
+
+
+def _is_cracking_command(command: str) -> bool:
+    lowered = f" {command.lower()} "
+    return " hashcat " in lowered or re.search(r"(^|[\s/])john(\s|$)", lowered) is not None
 
 
 def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
@@ -194,6 +225,9 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "getnpusers" in lowered_command.lower() or "asreproast" in lowered_command:
         _parse_asrep_hashes(text, ws, source, facts)
+
+    if _is_cracking_command(command):
+        _parse_cracked_credentials(text, ws, command, source, facts)
 
     return facts
 
@@ -457,6 +491,100 @@ def _parse_gpp_artifacts(text: str, ws: Workspace, source: str, facts: list[Fact
                 ProofState.SUPPORTED,
                 source,
             ),
+        )
+
+
+def _parse_hash_user(hash_text: str) -> tuple[str, str, str]:
+    asrep = _ASREP_USER_RE.search(hash_text)
+    if asrep:
+        user = _clean_username(asrep.group(1))
+        domain = (asrep.group(2) or "").lower()
+        return user, domain, "asrep"
+
+    tgs = _TGS_USER_RE.search(hash_text)
+    if tgs:
+        user = _clean_username(tgs.group(1))
+        return user, "", "tgs"
+
+    return "", "", ""
+
+
+def _add_plaintext_credential(
+    facts: list[Fact],
+    ws: Workspace,
+    source: str,
+    *,
+    user: str,
+    password: str,
+    domain: str = "",
+    method: str,
+    hash_type: str = "",
+) -> None:
+    user = _clean_username(user)
+    password = password.strip()
+    if not _valid_username(user, allow_machine=False) or not _valid_password(password):
+        return
+
+    domain_name = domain or _domain_from_facts(ws.facts)
+    value = {"user": user, "password": password, "method": method}
+    if domain_name:
+        value["domain"] = domain_name
+    if hash_type:
+        value["hash_type"] = hash_type
+
+    scope = _scope_for_domain(ws, domain_name)
+    _add(facts, Fact("credential.plaintext", scope, value, ProofState.SUPPORTED, source))
+    _add(facts, Fact("credential.available", scope, value, ProofState.SUPPORTED, source))
+
+
+def _parse_cracked_credentials(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Parse crack output into plaintext credentials, not access or privilege.
+
+    Supported inputs are intentionally narrow:
+    - hashcat --show style krb5asrep/krb5tgs lines ending in :password
+    - john --show style user:password lines
+    """
+    lowered_command = command.lower()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.lower().startswith(_JOHN_NOISE_PREFIXES):
+            continue
+
+        if "$krb5asrep$" in line.lower() or "$krb5tgs$" in line.lower():
+            hash_text, sep, password = line.rpartition(":")
+            if not sep:
+                continue
+            user, domain, hash_type = _parse_hash_user(hash_text)
+            _add_plaintext_credential(
+                facts,
+                ws,
+                source,
+                user=user,
+                password=password,
+                domain=domain,
+                method="hashcat" if "hashcat" in lowered_command else "john",
+                hash_type=hash_type,
+            )
+            continue
+
+        if "john" not in lowered_command:
+            continue
+        if "--show" not in lowered_command and "password hash" not in text.lower():
+            continue
+
+        match = _JOHN_SHOW_RE.match(line)
+        if not match:
+            continue
+        _add_plaintext_credential(
+            facts,
+            ws,
+            source,
+            user=match.group("user"),
+            password=match.group("password"),
+            method="john",
         )
 
 
