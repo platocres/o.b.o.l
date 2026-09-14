@@ -21,8 +21,16 @@ _NXC_USER_ROW_RE = re.compile(
     r"^(?:LDAP|SMB)\s+\S+\s+\d+\s+\S+\s+(?!\[[^\]]+\])(?P<user>[A-Za-z0-9._$-]{2,})\b",
     re.IGNORECASE | re.MULTILINE,
 )
+_NXC_RID_USER_RE = re.compile(
+    r"^(?:SMB|RPC)\s+\S+\s+\d+\s+\S+\s+(?:0x[0-9a-f]+|\d+):\s+"
+    r"(?:[^\\\s]+\\)?(?P<user>[A-Za-z0-9._$-]{2,})\s+\(SidTypeUser\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_RPC_USER_RE = re.compile(r"\buser:\[(?P<user>[^\]]+)\]\s+rid:\[[^\]]+\]", re.IGNORECASE)
 _BASE_DN_RE = re.compile(r"\bnamingContexts:\s*([A-Za-z0-9_=,.-]+)", re.IGNORECASE)
 _ASREP_RE = re.compile(r"(\$krb5asrep\$[^\s]+)", re.IGNORECASE)
+_CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
+_GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
 _NMAP_OPEN_RE = re.compile(
     r"^(?P<port>\d+)/(?:tcp|udp)\s+open(?:\|\w+)?\s+(?P<service>\S+)?(?:\s+(?P<version>.*?))?\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -44,6 +52,8 @@ _NOISE_USERS = {
     "useraccountcontrol",
     "username",
 }
+_SHARE_HEADER_WORDS = {"share", "sharename", "-----", "---------", "name"}
+_SHARE_PERMISSION_WORDS = {"READ", "WRITE", "READ,WRITE", "WRITE,READ", "NO ACCESS", "NONE"}
 
 
 def _scope_for_domain(ws: Workspace, domain: str = "") -> str:
@@ -58,6 +68,16 @@ def _domain_from_facts(facts: FactSet) -> str:
     return ""
 
 
+def _domain_from_text(text: str) -> str:
+    match = _DOMAIN_RE.search(text)
+    if not match:
+        return ""
+    domain = match.group(1).strip()
+    if domain in {"None", "-"}:
+        return ""
+    return domain
+
+
 def _base_dn_from_domain(domain: str) -> str:
     return ",".join(f"DC={part}" for part in domain.split(".") if part)
 
@@ -67,15 +87,62 @@ def _add(out: list[Fact], fact: Fact) -> None:
         out.append(fact)
 
 
+def _clean_username(user: str) -> str:
+    user = user.strip().strip(",;:")
+    if "\\" in user:
+        user = user.rsplit("\\", 1)[1]
+    if "@" in user:
+        user = user.split("@", 1)[0]
+    return user.strip()
+
+
+def _valid_username(user: str, *, allow_machine: bool = True) -> bool:
+    if not user:
+        return False
+    if user.lower() in _NOISE_USERS:
+        return False
+    if not allow_machine and user.endswith("$"):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9._$-]{2,}", user))
+
+
 def _usernames(text: str) -> list[str]:
     users: set[str] = set()
     for regex in (_SAM_RE, _UPN_RE, _NXC_USER_ROW_RE):
         for match in regex.finditer(text):
-            user = match.group(1).strip()
-            if not user or user.lower() in _NOISE_USERS:
+            user = _clean_username(match.group(1))
+            if not _valid_username(user):
                 continue
             users.add(user)
     return sorted(users, key=str.lower)
+
+
+def _rid_usernames(text: str) -> list[str]:
+    users: set[str] = set()
+    for regex in (_NXC_RID_USER_RE, _RPC_USER_RE):
+        for match in regex.finditer(text):
+            user = _clean_username(match.group("user"))
+            if not _valid_username(user, allow_machine=False):
+                continue
+            users.add(user)
+    return sorted(users, key=str.lower)
+
+
+def _is_ldap_command(command: str) -> bool:
+    cmd = f" {command.lower()} "
+    return " ldap " in cmd or "ldapsearch" in cmd
+
+
+def _is_smb_command(command: str) -> bool:
+    cmd = f" {command.lower()} "
+    return " smb " in cmd or "smbclient" in cmd or "rpcclient" in cmd or "enum4linux" in cmd or "smbmap" in cmd
+
+
+def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
+    lowered = command.lower()
+    if action.id == "ad-anon-ldap-enum":
+        return True
+    return _is_ldap_command(command) and (" -x " in f" {lowered} " or "-u ''" in lowered or '-u ""' in lowered)
 
 
 def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str, stderr: str, source: str) -> list[Fact]:
@@ -83,21 +150,47 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
     text = "\n".join(part for part in (stdout, stderr) if part)
     facts: list[Fact] = []
     lowered_command = command.lower()
+    domain_hint = _domain_from_text(text)
 
     if "nmap " in lowered_command or lowered_command.startswith("nmap "):
         _parse_nmap(text, ws, source, facts, action.id)
 
     if "nxc " in lowered_command or lowered_command.startswith("nxc "):
         _parse_nxc_common(text, ws, source, facts)
-        if action.id == "ad-anon-ldap-enum" or "--users" in lowered_command:
-            _parse_user_list(text, ws, source, facts)
+        if _is_ldap_command(command) and (action.id == "ad-anon-ldap-enum" or "--users" in lowered_command):
+            _parse_user_list(
+                text,
+                ws,
+                source,
+                facts,
+                prove_anonymous_ldap=_looks_anonymous_ldap_command(command, action),
+                domain_hint=domain_hint,
+            )
+        if _is_smb_command(command):
+            _parse_nxc_smb_session(text, ws, command, source, facts)
+            _parse_smb_shares(text, ws, source, facts)
+            if action.id == "ad-user-enum" or "--rid-brute" in lowered_command:
+                _parse_rid_user_list(text, ws, source, facts, domain_hint=domain_hint)
         if "--asreproast" in lowered_command:
             _parse_asrep_hashes(text, ws, source, facts)
 
     if "ldapsearch" in lowered_command:
         _parse_ldapsearch(text, ws, source, facts)
         if "(objectclass=user)" in lowered_command.lower():
-            _parse_user_list(text, ws, source, facts)
+            _parse_user_list(
+                text,
+                ws,
+                source,
+                facts,
+                prove_anonymous_ldap=_looks_anonymous_ldap_command(command, action),
+                domain_hint=domain_hint,
+            )
+
+    if "smbclient" in lowered_command or "smbmap" in lowered_command or "rpcclient" in lowered_command or "enum4linux" in lowered_command:
+        _parse_smb_shares(text, ws, source, facts)
+        _parse_gpp_artifacts(text, ws, source, facts)
+        if action.id == "ad-user-enum" or "enumdomusers" in lowered_command:
+            _parse_rid_user_list(text, ws, source, facts, domain_hint=domain_hint)
 
     if "getnpusers" in lowered_command.lower() or "asreproast" in lowered_command:
         _parse_asrep_hashes(text, ws, source, facts)
@@ -219,17 +312,57 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         if proto in {"ldap", "smb"}:
             _add(facts, Fact(f"{proto}.reachable", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
 
-    if re.search(r"\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE):
+    if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE | re.MULTILINE):
         _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
 
 
-def _parse_user_list(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+def _parse_nxc_smb_session(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    anonymous_command = "-u ''" in command or '-u ""' in command
+    guest_command = re.search(r"\s-u\s+guest\b", command, re.IGNORECASE) is not None
+    for line in text.splitlines():
+        if not re.match(r"^\s*SMB\s+", line, re.IGNORECASE) or "[+]" not in line:
+            continue
+        auth = line.split("[+]", 1)[1].strip()
+        auth_l = auth.lower()
+        if guest_command or "guest" in auth_l:
+            _add(facts, Fact("smb.guest_session", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
+        if anonymous_command or re.search(r"(?:^|\\):(?:\s|$)", auth) or auth in {":", "\\:", ""}:
+            _add(facts, Fact("smb.null_session", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
+
+
+def _parse_user_list(
+    text: str,
+    ws: Workspace,
+    source: str,
+    facts: list[Fact],
+    *,
+    prove_anonymous_ldap: bool = False,
+    domain_hint: str = "",
+) -> None:
     users = _usernames(text)
     if not users:
         return
-    domain = _domain_from_facts(ws.facts)
+    domain = domain_hint or _domain_from_facts(ws.facts)
     _add(facts, Fact("ad.user_list", _scope_for_domain(ws, domain), {"users": users, "count": len(users)}, ProofState.SUPPORTED, source))
-    _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
+    if prove_anonymous_ldap:
+        _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
+
+
+def _parse_rid_user_list(text: str, ws: Workspace, source: str, facts: list[Fact], *, domain_hint: str = "") -> None:
+    users = _rid_usernames(text)
+    if not users:
+        return
+    domain = domain_hint or _domain_from_facts(ws.facts)
+    _add(
+        facts,
+        Fact(
+            "ad.user_list",
+            _scope_for_domain(ws, domain),
+            {"users": users, "count": len(users), "method": "smb-rid"},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )
 
 
 def _parse_ldapsearch(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
@@ -243,6 +376,88 @@ def _parse_ldapsearch(text: str, ws: Workspace, source: str, facts: list[Fact]) 
             _add(facts, Fact("ad.domain_known", f"domain:{domain}", {"name": domain}, ProofState.SUPPORTED, source))
         _add(facts, Fact("ad.base_dn", scope, value, ProofState.SUPPORTED, source))
         _add(facts, Fact("ldap.reachable", f"host:{ws.target}", {"tool": "ldapsearch"}, ProofState.SUPPORTED, source))
+
+
+def _parse_smb_shares(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    shares: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_share(name: str, permission: str = "", share_type: str = "", readable: bool | None = None) -> None:
+        name = name.strip()
+        if not name or name.lower() in _SHARE_HEADER_WORDS or name.startswith("["):
+            return
+        if not re.fullmatch(r"[A-Za-z0-9_$.-]{2,}", name):
+            return
+        key = (name.upper(), permission.upper(), share_type.upper())
+        if key in seen:
+            return
+        seen.add(key)
+        row = {"name": name}
+        if permission:
+            row["permission"] = permission
+        if share_type:
+            row["type"] = share_type
+        if readable is not None:
+            row["readable"] = readable
+        shares.append(row)
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.match(r"^SMB\s+", line, re.IGNORECASE):
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            share = parts[4]
+            perm = parts[5].upper()
+            if perm == "NO" and len(parts) > 6 and parts[6].upper() == "ACCESS":
+                perm = "NO ACCESS"
+            if perm not in _SHARE_PERMISSION_WORDS:
+                continue
+            add_share(share, permission=perm, readable=("READ" in perm or "WRITE" in perm))
+            continue
+
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] in {"Disk", "IPC", "Printer"}:
+            add_share(parts[0], share_type=parts[1])
+
+    if shares:
+        _add(facts, Fact("smb.shares", f"host:{ws.target}", {"shares": shares, "count": len(shares)}, ProofState.SUPPORTED, source))
+        readable_domain_shares = sorted(
+            share["name"]
+            for share in shares
+            if share.get("name", "").upper() in {"SYSVOL", "NETLOGON"} and share.get("readable") is True
+        )
+        if readable_domain_shares:
+            _add(
+                facts,
+                Fact(
+                    "config.review",
+                    f"host:{ws.target}",
+                    {"kind": "readable_domain_shares", "shares": readable_domain_shares},
+                    ProofState.SUPPORTED,
+                    source,
+                ),
+            )
+
+
+def _parse_gpp_artifacts(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    files = sorted(set(_GPP_FILE_RE.findall(text)), key=str.lower)
+    if files:
+        _add(facts, Fact("config.review", f"host:{ws.target}", {"kind": "gpp_xml", "files": files}, ProofState.SUPPORTED, source))
+    cpasswords = sorted(set(_CPASSWORD_RE.findall(text)))
+    if cpasswords:
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                f"host:{ws.target}",
+                {"kind": "gpp_cpassword", "count": len(cpasswords), "values": cpasswords},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
 
 
 def _parse_asrep_hashes(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
