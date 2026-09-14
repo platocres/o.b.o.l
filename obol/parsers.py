@@ -33,7 +33,10 @@ _NXC_RID_USER_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _RPC_USER_RE = re.compile(r"\buser:\[(?P<user>[^\]]+)\]\s+rid:\[[^\]]+\]", re.IGNORECASE)
-_BASE_DN_RE = re.compile(r"\bnamingContexts:\s*([A-Za-z0-9_=,.-]+)", re.IGNORECASE)
+_BASE_DN_RE = re.compile(
+    r"\b(?:namingContexts|defaultNamingContext|rootDomainNamingContext):\s*([A-Za-z0-9_=,.-]+)",
+    re.IGNORECASE,
+)
 _ASREP_RE = re.compile(r"(\$krb5asrep\$[^\s]+)", re.IGNORECASE)
 _ASREP_USER_RE = re.compile(r"\$krb5asrep\$\d+\$([^:@$]+)(?:@([^:$]+))?:", re.IGNORECASE)
 _TGS_RE = re.compile(r"(\$krb5tgs\$[^\s]+)", re.IGNORECASE)
@@ -74,6 +77,27 @@ _NMAP_DISCOVERED_RE = re.compile(
     r"Discovered open port (?P<port>\d+)/(?P<proto>tcp|udp) on (?P<host>\S+)",
     re.IGNORECASE,
 )
+_NMAP_DOMAIN_NAME_RE = re.compile(
+    r"^\|_?\s*(?:Domain name|DNS_Domain_Name|NetBIOS_Domain_Name):\s*"
+    r"(?P<domain>[A-Za-z0-9][A-Za-z0-9_.-]*\.[A-Za-z0-9_.-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NMAP_FQDN_RE = re.compile(
+    r"^\|_?\s*FQDN:\s*(?P<fqdn>[A-Za-z0-9][A-Za-z0-9_.-]*\.[A-Za-z0-9_.-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NMAP_COMPUTER_NAME_RE = re.compile(
+    r"^\|_?\s*(?:Computer name|NetBIOS computer name):\s*(?P<name>[A-Za-z0-9_.-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NMAP_SMB_SIGNING_RE = re.compile(
+    r"Message signing enabled(?: and (?P<required>required)| but not required)?",
+    re.IGNORECASE,
+)
+_NMAP_HTTP_TITLE_RE = re.compile(r"^\|_?http-title:\s*(?P<title>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_SERVER_RE = re.compile(r"^\|_?http-server-header:\s*(?P<header>.+)$", re.IGNORECASE | re.MULTILINE)
+_NXC_SIGNING_RE = re.compile(r"\(signing:(?P<enabled>True|False)\)", re.IGNORECASE)
+_NXC_SMBV1_RE = re.compile(r"\(SMBv1:(?P<enabled>True|False)\)", re.IGNORECASE)
 
 # Web content/vhost discovery + nikto output shapes (tool-stable signals only).
 _WEB_GOBUSTER_RE = re.compile(r"^(?P<path>/\S*)\s+\(Status:\s*(?P<code>\d{3})\)", re.MULTILINE)
@@ -461,9 +485,55 @@ def _parse_nmap(text: str, ws: Workspace, source: str, facts: list[Fact], action
     if ports_for_summary:
         _add(facts, Fact("ports.open", f"host:{ws.target}", {"ports": sorted(set(ports_for_summary))}, ProofState.SUPPORTED, source))
 
+    script_context = _parse_nmap_script_facts(text, ws, source, facts)
     tcp_ports = {value["port"] for value in open_ports.values() if value["protocol"] == "tcp"}
     if {88, 389, 445}.issubset(tcp_ports) or _looks_like_ad_ldap(text):
-        _add(facts, Fact("ad.dc_candidate", f"host:{ws.target}", {"ports": sorted(tcp_ports & {88, 389, 445})}, ProofState.SUPPORTED, source))
+        value = {"ports": sorted(tcp_ports & {88, 389, 445})}
+        value.update(script_context)
+        _add(facts, Fact("ad.dc_candidate", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+
+def _parse_nmap_script_facts(text: str, ws: Workspace, source: str, facts: list[Fact]) -> dict:
+    context: dict = {}
+    domains = {match.group("domain").strip().lower() for match in _NMAP_DOMAIN_NAME_RE.finditer(text)}
+    for match in _NMAP_FQDN_RE.finditer(text):
+        fqdn = match.group("fqdn").strip().lower()
+        parts = [part for part in fqdn.split(".") if part]
+        if len(parts) > 2:
+            domains.add(".".join(parts[1:]))
+    domain = sorted(domains, key=str.lower)[0] if domains else ""
+    if domain:
+        context["domain"] = domain
+        _add(facts, Fact("ad.domain_known", f"domain:{domain}", {"name": domain}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("ad.base_dn", f"domain:{domain}", {"base_dn": _base_dn_from_domain(domain)}, ProofState.SUPPORTED, source))
+
+    names = {match.group("name").strip() for match in _NMAP_COMPUTER_NAME_RE.finditer(text)}
+    if names:
+        context["name"] = sorted(names, key=str.lower)[0]
+
+    signing = _NMAP_SMB_SIGNING_RE.search(text)
+    if signing:
+        value = {"enabled": True, "tool": "nmap"}
+        if signing.group("required"):
+            value["required"] = True
+        elif "but not required" in signing.group(0).lower():
+            value["required"] = False
+        _add(facts, Fact("smb.signing", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+    titles = []
+    for match in _NMAP_HTTP_TITLE_RE.finditer(text):
+        title = match.group("title").strip()
+        if not title or title.lower().startswith(("did not follow redirect", "site doesn't have a title")):
+            continue
+        titles.append(title)
+    if titles:
+        _add(facts, Fact("web.title", f"host:{ws.target}", {"titles": sorted(set(titles))[:10]}, ProofState.SUPPORTED, source))
+
+    headers = sorted({match.group("header").strip() for match in _NMAP_HTTP_SERVER_RE.finditer(text) if match.group("header").strip()})
+    if headers:
+        _add(facts, Fact("web.server", f"host:{ws.target}", {"headers": headers[:10]}, ProofState.SUPPORTED, source))
+
+    return context
 
 
 def _normalize_service(service: str) -> str:
@@ -521,6 +591,31 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         if domain:
             value["domain"] = domain
         _add(facts, Fact("ad.dc_candidate", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+    signing = _NXC_SIGNING_RE.search(text)
+    if signing:
+        _add(
+            facts,
+            Fact(
+                "smb.signing",
+                f"host:{ws.target}",
+                {"enabled": signing.group("enabled").lower() == "true", "tool": "nxc"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    smbv1 = _NXC_SMBV1_RE.search(text)
+    if smbv1:
+        _add(
+            facts,
+            Fact(
+                "smb.smbv1",
+                f"host:{ws.target}",
+                {"enabled": smbv1.group("enabled").lower() == "true", "tool": "nxc"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
 
     for match in _NXC_PROTO_REACHABLE_RE.finditer(text):
         proto = match.group("proto").lower()
