@@ -6,6 +6,15 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
 
 - **Vertical slice** (PR #1's base): fact model, planner, terminal board, read-only
   web view + mermaid path graph, `explain`, tests.
+- **Multi-target engagement platform:** an app-managed engagement library
+  (`obol/library.py`, `$OBOL_HOME`) of engagements, each holding many targets
+  (`workspace.targets`, per-target fact scoping via `facts_for_target`). The web is
+  a tabbed per-target console (Overview with an attack-chain bar + per-target path,
+  a service-aware point-and-click Tools palette, Playbooks, a static Checklist,
+  Findings, Evidence/screenshots, Commands), plus an engagement-wide attack path
+  that stitches targets to the shared domain and a **BloodHound** overlay
+  (`obol/bloodhound.py`). Per-target findings and evidence roll up into the report.
+  `obol engagement` / `obol target` manage it from the terminal.
 - **Robust web surface (item 5, largely done):** localhost FastAPI app
   (`obol/webapp/`, optional `web` extra) that mirrors AND drives the one `.obol`
   store — run-from-site for actions and playbook steps through the shared

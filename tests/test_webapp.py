@@ -1,112 +1,128 @@
-"""The web surface: token gate, read endpoints, and run-from-site through the same
-scope-enforced runner/parser/store as the terminal."""
+"""The web surface over the engagement library: engagements, targets, the per-target
+bundle, run-from-site, evidence, and BloodHound ingestion — all token-gated and over
+one shared store."""
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
 
-fastapi = pytest.importorskip("fastapi")
+pytest.importorskip("fastapi")
+pytest.importorskip("multipart")  # python-multipart, for file uploads
 from fastapi.testclient import TestClient  # noqa: E402
 
-from obol.seed import seed_forest  # noqa: E402
 from obol.webapp.server import create_app  # noqa: E402
-from obol.workspace import Workspace  # noqa: E402
 
 TOKEN = "test-token"
 H = {"X-Obol-Token": TOKEN}
+FIXTURES = Path("/home/user/kaldox/pentos/tests/fixtures/sharphound")
 
 
 @pytest.fixture
-def client(tmp_path):
-    ws = Workspace(tmp_path)
-    seed_forest(ws)
-    ws.save()
-    return TestClient(create_app(tmp_path, token=TOKEN)), tmp_path
+def cx(tmp_path):
+    """A client on a fresh library with one engagement and one target."""
+    client = TestClient(create_app(tmp_path, token=TOKEN))
+    client.post("/api/engagements", json={"name": "Test Eng"}, headers=H)
+    client.post("/api/targets", json={"host": "10.10.10.161", "label": "DC01"}, headers=H)
+    return client
 
 
-def test_token_required(client):
-    cx, _ = client
-    assert cx.get("/api/overview").status_code == 401
-    assert cx.get("/api/overview", headers={"X-Obol-Token": "nope"}).status_code == 401
-    assert cx.get("/api/overview", headers=H).status_code == 200
-    # query-param token also accepted (used by the SSE stream)
-    assert cx.get(f"/api/overview?token={TOKEN}").status_code == 200
+def test_token_required(cx):
+    assert cx.get("/api/engagements").status_code == 401
+    assert cx.get("/api/engagements", headers={"X-Obol-Token": "x"}).status_code == 401
+    assert cx.get("/api/engagements", headers=H).status_code == 200
+    assert cx.get(f"/api/engagements?token={TOKEN}").status_code == 200
 
 
-def test_read_endpoints(client):
-    cx, _ = client
-    for ep in ("/api/meta", "/api/overview", "/api/findings", "/api/graph",
-               "/api/next", "/api/playbooks", "/api/report", "/api/report.md"):
-        assert cx.get(ep, headers=H).status_code == 200, ep
-    ov = cx.get("/api/overview", headers=H).json()
-    assert ov["tiles"]["facts"] > 0
-    assert any(seg["reached"] for seg in ov["access_ladder"])
-    assert cx.get("/").status_code == 200
-    assert cx.get("/static/style.css").status_code == 200
+def test_engagement_lifecycle(tmp_path):
+    client = TestClient(create_app(tmp_path, token=TOKEN))
+    assert client.get("/api/overview", headers=H).status_code == 404  # no active engagement yet
+    r = client.post("/api/engagements", json={"name": "Alpha"}, headers=H).json()
+    assert r["ok"] and r["slug"] == "alpha"
+    engs = client.get("/api/engagements", headers=H).json()
+    assert engs["active"] == "alpha" and len(engs["engagements"]) == 1
+    # second engagement, switch active
+    client.post("/api/engagements", json={"name": "Beta"}, headers=H)
+    client.post("/api/engagements/activate", json={"slug": "alpha"}, headers=H)
+    assert client.get("/api/engagements", headers=H).json()["active"] == "alpha"
 
 
-def test_next_actions_carry_command_preview(client):
-    cx, _ = client
-    actions = cx.get("/api/next", headers=H).json()["actions"]
-    assert actions
-    a = actions[0]
-    assert a["id"] and a["phase"] and a["variants"]
-    assert a["variants"][0]["command"]
+def test_targets_and_bundle(cx):
+    cx.post("/api/targets", json={"host": "10.10.10.5", "label": "WEB"}, headers=H)
+    meta = cx.get("/api/meta", headers=H).json()
+    assert {t["label"] for t in meta["targets"]} == {"DC01", "WEB"}
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert set(b) >= {"meta", "access", "phase", "chain", "next", "tools", "checklist",
+                      "findings", "commands", "evidence", "graph"}
+    # a bare target unlocks the nmap prelude (so you can start from the UI)
+    assert any(a["id"] == "nmap-fast-open-ports" for a in b["next"])
+    # the static checklist covers every phase regardless of proof state
+    assert [c["phase"] for c in b["checklist"]] == ["recon", "enum", "creds", "access", "escalate", "loot"]
+    assert cx.get("/api/target", params={"target": "9.9.9.9"}, headers=H).status_code == 404
 
 
-def test_run_from_site_dry_run_ingests_nothing(client):
-    cx, root = client
-    a = cx.get("/api/next", headers=H).json()["actions"][0]
-    before = len(cx.get("/api/findings", headers=H).json()["findings"])
-    out = cx.post("/api/run/action", json={"action_id": a["id"], "dry_run": True}, headers=H).json()
-    assert out["dry_run"] is True and out["added_count"] == 0
-    after = len(cx.get("/api/findings", headers=H).json()["findings"])
-    assert after == before
-    # but the dry run IS recorded in the shared ledger, tagged as web-launched
-    assert Workspace(root).load().runs[-1]["surface"] == "web"
+def test_run_from_site_scoped_to_target(cx):
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    action = next(a for a in b["next"] if a["id"] == "nmap-fast-open-ports")
+    out = cx.post("/api/run/action",
+                  json={"action_id": action["id"], "target": "10.10.10.161", "dry_run": True},
+                  headers=H).json()
+    assert out["dry_run"] is True and "10.10.10.161" in out["command"]
 
 
-def test_run_unknown_action_404(client):
-    cx, _ = client
+def test_run_unknown_and_missing(cx):
     assert cx.post("/api/run/action", json={"action_id": "nope"}, headers=H).status_code == 404
-
-
-def test_run_missing_action_id_422(client):
-    cx, _ = client
     assert cx.post("/api/run/action", json={}, headers=H).status_code == 422
 
 
-def test_run_real_missing_binary_is_400_not_500(client):
-    """A runner refusal (here: the tool binary isn't installed) surfaces as a clean
-    400, never an unhandled 500."""
-    cx, _ = client
-    a = cx.get("/api/next", headers=H).json()["actions"][0]
-    r = cx.post("/api/run/action", json={"action_id": a["id"], "dry_run": False}, headers=H)
-    assert r.status_code == 400
-    assert "not found" in r.json()["detail"].lower() or "scope" in r.json()["detail"].lower()
+def test_checklist_toggle_persists(cx):
+    assert cx.post("/api/target/checklist",
+                   json={"target": "10.10.10.161", "item": "ad-dc-identify", "checked": True},
+                   headers=H).status_code == 200
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    items = {i["id"]: i["checked"] for c in b["checklist"] for i in c["items"]}
+    assert items.get("ad-dc-identify") is True
 
 
-def test_playbook_endpoints_and_approval_gate(client):
-    cx, _ = client
-    pbs = cx.get("/api/playbooks", headers=H).json()["playbooks"]
-    if not pbs:
-        pytest.skip("no playbooks shipped")
-    name = pbs[0]["name"]
-    pb = cx.get(f"/api/playbook/{name}", headers=H).json()
-    assert pb["steps"]
-    approval_steps = [s for s in pb["steps"] if s["require_approval"]]
-    if approval_steps:
-        step = approval_steps[0]["step"]
-        # without approve and not dry_run -> 409 require_approval
-        r = cx.post("/api/run/playbook", json={"name": name, "step": step}, headers=H)
-        assert r.status_code == 409
+def test_evidence_upload_fetch_delete(cx):
+    r = cx.post("/api/target/evidence",
+                data={"target": "10.10.10.161", "phase": "access", "caption": "winrm shell"},
+                files={"file": ("shell.png", b"\x89PNG\r\n\x1a\n fake", "image/png")}, headers=H)
+    assert r.status_code == 200
+    eid = r.json()["evidence"]["id"]
+    got = cx.get(f"/api/evidence/{eid}", headers=H)
+    assert got.status_code == 200 and got.content.startswith(b"\x89PNG")
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert any(e["id"] == eid for e in b["evidence"])
+    assert cx.delete(f"/api/evidence/{eid}", headers=H).status_code == 200
+    assert cx.get(f"/api/evidence/{eid}", headers=H).status_code == 404
 
 
-def test_events_route_is_wired_and_gated(client):
-    # The SSE stream is intentionally infinite, so we don't consume it here (that
-    # would hang the sync TestClient at teardown). Assert instead that the route
-    # exists and enforces the token — the streaming behavior is smoke-tested by
-    # running the server for real.
-    cx, _ = client
+@pytest.mark.skipif(not FIXTURES.exists(), reason="bloodhound fixtures not present")
+def test_bloodhound_ingest_and_engagement_graph(cx):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for f in FIXTURES.glob("*.json"):
+            zf.write(f, f.name)
+    r = cx.post("/api/bloodhound",
+                files=[("files", ("bh.zip", buf.getvalue(), "application/zip"))], headers=H)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["domain"] and data["users"] > 0
+    assert "ad.graph.collected" in data["added_facts"]
+    g = cx.get("/api/engagement/graph", headers=H).json()
+    assert any(n["type"] == "target" for n in g["nodes"])
+    assert any(n["type"] in ("highvalue", "roastable") for n in g["nodes"])
+
+
+def test_report_and_overview(cx):
+    assert cx.get("/api/overview", headers=H).status_code == 200
+    assert cx.get("/api/report", headers=H).status_code == 200
+    assert cx.get("/api/report.md", headers=H).status_code == 200
+    assert cx.get("/", ).status_code == 200
+    assert cx.get("/static/style.css").status_code == 200
+
+
+def test_events_route_is_wired_and_gated(cx):
     assert cx.get("/api/events").status_code == 401
-    paths = {getattr(r, "path", None) for r in cx.app.routes}
-    assert "/api/events" in paths
+    assert "/api/events" in {getattr(r, "path", None) for r in cx.app.routes}

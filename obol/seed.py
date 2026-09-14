@@ -14,8 +14,10 @@ FOREST_TARGET = "10.10.10.161"
 
 
 def seed_forest(ws: Workspace) -> Workspace:
-    ws.target = FOREST_TARGET
-    ws.add_scope(FOREST_TARGET)
+    if not ws.name or ws.name == ws.root.name:
+        ws.name = "HTB Forest (demo)"
+    ws.add_target(FOREST_TARGET, "FOREST-DC")
+    ws.set_active_target(FOREST_TARGET)
     src = "nmap -p- -sC -sV 10.10.10.161  +  DC identify (seeded)"
     for fact in [
         Fact("target.configured", f"host:{FOREST_TARGET}", {"target": FOREST_TARGET}, source="obol init --demo"),

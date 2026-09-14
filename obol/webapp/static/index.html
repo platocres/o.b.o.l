@@ -14,10 +14,9 @@
       <span class="brand-text">O.B.O.L</span>
     </div>
     <nav class="nav" id="nav">
-      <button class="nav-item active" data-view="overview"><span class="ni-ic">◉</span><span>Overview</span></button>
-      <button class="nav-item" data-view="flow"><span class="ni-ic">⌖</span><span>Flow &amp; next</span></button>
-      <button class="nav-item" data-view="findings"><span class="ni-ic">⚑</span><span>Findings</span></button>
-      <button class="nav-item" data-view="playbooks"><span class="ni-ic">≣</span><span>Playbooks</span></button>
+      <button class="nav-item active" data-view="engagement"><span class="ni-ic">◉</span><span>Overview</span></button>
+      <button class="nav-item" data-view="targets"><span class="ni-ic">⊞</span><span>Targets</span></button>
+      <button class="nav-item" data-view="engpath"><span class="ni-ic">⌖</span><span>Attack path</span></button>
       <button class="nav-item" data-view="report"><span class="ni-ic">▤</span><span>Report</span></button>
     </nav>
     <div class="rail-foot">
@@ -27,8 +26,9 @@
 
   <main class="stage">
     <header class="topbar">
-      <h1 id="ws-name">obol</h1>
-      <span class="target" id="ws-target">—</span>
+      <select id="eng-select" class="eng-select" title="Active engagement"></select>
+      <button id="eng-new" class="btn ghost sm" title="New engagement">＋</button>
+      <span class="crumb" id="crumb"></span>
       <span class="spacer"></span>
       <span class="flash" id="flash">live update ✓</span>
     </header>

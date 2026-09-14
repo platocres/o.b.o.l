@@ -23,42 +23,57 @@ Shell subcommands, each independently re-runnable (no hidden state, no full-scre
 dashboard — the transcript is your evidence log):
 
 ```
-obol init --demo          # seed a workspace (HTB Forest, post-nmap)
-obol init --target IP     # or start a real scoped target workspace
-obol next                 # proven facts · ranked next actions · blocked paths
-obol explain 1            # first real target move is nmap open-port discovery
-obol run 1                # run it, ingest ports/services, record new facts
-obol run 1 --cmd 2        # choose a different command variant from the card
-obol next                 # recompute from the new facts
-obol playbooks            # named, ordered action sequences (e.g. AD initial recon)
-obol playbook ad-recon    # show the command plan; --step N runs one step
-obol report               # OSCP-style markdown report from the evidence ledger
-obol serve                # live web surface on localhost (mirrors AND drives the ledger)
+obol engagement new "HTB Lab"   # create an engagement in the app-managed library
+obol target add 10.10.10.161 --label DC01   # add a target (unlocks the nmap prelude)
+obol target add 10.10.10.175 --label SAUNA  # …as many as the engagement needs
+obol target use 10.10.10.161    # pick the active target
+obol next                       # proven facts · ranked next moves for the active target
+obol explain 1                  # first real target move is nmap open-port discovery
+obol run 1                      # run it, ingest ports/services, record new facts
+obol run 1 --cmd 2              # choose a different command variant from the card
+obol playbooks                  # named, ordered action sequences (e.g. AD initial recon)
+obol playbook ad-recon          # show the command plan; --step N runs one step
+obol report                     # OSCP-style markdown report from the evidence ledger
+obol serve                      # live web console on localhost (mirrors AND drives it)
+
+# still supported: a single-directory engagement, no library
+obol init --demo                # seed a workspace here (HTB Forest, post-nmap)
+obol init --target IP           # or start a real scoped target workspace here
 ```
 
 ## The web surface
 
 `obol serve` starts a localhost web console (needs the `web` extra —
-`pip install ".[web]"`) that is a real second surface over the *same* `.obol`
-workspace, not a separate app:
+`pip install ".[web]"`) over the app-managed **engagement library** — a real second
+surface that drives the *same* store as the terminal, not a separate app:
 
-- **Overview** — stat tiles, an engagement-progress ladder, findings charted by
-  category and severity, and a live activity feed.
-- **Flow & next** — the path drawn as a phase-column flow chart (recon → enumerate →
-  credentials → access → escalate → loot) plus the ranked next moves, each runnable
-  from the page.
-- **Run from the site** — launching an action or a playbook step goes through the
-  *same* scope-enforced runner, parser, and store as the terminal; the browser
-  triggers by action id, so the server fills the command from workspace facts and
-  secrets never travel to the browser. Noisy steps still require approval.
-- **Real-time** — every page updates itself the instant the ledger changes, whether
-  the change came from the web or from a terminal `obol run` (Server-Sent Events on
-  the state file).
-- **Report** — the OSCP report rendered as the primary report interface, with a
-  one-click Markdown download and a secrets-redaction toggle.
+- **Engagements** — create and switch between engagements; each holds many targets.
+- **Overview** — target status cards, evidence charted by category, a BloodHound
+  domain panel, the engagement attack path, and a live activity feed.
+- **Per-target tabs** — click a target for a tabbed view instead of one long page:
+  - **Overview** — an attack-chain bar showing where you are for that target, the
+    per-target path map, and ranked next moves grouped by phase.
+  - **Tools** — a service-aware, point-and-click palette: a card per applicable tool
+    (SMB cards when 445 is open, web cards when 80 is), each runnable in one click.
+  - **Playbooks** — run ordered sequences against the target (approval-gated steps).
+  - **Checklist** — a static services→commands reference by attack chain, tickable.
+  - **Findings / Evidence / Commands** — the target's evidence-backed findings, a
+    screenshot gallery (drop images tagged to a phase), and its command ledger.
+- **Engagement attack path** — every target stitched to the shared domain and to
+  each other by the evidence that connects them, with a BloodHound overlay.
+- **Run from the site** — launching a tool or playbook step goes through the *same*
+  scope-enforced runner/parser/store as the terminal; the browser triggers by action
+  id + target, so the server fills the command from that target's facts and secrets
+  never reach the browser. Noisy steps still require approval.
+- **Real-time** — every page updates the instant the store changes, whether from the
+  web or a terminal `obol run` (Server-Sent Events).
+- **Report** — the OSCP report as the primary report interface: per-target findings
+  and embedded screenshots roll up into one document, with a Markdown download and a
+  secrets-redaction toggle.
 
 It binds to `127.0.0.1` and gates every API call with a per-start token printed in
-the terminal. Keep it local — the web can launch tools.
+the terminal. Keep it local — the web can launch tools. The engagement library lives
+under `$OBOL_HOME` (default `~/.obol`).
 
 ## Design: one state, synced surfaces
 

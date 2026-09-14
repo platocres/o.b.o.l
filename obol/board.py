@@ -44,9 +44,13 @@ except Exception:                   # pragma: no cover
 # --------------------------------------------------------------------------- #
 # command templating — old-obol cards use {{placeholder}} tokens               #
 # --------------------------------------------------------------------------- #
-def command_context(ws: Workspace) -> dict:
-    f = ws.facts
-    ctx = {"target": ws.target or "<target>", **ws.inputs}
+def command_context(ws: Workspace, target: str = "") -> dict:
+    """Template values for command rendering. `target` overrides the active host
+    (and narrows ports/domain to that host's facts) so a surface can render a
+    filled command preview for a specific target without changing active state."""
+    tgt = target or ws.target
+    f = ws.facts_for_target(tgt) if target else ws.facts
+    ctx = {"target": tgt or "<target>", **ws.inputs}
     ports = _open_ports(f)
     if ports:
         ctx["nmap_ports"] = ",".join(str(p) for p in ports)
@@ -63,20 +67,20 @@ def command_context(ws: Workspace) -> dict:
     return ctx
 
 
-def fill_template(text: str, ws: Workspace) -> str:
+def fill_template(text: str, ws: Workspace, target: str = "") -> str:
     """Substitute known {{tokens}}; leave operator-supplied placeholders visible."""
     cmd = text
-    for key, val in command_context(ws).items():
+    for key, val in command_context(ws, target).items():
         cmd = cmd.replace("{{" + key + "}}", str(val))
     return cmd
 
 
-def fill_command(action: Action, ws: Workspace, command_index: int = 0) -> str:
+def fill_command(action: Action, ws: Workspace, command_index: int = 0, target: str = "") -> str:
     """Fill command variant N (zero-based); default to the action's primary command."""
     commands = action.commands or [{"run": action.command}]
     if not 0 <= command_index < len(commands):
         raise IndexError("command variant out of range")
-    return fill_template(commands[command_index].get("run", action.command), ws)
+    return fill_template(commands[command_index].get("run", action.command), ws, target)
 
 
 # --------------------------------------------------------------------------- #

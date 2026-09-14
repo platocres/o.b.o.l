@@ -15,8 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from .board import action_desc, fill_command
-from .facts import Fact, ProofState
-from .graph import build_graph_model, build_mermaid
+from .facts import Fact, FactSet, ProofState
+from .graph import (
+    build_engagement_graph,
+    build_graph_model,
+    build_mermaid,
+    target_access_level,
+    target_phase,
+)
 from .pack import friendly, load_packs, next_actions
 from .workspace import Workspace
 
@@ -296,6 +302,45 @@ def _render_next(ws: Workspace, *, include_secrets: bool, max_next: int) -> list
     return lines
 
 
+def _render_targets(ws: Workspace, *, include_secrets: bool) -> list[str]:
+    if not ws.targets:
+        return []
+    lines = ["## Targets", ""]
+    for t in ws.targets:
+        host = t["host"]
+        tf = ws.facts_for_target(host)
+        lines.append(f"### {t.get('label') or host} (`{host}`)")
+        lines.append("")
+        lines.append(f"- Access: {target_access_level(tf)} · phase: {target_phase(tf)}")
+        ports = _target_open_ports([f for f in tf.facts if f.scope == f'host:{host}'])
+        if ports:
+            lines.append(f"- Open ports: {', '.join(ports[:24])}")
+        if t.get("notes"):
+            lines.append(f"- Notes: {t['notes']}")
+        ev = ws.evidence_for(host)
+        if ev:
+            lines.append("- Evidence:")
+            for e in ev:
+                cap = e.get("caption") or e.get("filename")
+                tag = f" [{e['phase']}]" if e.get("phase") else ""
+                lines.append(f"  - `{e.get('stored')}`{tag} — {cap}")
+        lines.append("")
+    return lines
+
+
+def _render_evidence(ws: Workspace) -> list[str]:
+    if not ws.evidence:
+        return []
+    lines = ["## Evidence & screenshots", ""]
+    for e in ws.evidence:
+        cap = e.get("caption") or e.get("filename")
+        who = e.get("target") or "engagement"
+        tag = f" · {e['phase']}" if e.get("phase") else ""
+        lines.append(f"- **{cap}** ({who}{tag}) — `.obol/evidence/{e.get('stored')}`")
+    lines.append("")
+    return lines
+
+
 def _render_graph(ws: Workspace) -> list[str]:
     return [
         "## Evidence path diagram",
@@ -318,6 +363,26 @@ def report_status_rows(ws: Workspace) -> list[tuple[str, str]]:
     if default_path.exists():
         rows.insert(1, ("Last generated", str(default_path)))
     return rows
+
+
+def _target_open_ports(facts: list[Fact]) -> list[str]:
+    ports = []
+    for f in facts:
+        if f.kind.startswith("port:") and f.state is ProofState.SUPPORTED:
+            port = f.kind.split(":", 1)[1]
+            proto = f.value.get("protocol", "tcp")
+            svc = f.value.get("service", "")
+            ports.append(f"{port}/{proto}" + (f" {svc}" if svc else ""))
+    return sorted(set(ports), key=lambda i: (int(i.split("/", 1)[0]) if i.split("/", 1)[0].isdigit() else 99999))
+
+
+def _evidence_view(e: dict) -> dict:
+    return {
+        "id": e.get("id"), "target": e.get("target", ""), "phase": e.get("phase", ""),
+        "caption": e.get("caption", ""), "filename": e.get("filename", ""),
+        "added_at": e.get("added_at"),
+        "url": f"/api/evidence/{e.get('id')}",   # served by the web surface
+    }
 
 
 def _access_ladder(ws: Workspace) -> list[dict]:
@@ -430,6 +495,29 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             }
         next_out.append(entry)
 
+    # per-target rollup — each target's scoped findings + evidence feed the report
+    targets_out: list[dict] = []
+    for t in ws.targets:
+        host = t["host"]
+        tf = ws.facts_for_target(host)
+        tfacts = [f for f in tf.facts if f.scope == f"host:{host}"]
+        targets_out.append({
+            "host": host,
+            "label": t.get("label") or host,
+            "os": t.get("os", ""),
+            "status": t.get("status", ""),
+            "notes": t.get("notes", ""),
+            "access": target_access_level(tf),
+            "phase": target_phase(tf),
+            "open_ports": _target_open_ports(tfacts),
+            "findings": [{
+                "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
+                "value": _redact_value(f.value, include_secrets=include_secrets),
+                "evidence": _source_for(f, include_secrets=include_secrets),
+            } for f in sorted(tfacts, key=_fact_sort_key)],
+            "evidence": [_evidence_view(e) for e in ws.evidence_for(host)],
+        })
+
     return {
         "meta": {
             "name": ws.name,
@@ -439,6 +527,10 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "generated_at": _stamp(None if not ws.runs else max((r.get("at") or 0) for r in ws.runs)),
             "include_secrets": include_secrets,
         },
+        "targets": targets_out,
+        "evidence": [_evidence_view(e) for e in ws.evidence],
+        "engagement_graph": build_engagement_graph(ws),
+        "bloodhound": ws.bloodhound or {},
         "tiles": {
             "facts": len([f for f in facts.facts if f.state is ProofState.SUPPORTED]),
             "ports": len(_open_ports(ws)),
@@ -471,8 +563,10 @@ def build_report(ws: Workspace, *, include_secrets: bool = False, max_next: int 
             "",
         ])
     lines.extend(_render_summary(ws))
+    lines.extend(_render_targets(ws, include_secrets=include_secrets))
     lines.extend(_render_runs(ws, include_secrets=include_secrets))
     lines.extend(_render_facts(ws, include_secrets=include_secrets))
+    lines.extend(_render_evidence(ws))
     lines.extend(_render_next(ws, include_secrets=include_secrets, max_next=max_next))
     lines.extend(_render_graph(ws))
     return "\n".join(lines).rstrip() + "\n"

@@ -124,6 +124,108 @@ def build_graph_model(facts: FactSet, pack: list[Action] | None = None) -> dict:
     return {"phases": list(PHASES), "nodes": nodes, "edges": edges}
 
 
+def target_access_level(facts: FactSet) -> str:
+    """Coarse access level for a target, from its facts — drives the engagement map."""
+    if facts.has("access.system") or facts.has("access.admin"):
+        return "privileged"
+    if (facts.has("foothold.windows") or facts.has("foothold.linux")
+            or facts.has("access.shell") or facts.has("winrm.authenticated")
+            or facts.has("foothold.webshell")):
+        return "foothold"
+    if facts.has("credential.available") or facts.has("credential.candidate"):
+        return "credentialed"
+    if any(not f.kind.startswith(("target.", "host.")) for f in facts.facts):
+        return "enumerated"
+    return "discovered"
+
+
+def target_phase(facts: FactSet) -> str:
+    """The furthest engagement phase a target has reached (by proven fact kinds)."""
+    kinds = [f.kind for f in facts.facts if f.state.value == "supported"]
+    if not kinds:
+        return "recon"
+    return max((phase_of_kind(k) for k in kinds), key=lambda p: _PHASE_INDEX[p])
+
+
+def build_engagement_graph(ws) -> dict:
+    """The engagement-wide map: every target as a node, stitched to the shared domain
+    and to each other by the evidence that connects them (a validated credential that
+    spans hosts, a BloodHound domain overlay). Tiered top-to-bottom: domain / loot at
+    tier 0, targets at tier 1, principals & credentials below.
+
+    Returns ``{"nodes": [...], "edges": [...]}`` where nodes carry
+    ``{"id","type","label","tier","meta"}`` and edges ``{"from","to","kind"}``.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
+    domain = ws.facts.values("ad.domain_known")
+    domain_name = (domain[0].get("name") if domain else "") or ""
+    dom_id = None
+    if domain_name:
+        dom_id = _nid("dom_" + domain_name)
+        nodes.append({"id": dom_id, "type": "domain", "tier": 0,
+                      "label": domain_name, "meta": {}})
+
+    # A validated credential reused across hosts is the classic cross-target link.
+    cred_facts = ws.facts.values("credential.available") + ws.facts.values("credential.plaintext")
+    cred_id = None
+    if cred_facts:
+        who = cred_facts[0].get("user") or "credential"
+        cred_id = _nid("cred_" + str(who))
+        nodes.append({"id": cred_id, "type": "credential", "tier": 2,
+                      "label": f"cred: {who}", "meta": {}})
+        if dom_id:
+            edges.append({"from": dom_id, "to": cred_id, "kind": "domain"})
+
+    for t in ws.targets:
+        host = t["host"]
+        tf = ws.facts_for_target(host)
+        level = target_access_level(tf)
+        tid = _nid("tgt_" + host)
+        nodes.append({
+            "id": tid, "type": "target", "tier": 1,
+            "label": t.get("label") or host,
+            "meta": {"host": host, "access": level, "phase": target_phase(tf),
+                     "os": t.get("os", ""), "dc": tf.has("ad.dc_candidate")},
+        })
+        if dom_id and (tf.has("ad.dc_candidate") or tf.has("ad.domain_known")
+                       or tf.has("smb.reachable") or tf.has("ldap.reachable")):
+            edges.append({"from": dom_id, "to": tid, "kind": "domain-joined"})
+        # a validated credential that granted access on this host links them
+        if cred_id and level in ("foothold", "privileged"):
+            edges.append({"from": cred_id, "to": tid, "kind": "credential"})
+
+    # BloodHound overlay (engagement-wide): high-value groups + roastable principals.
+    bh = ws.bloodhound or {}
+    if bh.get("domain") or bh.get("computers") or bh.get("domain_admins"):
+        if not dom_id and bh.get("domain"):
+            dom_id = _nid("dom_" + bh["domain"])
+            nodes.append({"id": dom_id, "type": "domain", "tier": 0,
+                          "label": bh["domain"], "meta": {}})
+        for grp in ("domain_admins", "enterprise_admins"):
+            members = bh.get(grp) or []
+            if not members:
+                continue
+            gid = _nid("bh_" + grp)
+            nodes.append({"id": gid, "type": "highvalue", "tier": 2,
+                          "label": f"{grp.replace('_', ' ').title()} ({len(members)})",
+                          "meta": {"members": members[:40]}})
+            if dom_id:
+                edges.append({"from": dom_id, "to": gid, "kind": "controls"})
+        for kind, label in (("kerberoastable", "Kerberoastable"), ("asrep_roastable", "AS-REP-roastable")):
+            items = bh.get(kind) or []
+            if not items:
+                continue
+            kid = _nid("bh_" + kind)
+            nodes.append({"id": kid, "type": "roastable", "tier": 3,
+                          "label": f"{label} ({len(items)})", "meta": {"items": items[:40]}})
+            if dom_id:
+                edges.append({"from": dom_id, "to": kid, "kind": kind})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 _MERMAID_CLASSES = {
     ("fact", "proven"): "proven", ("fact", "future"): "future",
     ("action", "done"): "done", ("action", "next"): "next",

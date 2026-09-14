@@ -85,8 +85,12 @@ and an OSCP report is narrated from the same fact/run ledger.
 ```
 obol/
   facts.py       Fact + ProofState + FactSet (the source of truth)
-  workspace.py   .obol/state.json load/save; find_workspace() walks up like git
-                 target/scope/input persistence; raw run ledger paths
+  library.py     engagement library: many engagements under an app-managed base dir
+                 ($OBOL_HOME); create/list/active-select (the web + `obol engagement`)
+  workspace.py   an engagement's .obol/state.json: targets, per-target fact view,
+                 scope, inputs, run ledger, evidence attachments, checklist ticks,
+                 BloodHound summary; find_workspace() walks up like git
+  bloodhound.py  tolerant SharpHound/BloodHound export parser -> domain overlay facts
   pack.py        Action model + planner (next_actions / blocked_actions /
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)
@@ -97,16 +101,23 @@ obol/
   runner.py      fixed-argv runner; timeout, dry-run, raw output capture
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
-  graph.py       facts+actions -> graph model + mermaid (the single projection)
-  report.py      OSCP markdown report + build_report_context (structured, for web)
+  graph.py       facts+actions -> per-target graph model + mermaid (one projection);
+                 build_engagement_graph stitches all targets + BloodHound overlay
+  service.py     run -> parse -> record -> save; the ONE path both surfaces call
+                 (target=... pins a run to a host); eligible_actions = tool palette
+  report.py      OSCP markdown report + build_report_context (per-target rollup +
+                 evidence + engagement graph, structured for the web)
   web.py         self-contained read-only static HTML snapshot (`obol web`)
   webapp/        live localhost web surface (`obol serve`) — optional [web] extra
-    server.py      FastAPI app: token gate, read/run endpoints, SSE real-time
-    static/        vanilla-JS SPA (overview, flow, findings, playbooks, report)
-                   + vendored chart.umd.min.js (no CDN — works offline)
+    server.py      FastAPI over the engagement library: engagements/targets CRUD,
+                   per-target bundle, run-from-site, evidence + BloodHound upload,
+                   token gate, SSE real-time
+    static/        vanilla-JS SPA: engagement overview, targets, tabbed target view
+                   (Overview/Tools/Playbooks/Checklist/Findings/Evidence/Commands),
+                   engagement attack path, report; vendored chart.umd.min.js (no CDN)
   seed.py        Forest demo fixture (post-nmap facts)
-  cli.py         subcommands: init / next / explain / run / playbook(s) /
-                 scope / facts / report / serve / web
+  cli.py         subcommands: init / engagement / target / next / explain / run /
+                 playbook(s) / scope / facts / report / serve / web
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
 tests/

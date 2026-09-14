@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import board
-from .facts import Fact
+from .facts import Fact, FactSet
 from .pack import Action, load_packs, next_actions
 from .parsers import parse_action_output
 from .runner import RunResult, RunnerError, run_command
@@ -51,9 +51,10 @@ def find_action(action_id: str, pack: list[Action] | None = None) -> Action:
 
 
 def build_command(action: Action, ws: Workspace, *, command_index: int = 0,
-                  args_extra: str = "") -> tuple[str, str]:
+                  args_extra: str = "", target: str = "") -> tuple[str, str]:
     """Render the exact argv-string the runner will build (no execution), plus the
-    tool label. Raises ActionError on a bad command variant."""
+    tool label. `target` renders the preview for a specific host. Raises ActionError
+    on a bad command variant."""
     commands = action.commands or [{"tool": action.tool, "run": action.command}]
     if not 0 <= command_index < len(commands):
         raise ActionError(
@@ -61,23 +62,39 @@ def build_command(action: Action, ws: Workspace, *, command_index: int = 0,
             f"cannot use #{command_index + 1}."
         )
     command_meta = commands[command_index]
-    cmd = board.fill_command(action, ws, command_index)
-    extra = board.fill_template(args_extra, ws).strip() if args_extra else ""
+    cmd = board.fill_command(action, ws, command_index, target)
+    extra = board.fill_template(args_extra, ws, target).strip() if args_extra else ""
     if extra:
         cmd = f"{cmd} {extra}"
     tool = command_meta.get("tool") or action.tool or (cmd.split()[0] if cmd.split() else "")
     return cmd, tool
 
 
+def eligible_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
+    """Every pack action whose prerequisites the given facts satisfy — the
+    service-aware 'tool palette' for a target (includes actions already settled, so
+    a tool stays re-runnable), ranked by priority."""
+    pack = pack if pack is not None else load_packs()
+    live = [a for a in pack if a.eligible(facts)]
+    return sorted(live, key=lambda a: a.priority, reverse=True)
+
+
 def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
                timeout: int = 300, dry_run: bool = False, allow_shell: bool = False,
-               args_extra: str = "", ledger_extra: dict | None = None) -> RunOutcome:
+               args_extra: str = "", target: str = "",
+               ledger_extra: dict | None = None) -> RunOutcome:
     """Execute one action's command through the shared runner, parse its output into
     the narrowest supported facts, append them and a ledger row to the workspace,
     and persist. Returns the outcome; raises ActionError for a bad request and
     RunnerError for a safe-execution refusal (e.g. out of scope). The caller
     decides how to surface either.
+
+    `target` pins the run to a specific host: it becomes the active target so the
+    command context, the scope gate, and fact scoping all key off that host. This is
+    how the web runs a tool from a particular target's tab.
     """
+    if target:
+        ws.set_active_target(target) or ws.add_target(target)
     cmd, tool = build_command(action, ws, command_index=command_index, args_extra=args_extra)
     # run_command raises RunnerError on an unfilled token, shell metacharacters,
     # a missing binary, or an out-of-scope target — the hard scope gate applies
@@ -93,6 +110,8 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
             if ws.facts.add(fact):
                 added.append(fact)
 
+    ledger = {"target": ws.target}
+    ledger.update(ledger_extra or {})
     ws.record_run(
         tool, cmd, [f.kind for f in added],
         action_id=action.id,
@@ -103,7 +122,7 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
         stdout=str(result.stdout_path),
         stderr=str(result.stderr_path),
         duration_ms=result.duration_ms,
-        **(ledger_extra or {}),
+        **ledger,
     )
     ws.save()
     return RunOutcome(action_id=action.id, command=cmd, tool=tool, result=result, added=added)
@@ -116,5 +135,6 @@ __all__ = [
     "find_action",
     "build_command",
     "run_action",
+    "eligible_actions",
     "next_actions",
 ]
