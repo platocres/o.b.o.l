@@ -529,3 +529,81 @@ def test_non_exec_command_with_identity_text_does_not_prove_foothold():
     kinds = {fact.kind for fact in facts}
     assert "foothold.windows" not in kinds
     assert "access.system" not in kinds
+
+
+def test_evil_winrm_interactive_session_proves_access_desktop():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\svc_backup\Documents>
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "evil-winrm -i 10.10.10.10 -u svc_backup -p 'Passw0rd!'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"foothold.windows", "access.desktop"} <= kinds
+
+
+def test_penelope_windows_shell_proves_desktop_and_foothold():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+[+] Listening for reverse shells on 0.0.0.0:4444
+[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1
+[+] Attempting to upgrade shell to PTY...
+"""
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.windows", "access.desktop"} <= kinds
+    shell = next(fact for fact in facts if fact.kind == "access.shell")
+    assert shell.value["handler"] == "penelope"
+    assert shell.value["os"] == "windows"
+    assert shell.value["hostname"] == "WIN-DC01"
+    assert shell.value["session_id"] == "1"
+    # No whoami yet -> SYSTEM is not claimed.
+    assert "access.system" not in kinds
+
+
+def test_penelope_linux_shell_is_linux_foothold_not_windows():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "[+] Got reverse shell from web01~10.10.10.20-Linux-x86_64 - Assigned SessionID 2\n"
+    facts = parse_action_output(action, ws, "penelope 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.linux"} <= kinds
+    assert "foothold.windows" not in kinds
+    assert "access.desktop" not in kinds
+    assert "access.system" not in kinds
+
+
+def test_penelope_windows_shell_with_system_whoami_proves_access_system():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1
+PS C:\> whoami
+nt authority\system
+"""
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.windows", "access.desktop", "access.system"} <= kinds
+
+
+def test_penelope_windows_shell_unlocks_on_host_enum():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:acme.corp", {"name": "acme.corp"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1\n"
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    for fact in facts:
+        ws.facts.add(fact)
+    unlocked = {action.id for action in next_actions(ws.facts)}
+    # foothold.windows + access.desktop unlock the on-host PowerShell/.NET enum.
+    assert "ad-legacy-enum" in unlocked
+    assert "ad-psdotnet-enum" in unlocked
