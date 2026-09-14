@@ -369,3 +369,77 @@ def test_report_and_overview(cx):
 def test_events_route_is_wired_and_gated(cx):
     assert cx.get("/api/events").status_code == 401
     assert "/api/events" in {getattr(r, "path", None) for r in cx.app.routes}
+
+
+def test_engagement_activity_rolls_up_findings_by_category_and_host(cx):
+    """0e: the engagement-level findings roll-up groups proven facts by category and
+    tags each with the host that produced it, across every target."""
+    cx.post("/api/targets", json={"host": "10.10.10.5", "label": "WEB"}, headers=H)
+    # facts must be attached through the store both surfaces share
+    import obol.webapp.server as server
+    from obol import library
+    ws = library.resolve_active()
+    ws.facts.add(Fact("port:445", "host:10.10.10.161", {"port": 445, "service": "microsoft-ds"}, source="nmap -p-"))
+    ws.facts.add(Fact("smb.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="nxc smb"))
+    ws.facts.add(Fact("port:80", "host:10.10.10.5", {"port": 80, "service": "http"}, source="nmap -p-"))
+    ws.facts.add(Fact("ad.domain_known", "domain:htb.local", {"name": "htb.local"}, source="nxc ldap"))
+    ws.save()
+
+    a = cx.get("/api/engagement/activity", headers=H).json()
+    assert set(a) >= {"jobs", "active_count", "timeline", "findings", "findings_total", "hosts"}
+    by_cat = {c["id"]: c for c in a["findings"]}
+    # port:445 / smb.reachable land in target/service categories, tagged to their host
+    tgt_hosts = {f["host"] for f in by_cat["target"]["findings"]}
+    assert "10.10.10.161" in tgt_hosts and "10.10.10.5" in tgt_hosts
+    assert any(f["kind"] == "smb.reachable" and f["host"] == "10.10.10.161"
+               for f in by_cat["service"]["findings"])
+    # a domain-scoped fact rolls up with no host, tagged as domain-scoped
+    ad = [f for f in by_cat["ad"]["findings"] if f["kind"] == "ad.domain_known"][0]
+    assert ad["host"] == "" and ad["origin"] == "htb.local" and ad["origin_kind"] == "domain"
+    # per-host counts drive the filter chips
+    counts = {h["host"]: h["count"] for h in a["hosts"]}
+    assert counts["10.10.10.161"] >= 2 and counts["10.10.10.5"] >= 1
+
+
+def test_engagement_activity_surfaces_running_jobs_and_ledger(cx, monkeypatch):
+    """0e: an in-flight Quick Start job shows up in the engagement run feed, and its
+    committed command appears in the cross-host ledger once it finishes."""
+    import obol.webapp.server as server
+
+    monkeypatch.setattr(server.shutil, "which",
+                        lambda b: f"/usr/bin/{b}" if b in {"nmap", "nxc"} else None)
+
+    def fake_run_action(ws, action, **kwargs):
+        target = kwargs.get("target") or ws.target
+        added = [Fact("host.up", f"host:{target}", {"target": target}, source="fake nmap")]
+        if action.id == "nmap-fast-open-ports":
+            added.append(Fact("port:445", f"host:{target}", {"port": 445, "service": "microsoft-ds"}, source="fake nmap"))
+        for f in added:
+            ws.facts.add(f)
+        ws.record_run(action.tool, f"fake {action.id} {target}", [f.kind for f in added],
+                      action_id=action.id, target=target, returncode=0, timed_out=False,
+                      dry_run=False, quickstart=True)
+        ws.save()
+        result = RunResult(f"fake {action.id} {target}", ["fake", target], 0, "", "",
+                           ws.runs_dir / "o.txt", ws.runs_dir / "e.txt", 0.0, 1)
+        return RunOutcome(action.id, result.command, action.tool, result, added)
+
+    monkeypatch.setattr(server, "run_action", fake_run_action)
+
+    started = cx.post("/api/run/quickstart", json={"target": "10.10.10.161"}, headers=H).json()
+    jid = started["job_id"]
+
+    # the running job is visible in the engagement feed while pending
+    a = cx.get("/api/engagement/activity", headers=H).json()
+    job = next((j for j in a["jobs"] if j["id"] == jid), None)
+    assert job is not None and job["kind"] == "quickstart" and job["target"] == "10.10.10.161"
+
+    for _ in range(100):
+        if not cx.get(f"/api/quickstart/jobs/{jid}", headers=H).json()["pending"]:
+            break
+        time.sleep(0.02)
+
+    a = cx.get("/api/engagement/activity", headers=H).json()
+    assert a["active_count"] == 0
+    # the finished command is now in the cross-host ledger, tagged with its host
+    assert any(r["target"] == "10.10.10.161" and r["produced"] for r in a["timeline"])

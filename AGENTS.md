@@ -152,11 +152,13 @@ obol/
   webapp/        live localhost web surface (`obol serve`) — optional [web] extra
     server.py      FastAPI over the engagement library: engagements/targets CRUD,
                    per-target bundle, run-from-site, evidence + BloodHound upload,
-                   token gate, SSE change-feed real-time (payload deltas, not a tick)
+                   engagement activity (live jobs + cross-host findings roll-up +
+                   command ledger), token gate, SSE change-feed real-time (deltas)
     static/        vanilla-JS SPA rendered with morphdom (DOM is patched, not torn
                    down) and one delegated data-act handler: engagement overview,
                    targets, tabbed target view (Overview/Tools/Playbooks/Checklist/
-                   Findings/Evidence/Commands), attack path, report; vendored
+                   Findings/Evidence/Commands), Activity (engagement-level live run
+                   feed + findings roll-up), attack path, report; vendored
                    chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
   seed.py        Forest demo fixture (post-nmap facts)
   cli.py         subcommands: init / engagement / target / scope / scan / overview /
@@ -180,7 +182,10 @@ graph.collected, attack_paths, control_paths, trusts, computer_added),
 `hash.*` (asrep, tgs, ntlm, krbtgt, tgt), `credential.*` (candidate, available,
 plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
 (admin, system, desktop, shell), `foothold.windows`, `foothold.linux`,
-`loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), and `port:NNN`.
+`loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), `host.*`
+(up, hostname, fqdn, domain — host identity from discovery/enum, host-scoped;
+they enrich a target's label + domain grouping and the engagement map), and
+`port:NNN`.
 (`access.shell` is an OS-agnostic interactive shell — e.g. a reverse shell
 caught by penelope; `foothold.linux` is its Linux counterpart to
 `foothold.windows`, forward-looking for the privesc packs.)

@@ -51,7 +51,7 @@ discovered targets, evidence-backed domain links, open service nodes, and the
 BloodHound overlay without inventing host-to-host relationships from shared
 domain facts alone.
 
-## Current build: terminal parity for scope, scan, help, and overview
+## Shipped: terminal parity for scope, scan, help, and overview
 
 The terminal now matches the web's engagement-control surface more closely:
 `obol --help` and `obol manual` teach the real operator flow; `obol info` and
@@ -61,6 +61,26 @@ or stdin; `obol scan` sweeps every authorized scope entry and then runs the same
 nmap-first Quick Start baseline against scoped targets; and `obol overview`
 summarizes scope, target identity, domains, ports, access/phase, and top moves in
 terminal scrollback.
+
+## Shipped: engagement-level Activity view (run feed + findings roll-up)
+
+Closed out the last piece of item 0 (0e): a dedicated **Activity** view over
+`GET /api/engagement/activity`. It answers "what is happening across the whole
+engagement" rather than one target at a time:
+
+- **Live run feed** — every sweep and per-host Quick Start job, in-flight and
+  recent, with per-step progress. It reuses the existing background-job map and the
+  same SSE change feed, so it repaints as commands complete; starting a sweep now
+  drops the operator on this view to watch discovery + enumeration stream in.
+- **Findings roll-up** — every `supported` fact across all hosts, grouped by
+  category (target/service/AD/credential/…), each tagged with the host (or domain)
+  that produced it and its cited evidence, with per-host filter chips. Proof-bound
+  and secret-redacted like the report; no new fact kinds, no second store.
+- **Command ledger** — the cross-host run history (the per-target Commands tab, but
+  engagement-wide), each entry tagged with its host or sweep range.
+
+This is the organization/aesthetic layer the roadmap called for — the job engine
+was already engagement-bound; nothing about the runner, parsers, or store changed.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

@@ -54,10 +54,12 @@ from ..report import (
     build_report,
     build_report_context,
     redact_command,
+    _CATEGORY_ORDER,
     _evidence_view,
     _fact_category,
     _redact_value,
     _run_status,
+    _stamp,
     _target_open_ports,
 )
 from ..runner import RunnerError
@@ -402,6 +404,134 @@ def _fact_view(f) -> dict:
         "evidence": redact_command(f.source or "", include_secrets=False),
         "created_at": f.created_at,
     }
+
+
+# Human titles for the engagement-wide findings roll-up (0e). Keys are the
+# categories `_fact_category` emits; order comes from report._CATEGORY_ORDER so the
+# web roll-up and the markdown report agree.
+CATEGORY_TITLE = {
+    "target": "Target & network",
+    "scan": "Scans",
+    "service": "Services",
+    "ad": "Directory / AD",
+    "credential": "Credentials & hashes",
+    "access": "Access",
+    "loot": "Loot",
+    "config": "Config / vuln",
+    "web": "Web",
+    "other": "Other",
+}
+
+
+def _job_feed(job: dict) -> dict:
+    """A slim view of one background job for the engagement activity feed.
+
+    The full per-target job payload carries preflight blobs and raw output; the
+    engagement feed only needs each job's identity, live status, and step
+    progress, so this trims it to keep the (all-jobs) endpoint cheap.
+    """
+    kind = job.get("kind") or ("sweep" if job.get("range") else "quickstart")
+    steps = [{
+        "action_id": s.get("action_id", ""),
+        "title": s.get("title", ""),
+        "phase": s.get("phase", ""),
+        "status": s.get("status", ""),
+        "success": s.get("success"),
+        "added_count": s.get("added_count", 0),
+        "summary": s.get("summary") or s.get("reason", ""),
+    } for s in job.get("steps", [])]
+    view = {
+        "id": job.get("id"),
+        "kind": kind,
+        "status": job.get("status", ""),
+        "pending": job.get("status") in {"queued", "running"},
+        "success": job.get("success"),
+        "target": job.get("target", ""),
+        "range": job.get("range", ""),
+        "message": job.get("message", ""),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "started_at": job.get("started_at"),
+        "ended_at": job.get("ended_at"),
+        "added_count": len(job.get("facts") or []),
+        "steps": steps,
+    }
+    if kind == "sweep":
+        view["found"] = job.get("found", 0)
+        view["created"] = list(job.get("created", []))
+        view["existing"] = list(job.get("existing", []))
+        view["enumerated"] = list(job.get("enumerated", []))
+    return view
+
+
+def _engagement_findings(ws: Workspace) -> dict:
+    """Every proven fact across all targets, grouped by category and tagged with the
+    host (or domain) that produced it — the engagement-level findings roll-up (0e).
+
+    Proof-bound like everywhere else: only `supported` facts appear, each still
+    carrying the command that established it. Secrets are redacted (the report view
+    owns the secrets toggle)."""
+    host_labels = {t["host"]: (t.get("label") or t["host"]) for t in ws.targets}
+    host_domain = {t["host"]: t.get("domain", "") for t in ws.targets}
+    buckets: dict[str, list[dict]] = {}
+    host_counts: dict[str, int] = {}
+    total = 0
+    for f in ws.facts.facts:
+        if f.state.value != "supported":
+            continue
+        cat = _fact_category(f.kind)
+        scope = f.scope or ""
+        host = ""
+        if scope.startswith("host:"):
+            host = scope[5:]
+            origin, origin_kind = host_labels.get(host, host), "host"
+        elif scope.startswith("domain:"):
+            origin, origin_kind = scope[7:], "domain"
+        else:
+            origin, origin_kind = "engagement", "engagement"
+        buckets.setdefault(cat, []).append({
+            "kind": f.kind, "label": friendly(f.kind), "category": cat,
+            "host": host, "origin": origin, "origin_kind": origin_kind,
+            "value": _redact_value(f.value, include_secrets=False),
+            "evidence": redact_command(f.source or "", include_secrets=False),
+            "at": f.created_at,
+        })
+        total += 1
+        if host:
+            host_counts[host] = host_counts.get(host, 0) + 1
+
+    categories = []
+    for cat in sorted(buckets, key=lambda c: _CATEGORY_ORDER.get(c, 99)):
+        items = sorted(buckets[cat], key=lambda x: (x["origin"], x["kind"], x["at"] or 0))
+        categories.append({"id": cat, "title": CATEGORY_TITLE.get(cat, cat.title()),
+                           "count": len(items), "findings": items})
+    hosts = [{"host": t["host"], "label": host_labels[t["host"]],
+              "domain": host_domain.get(t["host"], ""),
+              "count": host_counts.get(t["host"], 0)} for t in ws.targets]
+    return {"categories": categories, "total": total, "hosts": hosts}
+
+
+def _engagement_timeline(ws: Workspace, limit: int = 40) -> list[dict]:
+    """Recent command runs across every target, newest first — the engagement run
+    ledger (as opposed to the per-target Commands tab)."""
+    host_labels = {t["host"]: (t.get("label") or t["host"]) for t in ws.targets}
+    out: list[dict] = []
+    for row in ws.runs[::-1][:limit]:
+        tgt = row.get("target", "") or ""
+        out.append({
+            "tool": row.get("tool", "tool"),
+            "command": redact_command(row.get("command", ""), include_secrets=False),
+            "status": _run_status(row),
+            "produced": list(row.get("produced") or []),
+            "at": row.get("at"),
+            "at_display": _stamp(row.get("at")),
+            "target": tgt,
+            "target_label": host_labels.get(tgt, tgt),
+            "playbook": row.get("playbook"),
+            "sweep": bool(row.get("sweep")),
+            "range": row.get("range", ""),
+        })
+    return out
 
 
 def _target_fact_summary(tf) -> list[dict]:
@@ -960,6 +1090,30 @@ def create_app(base, *, token: Optional[str] = None):
     @app.get("/api/engagement/graph")
     def api_engagement_graph():
         return build_engagement_graph(active())
+
+    @app.get("/api/engagement/activity")
+    def api_engagement_activity():
+        """Engagement-level operations console (0e): the live run feed (sweeps and
+        per-host Quick Start jobs, in-flight and recent) plus a category-organized
+        findings roll-up across every discovered host and the cross-host run
+        ledger. Reads are fresh; the page repaints on the same SSE change feed."""
+        ws = active()
+        with quickstart_jobs_lock:
+            jobs = [_job_feed(job) for job in quickstart_jobs.values()]
+        jobs.sort(key=lambda j: j.get("updated_at") or 0, reverse=True)
+        active_jobs = [j for j in jobs if j["pending"]]
+        # Keep every in-flight job, then a bounded slice of recent finished ones so a
+        # big sweep (one job per host) does not grow this response without bound.
+        recent = active_jobs + [j for j in jobs if not j["pending"]][:16]
+        findings = _engagement_findings(ws)
+        return {
+            "jobs": recent,
+            "active_count": len(active_jobs),
+            "timeline": _engagement_timeline(ws),
+            "findings": findings["categories"],
+            "findings_total": findings["total"],
+            "hosts": findings["hosts"],
+        }
 
     @app.get("/api/report")
     def api_report(include_secrets: bool = Query(False)):

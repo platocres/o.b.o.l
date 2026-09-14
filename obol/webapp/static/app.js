@@ -29,7 +29,7 @@ const NODE_COLOR = { scope: "#64748B", domain: "#6366F1", target: "#38BDF8",
   service: "#14B8A6", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
 const state = { view: "engagement", target: null, tab: "overview", secrets: false,
-  toolTarget: "", lastRun: null, playbook: null, scrollTo: null };
+  toolTarget: "", lastRun: null, playbook: null, scrollTo: null, findHost: "" };
 // charts[id] = { el: <canvas>, chart: Chart } — tracked so morphdom-preserved
 // canvases keep their Chart instance and orphaned ones are torn down.
 const charts = {};
@@ -280,6 +280,7 @@ function onClick(e) {
     case "bh-pick": $("#bh-file").click(); break;
     case "ev-add": addEvidence(host); break;
     case "evdel": delEvidence(el.dataset.id); break;
+    case "find-host": state.findHost = el.dataset.host || ""; render(); break;
   }
 }
 function onChange(e) {
@@ -333,9 +334,9 @@ function liveUpdateToast(events) {
 }
 
 // ── router / paint ─────────────────────────────────────────────────────────
-const VIEW_CRUMB = { engagement: "", targets: "Targets", tools: "Tools", engpath: "Attack path", report: "Report" };
+const VIEW_CRUMB = { engagement: "", targets: "Targets", tools: "Tools", activity: "Activity", engpath: "Attack path", report: "Report" };
 const BUILDERS = { engagement: buildEngagement, targets: buildTargets, tools: buildTools,
-  engpath: buildEngPath, report: buildReport, target: buildTarget };
+  activity: buildActivity, engpath: buildEngPath, report: buildReport, target: buildTarget };
 
 async function render() {
   updateNav();
@@ -486,7 +487,7 @@ async function buildEngagement() {
     </div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Engagement map</h2><button class="btn ghost sm" data-act="view" data-view="engpath">full view →</button></div>
       <div class="flow-scroll">${engagementSVG(s.engagement_graph)}</div></div>
-    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Activity</h2></div><div class="feed">${feed}</div></div>`;
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Activity</h2><button class="btn ghost sm" data-act="view" data-view="activity">live runs &amp; findings →</button></div><div class="feed">${feed}</div></div>`;
 }
 
 async function addTargetPrompt() {
@@ -512,6 +513,9 @@ async function runSweep(range) {
   try { job = await apiPost("/api/run/sweep", { range }); }
   catch (e) { toast("Sweep failed to start", e.message, "err"); return; }
   toast("Sweep started", `Discovering live hosts in ${range}…`, "");
+  // Watch it run: the Activity view shows the sweep + per-host enumeration live
+  // (it repaints on the SSE change feed as jobs progress and targets stream in).
+  state.view = "activity"; render();
   // Targets stream in live over SSE (target_added); poll the job for the summary.
   const id = job.job_id || job.id;
   for (let i = 0; i < 240; i++) {
@@ -862,6 +866,73 @@ async function runPlaybookStep(name, step, needsApproval, host) {
     toast(e.status === 409 ? "Needs approval" : "Step failed", e.message, e.status === 409 ? "" : "err");
     if (state.view === "target" && state.target === host) render();
   }
+}
+
+// ── engagement activity: live run feed + cross-host findings roll-up (0e) ─────
+function jobCard(j) {
+  const dot = j.pending ? "live" : (j.success ? "good" : "bad");
+  const cls = j.pending ? "pending" : (j.success ? "ok" : "failed");
+  const title = j.kind === "sweep" ? `Sweep · <span class="mono">${esc(j.range)}</span>`
+    : `Quick Start · <span class="mono">${esc(j.target)}</span>`;
+  let chips = "";
+  if (j.kind === "sweep") {
+    chips = `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:7px">
+      <span class="pill">${j.found || 0} live</span>
+      <span class="pill">${(j.created || []).length} new target${(j.created || []).length === 1 ? "" : "s"}</span>
+      <span class="pill">${(j.enumerated || []).length} enumerated</span></div>`;
+  }
+  const steps = (j.steps || []).length ? quickStartStepsHtml(j.steps) : "";
+  return `<div class="run-panel ${cls}" style="margin-bottom:12px">
+    <div class="run-head"><span class="status-dot ${dot}"></span>
+      <div><b>${title}</b><div class="muted">${esc(j.message || "")}</div></div>
+      <span class="spacer" style="flex:1"></span>
+      ${j.added_count ? `<span class="pill" style="border-color:${CAT_COLOR.credential}55;color:${CAT_COLOR.credential}">+${j.added_count} facts</span>` : ""}</div>
+    ${chips}${steps}</div>`;
+}
+async function buildActivity() {
+  const a = await api("/api/engagement/activity");
+  const jobs = a.jobs || [];
+  const jobsHtml = jobs.length ? jobs.map(jobCard).join("")
+    : `<div class="empty">No runs yet. Sweep a scoped range or Quick Start a target and the live feed lands here.</div>`;
+
+  const hosts = a.hosts || [];
+  const filt = state.findHost || "";
+  // A stale filter (host removed) falls back to All so the roll-up never looks empty.
+  const activeFilt = hosts.some((h) => h.host === filt) ? filt : "";
+  const chip = (label, val, count) => `<button class="btn xs ${activeFilt === val ? "primary" : ""}" data-act="find-host" data-host="${esc(val)}">${esc(label)}${count !== undefined ? ` <span class="muted">${count}</span>` : ""}</button>`;
+  const filterChips = `<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">
+    ${chip("All hosts", "", a.findings_total)}${hosts.map((h) => chip(h.label, h.host, h.count)).join("")}</div>`;
+
+  const cats = (a.findings || []).map((c) => {
+    const items = activeFilt ? c.findings.filter((f) => f.host === activeFilt) : c.findings;
+    if (!items.length) return "";
+    const color = CAT_COLOR[c.id] || "#6B7591";
+    const rows = items.map((f) => `<tr>
+      <td class="kind">${esc(f.kind)}</td>
+      <td>${esc(f.label)}${Object.keys(f.value || {}).length ? `<div class="fd muted mono" style="font-size:11px">${esc(shortJson(f.value, 220))}</div>` : ""}</td>
+      <td>${f.host ? `<span class="mono" data-act="open" data-open="${esc(f.host)}" style="cursor:pointer;color:var(--accent-2)" title="Open ${esc(f.host)}">${esc(f.origin)}</span>` : `<span class="muted mono" title="${esc(f.origin_kind)}-scoped">${esc(f.origin)}</span>`}</td>
+      <td class="mono muted" style="font-size:11px;max-width:300px;word-break:break-all">${esc(f.evidence)}</td></tr>`).join("");
+    return `<div class="find-cat" style="margin-top:14px"><div class="phase-head" style="color:${color}">${esc(c.title)} <span class="muted mono">${items.length}</span></div>
+      <table><thead><tr><th>Kind</th><th>Finding</th><th>Host</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join("") || `<div class="empty">${activeFilt ? "No findings for this host yet." : "No findings yet — run a scan to start filling the ledger."}</div>`;
+
+  const timeline = (a.timeline || []).map((r) => `<div class="feed-item"><span class="feed-tick">${esc((r.at_display || "").slice(5, 16))}</span>
+    <span class="feed-body"><span class="ft">${esc(r.tool)}</span>${r.target ? `<span class="tag" data-act="open" data-open="${esc(r.target)}" style="cursor:pointer">${esc(r.target_label || r.target)}</span>` : (r.sweep ? `<span class="tag">sweep ${esc(r.range)}</span>` : "")}${r.playbook ? `<span class="tag">${esc(r.playbook)}</span>` : ""}
+    <div class="fd">$ ${esc(r.command)}</div><div class="fd" style="color:var(--text-2)">${esc(r.status)}${r.produced.length ? " · +" + r.produced.join(", ") : ""}</div></span></div>`).join("")
+    || `<div class="empty">No commands run yet.</div>`;
+
+  const liveBadge = a.active_count
+    ? `<span class="pill" style="border-color:var(--accent-ring)"><span class="status-dot live" style="margin-right:6px"></span>${a.active_count} active</span>`
+    : `<span class="muted mono">idle</span>`;
+  return `
+    <div class="card"><div class="panel-h"><h2>Live runs</h2>${liveBadge}</div>
+      <div class="muted" style="margin-bottom:12px;font-size:12px">Sweeps and per-host Quick Start jobs across the whole engagement, in-flight and recent. This feed updates live as commands complete.</div>
+      ${jobsHtml}</div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Findings roll-up</h2><span class="muted mono">${a.findings_total}</span></div>
+      <div class="muted" style="margin-bottom:10px;font-size:12px">Every proven fact across all hosts, organized by category. Each finding is only as strong as its cited evidence.</div>
+      ${filterChips}${cats}</div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Command ledger</h2><span class="muted mono">${(a.timeline || []).length}</span></div>
+      <div class="feed">${timeline}</div></div>`;
 }
 
 // ── engagement map ──────────────────────────────────────────────────────────

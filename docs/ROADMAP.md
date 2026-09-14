@@ -44,7 +44,7 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
   per-step `require_approval` gating. First playbook: `ad-recon`. Web
   run-from-site and the playbook path-map view are still pending under item 5.
 
-## 0. Engagement-level discovery sweep + scope UI + host grouping (IN PROGRESS)
+## 0. Engagement-level discovery sweep + scope UI + host grouping (DONE)
 
 An operator should be able to point obol at a network, sweep it, and watch
 targets populate — names, services, and domain grouping filling in as
@@ -93,11 +93,17 @@ The build sequence (each a reviewable PR):
   map now populates from scans: authorized scope ranges link to matching targets,
   targets link to domains only when host-scoped evidence supports it, and open
   ports/services render as service nodes.
-- **(e) Engagement-level run & findings view.** Surface sweep runs and the
-  facts/findings they produce at the *engagement* level (not just per-target):
-  a live activity feed of the sweep's steps and a clean, category-organized
-  findings roll-up across all discovered hosts. The Quick Start job engine is
-  already engagement-bound; this is the aesthetic/organization layer.
+- **(e) Engagement-level run & findings view — DONE.** A dedicated **Activity**
+  view (`GET /api/engagement/activity`) surfaces work at the *engagement* level,
+  not just per-target: a **live run feed** of every sweep and per-host Quick Start
+  job (in-flight and recent, with step progress), a **findings roll-up** that
+  groups every proven fact across all hosts by category and tags each with the
+  host (or domain) that produced it and its cited evidence, and a cross-host
+  **command ledger**. It repaints on the same SSE change feed as the rest of the
+  page, and starting a sweep drops the operator here to watch it run. Proof-bound
+  like everywhere else (only `supported` facts, secrets redacted); the host filter
+  chips read from per-host fact counts. The Quick Start job engine was already
+  engagement-bound — this is the organization/aesthetic layer over it.
 - **(f) Terminal parity for scope + scan — DONE.** `obol --help` now exposes the
   practical flow, with `obol help <command>`, `obol manual`, `obol --version`, and
   `obol info` for normal CLI discovery. `obol scope add` accepts multiple entries,
