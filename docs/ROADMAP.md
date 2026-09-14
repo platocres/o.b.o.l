@@ -98,6 +98,15 @@ The build sequence (each a reviewable PR):
   a live activity feed of the sweep's steps and a clean, category-organized
   findings roll-up across all discovered hosts. The Quick Start job engine is
   already engagement-bound; this is the aesthetic/organization layer.
+- **(f) Terminal parity for scope + scan — DONE.** `obol --help` now exposes the
+  practical flow, with `obol help <command>`, `obol manual`, `obol --version`, and
+  `obol info` for normal CLI discovery. `obol scope add` accepts multiple entries,
+  `obol scope paste` extracts only valid IPs/CIDRs from messy copied text or
+  stdin, and `obol scope rm` removes entries without pulling scope from live
+  targets. `obol scan` sweeps every authorized scope entry and then runs the same
+  nmap-first Quick Start baseline for scoped targets from the terminal. `obol
+  overview` gives a compact terminal engagement view: scope, targets, identity,
+  domain, access/phase, ports, and top next moves.
 
 Non-negotiables this must respect: the sweep only touches authorized scope
 (hard gate); discovery/enumeration facts stay proof-bound (a live host and its

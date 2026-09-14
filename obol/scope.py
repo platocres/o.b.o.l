@@ -12,6 +12,9 @@ import re
 from urllib.parse import urlparse
 
 _HOST_PORT_RE = re.compile(r"^([A-Za-z0-9_.-]+):(\d{1,5})$")
+_IP_SCOPE_RE = re.compile(
+    r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3})(?P<prefix>/\d{1,2})?"
+)
 
 
 def normalize_target(value: str) -> str:
@@ -54,6 +57,31 @@ def normalize_scope_entry(value: str) -> str:
             # handles URLs like http://host/path by extracting the host.
             return normalize_target(raw)
     return normalize_target(raw)
+
+
+def extract_ip_scope_entries(text: str) -> list[str]:
+    """Pull only valid IP addresses/CIDRs out of pasted operator text.
+
+    This is intentionally stricter than :func:`normalize_scope_entry`: URLs,
+    labels, hostnames, ports, bullets, and scanner chatter are treated only as
+    places an IP/CIDR might appear. The returned entries are canonicalized and
+    de-duplicated in first-seen order.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _IP_SCOPE_RE.finditer(str(text or "")):
+        raw = match.group("ip") + (match.group("prefix") or "")
+        try:
+            value = (
+                str(ipaddress.ip_network(raw, strict=False))
+                if "/" in raw else str(ipaddress.ip_address(raw))
+            )
+        except ValueError:
+            continue
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def target_in_scope(target: str, scope: list[str]) -> tuple[bool, str]:

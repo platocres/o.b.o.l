@@ -44,6 +44,12 @@ from ..graph import (
     target_phase,
 )
 from ..pack import friendly, load_packs, next_actions
+from ..quickstart import (
+    QUICKSTART_ACTION_IDS,
+    action_done as _action_done,
+    action_phase as _action_phase,
+    variant_indices as _quickstart_variant_indices,
+)
 from ..report import (
     build_report,
     build_report_context,
@@ -107,30 +113,8 @@ _INPUT_HINTS = {
     "lhost": "Set your callback/listener host.",
     "lport": "Set your callback/listener port.",
 }
-QUICKSTART_ACTION_IDS = [
-    "nmap-fast-open-ports",
-    "nmap-version-scripts",
-    "ad-dc-identify",
-    "ad-anon-ldap-enum",
-    "ad-user-enum",
-    "gpp-passwords",
-    "content-discovery",
-    "vhost-discovery",
-    "nikto-scan",
-]
-QUICKSTART_VARIANT_PREFERENCE = {
-    # Prefer the lighter ffuf common-wordlist pass over recursive feroxbuster when
-    # both are available; Quick Start should populate leads without surprise crawls.
-    "content-discovery": [1, 0, 2],
-}
-
-
 def _missing_dep() -> "SystemExit":
     return SystemExit('the web surface needs the "web" extra:\n    pip install "obol[web]"')
-
-
-def _action_phase(action) -> str:
-    return phase_of_kind(action.produces[0]) if action.produces else "recon"
 
 
 def _issue(kind: str, severity: str, message: str, fix: str = "") -> dict:
@@ -341,20 +325,6 @@ def _action_view(action, ws: Workspace, target: str = "") -> dict:
         "produces": [friendly(k) for k in action.produces],
         "report": action.report or None, "variants": variants,
     }
-
-
-def _action_done(ws: Workspace, target: str, action) -> bool:
-    if any(r.get("action_id") == action.id and r.get("target") == target and not r.get("dry_run")
-           for r in ws.runs):
-        return True
-    tf = ws.facts_for_target(target)
-    return bool(action.produces) and all(tf.has(kind) for kind in action.produces)
-
-
-def _quickstart_variant_indices(action) -> list[int]:
-    total = len(action.commands or [{"run": action.command}])
-    preferred = [i for i in QUICKSTART_VARIANT_PREFERENCE.get(action.id, []) if 0 <= i < total]
-    return preferred + [i for i in range(total) if i not in preferred]
 
 
 def _first_runnable_variant(action, ws: Workspace, target: str) -> tuple[int | None, dict | None]:
