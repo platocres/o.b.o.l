@@ -94,8 +94,8 @@ _NMAP_SMB_SIGNING_RE = re.compile(
     r"Message signing enabled(?: and (?P<required>required)| but not required)?",
     re.IGNORECASE,
 )
-_NMAP_HTTP_TITLE_RE = re.compile(r"^\|_?http-title:\s*(?P<title>.+)$", re.IGNORECASE | re.MULTILINE)
-_NMAP_HTTP_SERVER_RE = re.compile(r"^\|_?http-server-header:\s*(?P<header>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_TITLE_RE = re.compile(r"^\|\s*_?http-title:\s*(?P<title>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_SERVER_RE = re.compile(r"^\|\s*_?http-server-header:\s*(?P<header>.+)$", re.IGNORECASE | re.MULTILINE)
 _NXC_SIGNING_RE = re.compile(r"\(signing:(?P<enabled>True|False)\)", re.IGNORECASE)
 _NXC_SMBV1_RE = re.compile(r"\(SMBv1:(?P<enabled>True|False)\)", re.IGNORECASE)
 
