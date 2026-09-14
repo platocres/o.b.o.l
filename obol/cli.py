@@ -182,6 +182,16 @@ def cmd_web(args) -> None:
     print(f"wrote {out}")
 
 
+def cmd_report(args) -> None:
+    from .report import write_report
+    ws = _load_or_exit()
+    out = Path(args.out) if args.out else None
+    path = write_report(ws, out=out, include_secrets=args.include_secrets, max_next=args.max_next)
+    print(f"wrote {path}")
+    if not args.include_secrets:
+        print("secrets redacted — use --include-secrets only for private exam notes")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="obol", description="Evidence-driven OSCP operator companion.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -223,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
     pw = sub.add_parser("web", help="write the read-only web view to a static HTML file")
     pw.add_argument("--out", help="output path (default .obol/web/index.html)")
     pw.set_defaults(func=cmd_web)
+
+    prep = sub.add_parser("report", help="write an OSCP-style markdown report from the workspace ledger and facts")
+    prep.add_argument("--out", help="output path (default report.md in the workspace root)")
+    prep.add_argument("--include-secrets", action="store_true", help="include passwords, hashes, tickets, and secrets in the report")
+    prep.add_argument("--max-next", type=int, default=8, help="maximum recommended next actions to include")
+    prep.set_defaults(func=cmd_report)
     return p
 
 

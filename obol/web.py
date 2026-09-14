@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from .board import action_desc
 from .graph import build_mermaid
 from .pack import next_actions
+from .report import report_status_rows
 from .workspace import Workspace
 
 _TEMPLATE = """<!doctype html>
@@ -29,6 +30,7 @@ _TEMPLATE = """<!doctype html>
   h2 {{ font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8b98a5; }}
   table {{ width: 100%; border-collapse: collapse; }}
   td, th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #1c2530; vertical-align: top; }}
+  code {{ color: #e6edf3; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 1px 4px; }}
   .kind {{ color: #58a6ff; font-family: ui-monospace, monospace; white-space: nowrap; }}
   .not {{ color: #d29922; }} .proves {{ color: #3fb950; }}
   .blocked {{ color: #8b98a5; }}
@@ -37,6 +39,7 @@ _TEMPLATE = """<!doctype html>
 <header><h1>obol <small>· {name} · {target}</small></h1></header>
 <main>
   <section><h2>Key findings</h2><table>{finding_rows}</table></section>
+  <section><h2>Report</h2><table>{report_rows}</table></section>
   <section><h2>Path</h2><div class="graph"><pre class="mermaid">{mermaid}</pre></div></section>
   <section><h2>Next</h2><table>{next_rows}</table></section>
   <section><h2>Found so far</h2><table>{facts_rows}</table></section>
@@ -101,10 +104,18 @@ def _key_findings(ws: Workspace) -> str:
         last = ws.runs[-1]
         rows.append(("Last run", f"{last.get('tool', '')}: {last.get('command', '')}"))
 
+    return _rows(rows)
+
+
+def _rows(rows: list[tuple[str, str]]) -> str:
     return "".join(
         f"<tr><td class='kind'>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>"
         for label, value in rows
     )
+
+
+def _report_rows(ws: Workspace) -> str:
+    return _rows(report_status_rows(ws))
 
 
 def build_page(ws: Workspace) -> str:
@@ -126,6 +137,7 @@ def build_page(ws: Workspace) -> str:
         name=html.escape(ws.name), target=html.escape(ws.target),
         mermaid=html.escape(build_mermaid(facts)),
         finding_rows=_key_findings(ws),
+        report_rows=_report_rows(ws),
         facts_rows=fact_rows, next_rows=next_rows,
     )
 
