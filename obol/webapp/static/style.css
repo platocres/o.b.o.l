@@ -309,6 +309,18 @@ pre.cmd.sm { font-size: 11.5px; padding: 8px 10px; }
 .egnode .egt { font-size: 12px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .egnode .egs { font-size: 10px; font-weight: 600; }
 
+/* ── tools page ───────────────────────────────────────────────────────── */
+.avail-bar { height: 8px; width: 260px; max-width: 100%; background: var(--bg4); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.avail-bar > div { height: 100%; background: linear-gradient(90deg, var(--green-dim), var(--green)); }
+.tool-card.missing { opacity: .72; border-style: dashed; }
+.tool-card.missing .t { color: var(--text-2); }
+.xs { padding: 3px 8px; font-size: 11.5px; }
+.tool-actions { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.ta-row { display: flex; align-items: center; gap: 6px; }
+.ta-row .ta-t { flex: 1; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.install-row { display: flex; align-items: center; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
+.inst-cmd { font-family: var(--mono); font-size: 11px; color: var(--text-2); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; flex: 1; min-width: 120px; overflow-x: auto; white-space: nowrap; }
+
 /* ── report view ──────────────────────────────────────────────────────── */
 .report-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .report-head h2 { margin: 0; font-size: 20px; }

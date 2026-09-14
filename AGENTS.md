@@ -5,14 +5,20 @@ and reference code live) and [`docs/ROADMAP.md`](docs/ROADMAP.md) (what to build
 next). The same contract applies to any coding agent (Claude, ChatGPT, etc.).
 `CLAUDE.md` points here.
 
-## Naming — "Local Obol"
+## Naming — "obol local" vs "obol web" (canonical, use these terms)
 
-This repo (`platocres/o.b.o.l`) is **O.B.O.L — Offensive Box Operations Ledger**,
-referred to as **"local obol"** (or "o.b.o.l"). It is the on-box operator tool that
-*runs* an engagement. It is distinct from **the web Obol** at `platocres/obol` — the
-browser-based, static planning app that this project mines for methodology (see
-`docs/SOURCES.md §2`). When the user says "local obol" they mean this repo; "the web
-Obol" / "the obol site" means `platocres/obol`. Do not confuse the two.
+From this point forward, agents MUST distinguish the two projects by these names:
+
+- **obol local** — THIS repo (`platocres/o.b.o.l`), *O.B.O.L — Offensive Box
+  Operations Ledger*. The terminal-first, on-box operator tool that *runs* an
+  engagement (executes tools, ingests evidence, keeps the ledger). Also fine:
+  "o.b.o.l".
+- **obol web** — the OLDER project at `platocres/obol`: the browser-based, static
+  methodology planning app that obol local mines for its packs (see
+  `docs/SOURCES.md §2`).
+
+When the user says "obol local" they mean this repo; "obol web" means
+`platocres/obol`. Never conflate them.
 
 Note on the docs' tone: some earlier "always keep it read-only / zero-dependency"
 caution was over-conservative. o.b.o.l is a real, dependency-using tool (the web
@@ -91,6 +97,9 @@ obol/
                  scope, inputs, run ledger, evidence attachments, checklist ticks,
                  BloodHound summary; find_workspace() walks up like git
   bloodhound.py  tolerant SharpHound/BloodHound export parser -> domain overlay facts
+  tools.py       tool inventory: curated registry of the packs' tools + detection
+                 (which/default Kali paths/auto-locate), overrides in tools.json,
+                 install hints; the runner resolves found/added tools through it
   pack.py        Action model + planner (next_actions / blocked_actions /
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)

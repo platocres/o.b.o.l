@@ -106,6 +106,7 @@ async function render() {
   try {
     if (state.view === "engagement") { $("#crumb").textContent = ""; return await renderEngagement(c); }
     if (state.view === "targets") { $("#crumb").textContent = "Targets"; return await renderTargets(c); }
+    if (state.view === "tools") { $("#crumb").textContent = "Tools"; return await renderTools(c); }
     if (state.view === "engpath") { $("#crumb").textContent = "Attack path"; return await renderEngPath(c); }
     if (state.view === "report") { $("#crumb").textContent = "Report"; return await renderReport(c); }
     if (state.view === "target") return await renderTarget(c);
@@ -314,10 +315,85 @@ function tabOverview(el, b) {
 }
 
 function tabTools(el, b) {
-  if (!b.tools.length) { el.innerHTML = `<div class="card"><div class="empty">No applicable tools yet — run the nmap prelude to learn this target's services.</div></div>`; return; }
-  el.innerHTML = b.tools.map((grp) => `<div class="card"><div class="panel-h"><h2 style="color:${PHASE_COLOR[grp.phase]}">${esc(grp.label)}</h2><span class="muted mono">${grp.actions.length}</span></div>
-    <div class="tool-grid">${grp.actions.map((a) => toolCard(a)).join("")}</div></div>`).join("");
+  const link = `<div class="card" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="muted">Service-aware tools for <b style="color:var(--text)">${esc(b.meta.label)}</b>, pre-filled and ready to run.</div>
+    <button class="btn sm" id="all-tools">▸ All tools &amp; availability</button></div>`;
+  const body = b.tools.length
+    ? b.tools.map((grp) => `<div class="card"><div class="panel-h"><h2 style="color:${PHASE_COLOR[grp.phase]}">${esc(grp.label)}</h2><span class="muted mono">${grp.actions.length}</span></div>
+        <div class="tool-grid">${grp.actions.map((a) => toolCard(a)).join("")}</div></div>`).join("")
+    : `<div class="card"><div class="empty">No applicable tools yet — run the nmap prelude to learn this target's services.<br><button class="btn sm" style="margin-top:12px" id="all-tools2">Browse all tools</button></div></div>`;
+  el.innerHTML = link + body;
   wireRun(el, b.meta.host);
+  el.querySelectorAll("#all-tools,#all-tools2").forEach((x) => x.addEventListener("click", () => { state.toolTarget = b.meta.host; setView("tools"); }));
+}
+
+// ── global Tools page: system scan, availability, install/add, run any ───────
+async function renderTools(c) {
+  const [s, meta] = await Promise.all([api("/api/tools"), api("/api/meta")]);
+  if (!state.toolTarget || !meta.targets.some((t) => t.host === state.toolTarget))
+    state.toolTarget = meta.active_target || (meta.targets[0] && meta.targets[0].host) || "";
+  const pct = s.total ? Math.round((s.found / s.total) * 100) : 0;
+  const tgtOpts = meta.targets.map((t) => `<option value="${esc(t.host)}" ${t.host === state.toolTarget ? "selected" : ""}>${esc(t.label)} (${esc(t.host)})</option>`).join("") || `<option value="">no targets</option>`;
+  const groups = s.groups.map((g) => `<div class="card"><div class="panel-h"><h2>${esc(g.category)}</h2><span class="muted mono">${g.tools.filter((t) => t.found).length}/${g.tools.length}</span></div>
+    <div class="tool-grid">${g.tools.map(toolAvailCard).join("")}</div></div>`).join("");
+  c.innerHTML = `
+    <div class="card"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div><div style="font-size:22px;font-weight:750">${s.found} <span class="muted" style="font-size:16px">/ ${s.total} tools available</span></div>
+        <div class="muted" style="font-size:12px">Found tools are guaranteed to run. Grey tools are missing — install or point O.B.O.L at them.</div>
+        <div class="avail-bar" style="margin-top:8px"><div style="width:${pct}%"></div></div></div>
+      <div class="row" style="gap:8px"><label class="muted" style="font-size:12px">run against</label>
+        <select id="tool-target" class="inp">${tgtOpts}</select>
+        <button class="btn sm" id="tool-rescan">↻ Rescan</button></div>
+    </div></div>${groups}`;
+  $("#tool-target").addEventListener("change", (e) => { state.toolTarget = e.target.value; });
+  $("#tool-rescan").addEventListener("click", () => render());
+  c.querySelectorAll("[data-install]").forEach((b) => b.addEventListener("click", () => installTool(b.dataset.install)));
+  c.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(b.dataset.copy)));
+  c.querySelectorAll("[data-addpath]").forEach((b) => b.addEventListener("click", () => addToolPath(b.dataset.addpath)));
+  c.querySelectorAll("[data-toolrun]").forEach((b) => b.addEventListener("click", () => {
+    if (!state.toolTarget) { toast("Pick a target first", "add a target to run tools against", "err"); return; }
+    runAction(b.dataset.toolrun, state.toolTarget, b.dataset.dry === "1");
+  }));
+}
+
+function toolAvailCard(t) {
+  const runnable = t.found && t.actions.length;
+  const actions = runnable ? `<div class="tool-actions">${t.actions.slice(0, 8).map((a) => `<div class="ta-row"><span class="ta-t">${esc(a.title)}</span>
+      <button class="btn primary xs" data-toolrun="${esc(a.id)}">Run</button><button class="btn xs" data-toolrun="${esc(a.id)}" data-dry="1">Dry</button></div>`).join("")}</div>` : "";
+  let foot = "";
+  if (!t.found) {
+    const install = t.install_cmd
+      ? `<div class="install-row"><button class="btn primary sm" data-install="${esc(t.key)}">Install</button>
+          <code class="inst-cmd">${esc(t.install_cmd)}</code><button class="btn xs" data-copy="${esc(t.install_cmd)}" title="copy">⧉</button></div>`
+      : `<div class="muted" style="font-size:12px">${esc(t.note || "operator-supplied — add its path")}</div>`;
+    foot = `${install}<div style="margin-top:7px"><button class="btn sm" data-addpath="${esc(t.key)}">I have it — add path…</button></div>`;
+  }
+  return `<div class="tool-card ${t.found ? "" : "missing"}">
+    <div class="tc-h"><span class="tdot" style="background:${t.found ? "var(--green)" : "var(--muted)"}"></span>
+      <span class="t">${esc(t.label)}</span><span class="spacer" style="flex:1"></span>
+      ${t.found ? `<span class="pill" style="border-color:var(--green)66;color:var(--green)">found</span>` : `<span class="pill">missing</span>`}</div>
+    ${t.found ? `<div class="tc-tools mono" title="${esc(t.path)}">${esc(t.path)}</div>` : ""}
+    <div class="tc-tools mono muted">${(t.bins || []).slice(0, 3).join(", ")}${t.actions.length ? ` · ${t.actions.length} actions` : ""}</div>
+    ${actions}${foot}</div>`;
+}
+
+async function installTool(key) {
+  toast("Installing…", key, "");
+  try {
+    const r = await apiPost("/api/tools/install", { tool: key });
+    if (r.ok) toast("Installed", `${key} → ${r.path}`, "ok");
+    else toast("Install did not complete", `${r.command}\nCopy & run it in a terminal (sudo/network may be needed).`, "err");
+    render();
+  } catch (e) { toast("Install failed", e.message, "err"); }
+}
+async function addToolPath(key) {
+  const path = prompt(`Absolute path to the ${key} binary/script:`);
+  if (!path) return;
+  try { const d = await apiPost("/api/tools/add", { tool: key, path }); toast("Added", `${key} → ${d.path}`, "ok"); render(); }
+  catch (e) { toast("Could not add", e.message, "err"); }
+}
+function copyText(txt) {
+  (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast("Copied", txt, "ok")).catch(() => toast("Copy this", txt, ""));
 }
 function toolCard(a) {
   const v = a.variants[0];

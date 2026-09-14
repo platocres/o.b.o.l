@@ -5,7 +5,8 @@ Read [AGENTS.md](AGENTS.md) first, then its linked docs
 The same contract applies to Claude and any other coding agent — do not keep a
 separate, model-specific copy of the build instructions here.
 
-**"Local Obol"** = this repo (`platocres/o.b.o.l`, *O.B.O.L — Offensive Box
-Operations Ledger*), the on-box operator tool. It is **not** the web Obol at
-`platocres/obol` (the browser planning app it mines for methodology). When the user
-says "local obol", they mean this project. See AGENTS.md § Naming.
+**Naming (canonical):** this repo (`platocres/o.b.o.l`, *O.B.O.L — Offensive Box
+Operations Ledger*) is **"obol local"** — the on-box operator tool. It is **not**
+**"obol web"**, the older browser planning app at `platocres/obol` that it mines for
+methodology. When the user says "obol local" they mean this project; "obol web"
+means `platocres/obol`. Use these terms and never conflate them. See AGENTS.md § Naming.

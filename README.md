@@ -59,6 +59,12 @@ surface that drives the *same* store as the terminal, not a separate app:
   - **Checklist** — a static services→commands reference by attack chain, tickable.
   - **Findings / Evidence / Commands** — the target's evidence-backed findings, a
     screenshot gallery (drop images tagged to a phase), and its command ledger.
+- **Tools** — a system scan (like Pentest Companion's Kali tools): a *found / total*
+  counter over the tools obol's packs use, missing ones greyed with a one-click
+  **Install** (plus the copy-paste command as a fallback) or **"I have it — add
+  path…"**, and point-and-click run of any available tool against a chosen target.
+  The per-target Tools tab shows the service-aware subset; a link opens the full
+  catalogue. A tool the page reports as found is guaranteed to launch.
 - **Engagement attack path** — every target stitched to the shared domain and to
   each other by the evidence that connects them, with a BloodHound overlay.
 - **Run from the site** — launching a tool or playbook step goes through the *same*

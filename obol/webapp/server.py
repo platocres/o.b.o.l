@@ -25,7 +25,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from .. import board, bloodhound, library
+from .. import board, bloodhound, library, tools as tool_inventory
 from ..graph import (
     build_engagement_graph,
     build_graph_model,
@@ -380,6 +380,30 @@ def create_app(base, *, token: Optional[str] = None):
                 "kerberoastable": len(summary.get("kerberoastable", [])),
                 "asrep_roastable": len(summary.get("asrep_roastable", [])),
                 "added_facts": summary.get("added_facts", [])}
+
+    # ── tool inventory ───────────────────────────────────────────────────────
+    @app.get("/api/tools")
+    def api_tools():
+        return tool_inventory.scan()
+
+    @app.post("/api/tools/add")
+    def api_tools_add(payload: dict = Body(...)):
+        key = (payload or {}).get("tool", "")
+        path = (payload or {}).get("path", "").strip()
+        try:
+            d = tool_inventory.add_override(key, path)
+        except KeyError:
+            raise HTTPException(404, f"unknown tool {key!r}")
+        except FileNotFoundError:
+            raise HTTPException(400, f"no file at {path!r}")
+        return {"ok": True, **d}
+
+    @app.post("/api/tools/install")
+    def api_tools_install(payload: dict = Body(...)):
+        key = (payload or {}).get("tool", "")
+        if key not in {t.key for t in tool_inventory.REGISTRY}:
+            raise HTTPException(404, f"unknown tool {key!r}")
+        return tool_inventory.install(key)
 
     # ── run-from-site ────────────────────────────────────────────────────────
     @app.post("/api/run/action")

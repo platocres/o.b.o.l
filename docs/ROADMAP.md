@@ -122,9 +122,12 @@ parsers + `.obol` store as the terminal, via the shared `obol/service.py`.
   view is the primary report interface (stat row, progress ladder, path, severity-
   badged next steps, evidence with lineage, timeline) with a Markdown download and
   a secrets toggle. `report.build_report_context` is the shared structured source.
-- **Tool availability — STILL PENDING** (from Pentest Companion
-  `kali_tools`/`tools_status`): show which referenced tools are installed, with a
-  simple manual/poll refresh. This is the main remaining web item.
+- **Tool availability — DONE** (from Pentest Companion `kali_tools`/`tools_status`):
+  `obol/tools.py` is a curated registry of the tools the packs invoke; the web Tools
+  page scans the host (`which` + default Kali paths + shallow auto-locate), shows a
+  found/total counter, greys out the missing with one-click Install (apt/pipx) or an
+  add-path override, and runs any available tool against a chosen target. The runner
+  resolves found/added tools so a "found" tool is guaranteed to launch.
 
 ## UX guardrails (product decision — keep these)
 

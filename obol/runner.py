@@ -86,7 +86,15 @@ def run_command(
     argv = _build_argv(command, allow_shell_tokens=allow_shell_tokens)
     _scope_check(argv, ws)
     if shutil.which(argv[0]) is None and not dry_run:
-        raise RunnerError(f"binary `{argv[0]}` was not found in PATH")
+        # Not on PATH — but the tool inventory may know where it is (a default Kali
+        # location, or a path the operator added on the Tools page). Resolve to an
+        # absolute path so a tool the UI reports as "found" is guaranteed to launch.
+        from .tools import resolve_binary
+        resolved = resolve_binary(argv[0])
+        if resolved:
+            argv[0] = resolved
+        else:
+            raise RunnerError(f"binary `{argv[0]}` was not found in PATH")
 
     started = time.time()
     ts = time.strftime("%Y%m%d-%H%M%S", time.localtime(started))
