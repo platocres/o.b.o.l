@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>obol · console</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div id="app">
+  <aside class="rail">
+    <div class="brand">
+      <span class="brand-mark">ob</span>
+      <span class="brand-text">o<b>b</b>ol</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="overview"><span class="ni-ic">◉</span><span>Overview</span></button>
+      <button class="nav-item" data-view="flow"><span class="ni-ic">⌖</span><span>Flow &amp; next</span></button>
+      <button class="nav-item" data-view="findings"><span class="ni-ic">⚑</span><span>Findings</span></button>
+      <button class="nav-item" data-view="playbooks"><span class="ni-ic">≣</span><span>Playbooks</span></button>
+      <button class="nav-item" data-view="report"><span class="ni-ic">▤</span><span>Report</span></button>
+    </nav>
+    <div class="rail-foot">
+      <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <header class="topbar">
+      <h1 id="ws-name">obol</h1>
+      <span class="target" id="ws-target">—</span>
+      <span class="spacer"></span>
+      <span class="flash" id="flash">live update ✓</span>
+    </header>
+    <section class="content" id="content"><div class="loading">Loading…</div></section>
+  </main>
+</div>
+<div class="toast-wrap" id="toasts"></div>
+
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

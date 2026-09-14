@@ -16,9 +16,25 @@ from typing import Any
 
 from .board import action_desc, fill_command
 from .facts import Fact, ProofState
-from .graph import build_mermaid
-from .pack import friendly, next_actions
+from .graph import build_graph_model, build_mermaid
+from .pack import friendly, load_packs, next_actions
 from .workspace import Workspace
+
+# Access ladder for the report/web progress meter: each stage plus the fact kinds
+# that count as reaching it. Ordered from foothold to full domain dominance.
+_ACCESS_LADDER: list[tuple[str, tuple[str, ...]]] = [
+    ("Recon", ("host.up", "scan.nmap.quick", "ports.open")),
+    ("Service enum", ("ad.domain_known", "ad.anonymous_bind", "ad.user_list",
+                      "smb.shares", "web.content_map")),
+    ("Credential material", ("hash.asrep", "hash.tgs", "hash.ntlm",
+                             "credential.candidate")),
+    ("Valid credential", ("credential.available", "credential.plaintext",
+                          "credential.ntlm_hash")),
+    ("Foothold", ("foothold.windows", "foothold.linux", "access.shell",
+                  "winrm.authenticated", "foothold.webshell")),
+    ("Privileged access", ("access.admin", "access.system")),
+    ("Domain / loot", ("loot.ntds", "hash.krbtgt", "persistence.domain")),
+]
 
 _SECRET_KEYS = {
     "password",
@@ -302,6 +318,143 @@ def report_status_rows(ws: Workspace) -> list[tuple[str, str]]:
     if default_path.exists():
         rows.insert(1, ("Last generated", str(default_path)))
     return rows
+
+
+def _access_ladder(ws: Workspace) -> list[dict]:
+    """Ordered engagement stages with whether each has been reached — drives the
+    report/web progress meter."""
+    facts = ws.facts
+    return [
+        {"stage": stage, "reached": any(facts.has(k) for k in kinds)}
+        for stage, kinds in _ACCESS_LADDER
+    ]
+
+
+def _category_counts(ws: Workspace) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for fact in ws.facts.facts:
+        if fact.state is not ProofState.SUPPORTED:
+            continue
+        cat = _fact_category(fact.kind)
+        counts[cat] = counts.get(cat, 0) + 1
+    return counts
+
+
+# Canonical severity keys (packs write "informational"; the UI keys on "info").
+_SEVERITY_ALIASES = {"informational": "info", "information": "info", "": "info"}
+
+
+def normalize_severity(value: str) -> str:
+    sev = str(value or "").strip().lower()
+    return _SEVERITY_ALIASES.get(sev, sev)
+
+
+def _severity_counts(ws: Workspace, pack=None) -> dict[str, int]:
+    """Severity tally from the report mappings of actions whose produced facts are
+    now proven — obol's facts carry no severity of their own, so a finding's weight
+    comes from the Orange card that established it. Keys are canonical
+    (critical/high/medium/low/info)."""
+    pack = pack if pack is not None else load_packs()
+    proven = ws.facts.kinds()
+    counts: dict[str, int] = {}
+    for action in pack:
+        if not action.report or not action.produces:
+            continue
+        if not set(action.produces).issubset(proven):
+            continue
+        sev = normalize_severity(action.report.get("severity", ""))
+        counts[sev] = counts.get(sev, 0) + 1
+    return counts
+
+
+def build_report_context(ws: Workspace, *, include_secrets: bool = False,
+                         max_next: int = 8) -> dict:
+    """Structured report data for the web report view.
+
+    A read-only projection of the same workspace state the markdown report is built
+    from (facts, run ledger, lineage) plus the shared graph model — so the HTML
+    report and `obol report` never disagree. Secrets are redacted unless asked.
+    """
+    facts = ws.facts
+    domain = facts.values("ad.domain_known")
+    if facts.has("access.system"):
+        access_state = "SYSTEM access proven"
+    elif facts.has("access.admin"):
+        access_state = "Administrative access proven"
+    elif facts.has("foothold.windows") or facts.has("foothold.linux") or facts.has("access.shell"):
+        access_state = "Foothold proven, privilege not yet proven"
+    else:
+        access_state = "No access proven yet"
+    if facts.has("credential.available"):
+        cred_state = "Validated credential available"
+    elif facts.has("credential.candidate"):
+        cred_state = "Candidate material only"
+    else:
+        cred_state = "No validated credential"
+
+    facts_out: list[dict] = []
+    for fact in sorted(facts.facts, key=_fact_sort_key):
+        facts_out.append({
+            "kind": fact.kind,
+            "label": friendly(fact.kind),
+            "category": _fact_category(fact.kind),
+            "state": fact.state.value,
+            "scope": fact.scope,
+            "value": _redact_value(fact.value, include_secrets=include_secrets),
+            "evidence": _source_for(fact, include_secrets=include_secrets),
+            "at": fact.created_at,
+        })
+
+    timeline: list[dict] = []
+    for index, row in enumerate(ws.runs, 1):
+        timeline.append({
+            "index": index,
+            "tool": row.get("tool", "tool"),
+            "command": redact_command(row.get("command", ""), include_secrets=include_secrets),
+            "status": _run_status(row),
+            "produced": list(row.get("produced") or []),
+            "duration_ms": row.get("duration_ms"),
+            "at": row.get("at"),
+            "at_display": _stamp(row.get("at")),
+            "action_id": row.get("action_id"),
+            "playbook": row.get("playbook"),
+        })
+
+    next_out: list[dict] = []
+    for action in next_actions(facts)[:max_next]:
+        entry = {"id": action.id, "title": action.title, "desc": action_desc(action)}
+        if action.report:
+            entry["report"] = {
+                "finding": action.report.get("finding", ""),
+                "severity": action.report.get("severity", ""),
+            }
+        next_out.append(entry)
+
+    return {
+        "meta": {
+            "name": ws.name,
+            "target": ws.target,
+            "scope": list(ws.scope),
+            "domain": (domain[0].get("name") if domain else "") or "",
+            "generated_at": _stamp(None if not ws.runs else max((r.get("at") or 0) for r in ws.runs)),
+            "include_secrets": include_secrets,
+        },
+        "tiles": {
+            "facts": len([f for f in facts.facts if f.state is ProofState.SUPPORTED]),
+            "ports": len(_open_ports(ws)),
+            "runs": len(ws.runs),
+            "access_state": access_state,
+            "credential_state": cred_state,
+        },
+        "open_ports": _open_ports(ws),
+        "access_ladder": _access_ladder(ws),
+        "category_counts": _category_counts(ws),
+        "severity_counts": _severity_counts(ws),
+        "facts": facts_out,
+        "timeline": timeline,
+        "next_actions": next_out,
+        "graph": build_graph_model(facts),
+    }
 
 
 def build_report(ws: Workspace, *, include_secrets: bool = False, max_next: int = 8) -> str:

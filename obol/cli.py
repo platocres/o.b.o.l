@@ -11,12 +11,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import board
+from . import board, service
 from .facts import Fact
 from .pack import load_packs, next_actions
-from .parsers import parse_action_output
-from .runner import RunnerError, run_command
+from .runner import RunnerError
 from .seed import seed_forest
+from .service import ActionError
 from .workspace import Workspace, find_workspace
 
 
@@ -93,52 +93,33 @@ def cmd_explain(args) -> None:
 
 def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
                 args_extra="", ledger_extra=None):
-    """Shared run -> parse -> record path for `obol run` and playbook steps.
+    """Terminal wrapper over the shared run service (`service.run_action`).
 
-    There is deliberately one runner and one parser and one store: a playbook step
-    is executed exactly the way `obol run` executes an action. Returns
-    (RunResult, added_facts); exits with a clear message on a runner error or a
-    bad command variant.
+    The service is the one runner/parser/store path — the web run-from-site surface
+    calls the same function. Here we only add scrollback output; on a bad command
+    variant or a runner refusal we exit with a clear message.
     """
-    commands = action.commands or [{"tool": action.tool, "run": action.command}]
-    if not 0 <= command_index < len(commands):
-        print(f"action has {len(commands)} command variant(s); cannot run #{command_index + 1}.", file=sys.stderr)
+    try:
+        cmd, _tool = service.build_command(
+            action, ws, command_index=command_index, args_extra=args_extra
+        )
+    except ActionError as exc:
+        print(f"{exc}", file=sys.stderr)
         raise SystemExit(1)
-    command_meta = commands[command_index]
-    cmd = board.fill_command(action, ws, command_index)
-    extra = board.fill_template(args_extra, ws).strip() if args_extra else ""
-    if extra:
-        cmd = f"{cmd} {extra}"
-    tool = command_meta.get("tool") or action.tool or cmd.split()[0]
     print(f"\n$ {cmd}")
     try:
-        result = run_command(
-            ws, command=cmd, tool=tool, timeout=timeout,
-            dry_run=dry_run, allow_shell_tokens=allow_shell,
+        outcome = service.run_action(
+            ws, action,
+            command_index=command_index, timeout=timeout,
+            dry_run=dry_run, allow_shell=allow_shell,
+            args_extra=args_extra, ledger_extra=ledger_extra,
         )
     except RunnerError as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
-    new = [] if result.dry_run else parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd)
-    added = []
-    for fact in new:
-        if ws.facts.add(fact):
-            added.append(fact)
-    ws.record_run(
-        tool, cmd, [f.kind for f in added],
-        action_id=action.id,
-        command_index=command_index + 1,
-        returncode=result.returncode,
-        timed_out=result.timed_out,
-        dry_run=result.dry_run,
-        stdout=str(result.stdout_path),
-        stderr=str(result.stderr_path),
-        duration_ms=result.duration_ms,
-        **(ledger_extra or {}),
-    )
-    ws.save()
-    if result.dry_run:
+    added = outcome.added
+    if outcome.dry_run:
         print("\ndry run only — command was not executed and no facts were ingested.")
     elif added:
         print(f"\n{board.SYM_OK} ingested — new facts:")
@@ -147,7 +128,7 @@ def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
             print(f"   + {f.kind}" + (f"  ({detail})" if detail else ""))
     else:
         print("\n(no new facts parsed — raw output was still saved)")
-    return result, added
+    return outcome.result, added
 
 
 def cmd_run(args) -> None:
@@ -246,8 +227,14 @@ def cmd_scope(args) -> None:
 
 
 def cmd_serve(args) -> None:
-    from . import web
-    web.serve(_load_or_exit(), port=args.port)
+    from . import webapp
+    try:
+        webapp.serve(_load_or_exit(), host=args.host, port=args.port)
+    except SystemExit:
+        raise
+    except OSError as exc:
+        print(f"error: could not bind {args.host}:{args.port} — {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def cmd_web(args) -> None:
@@ -315,11 +302,12 @@ def build_parser() -> argparse.ArgumentParser:
     padd.set_defaults(func=cmd_scope, scope_cmd="add")
     pscope.set_defaults(func=cmd_scope, scope_cmd="list")
 
-    ps = sub.add_parser("serve", help="serve the read-only web view on localhost")
+    ps = sub.add_parser("serve", help="serve the live web surface on localhost (mirrors and drives the workspace)")
+    ps.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1; keep local — the web can launch tools)")
     ps.add_argument("--port", type=int, default=8765)
     ps.set_defaults(func=cmd_serve)
 
-    pw = sub.add_parser("web", help="write the read-only web view to a static HTML file")
+    pw = sub.add_parser("web", help="write a self-contained read-only snapshot to a static HTML file")
     pw.add_argument("--out", help="output path (default .obol/web/index.html)")
     pw.set_defaults(func=cmd_web)
 
