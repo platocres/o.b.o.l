@@ -166,6 +166,51 @@ def render_board(ws: Workspace) -> None:
         print("\nrun: obol run <#>   ·   see the command: obol explain <#>\n")
 
 
+def render_step_command(step, action: Action, ws: Workspace) -> str:
+    """Render a playbook step's command as the runner would build it (no execution).
+
+    Unknown {{tokens}} (e.g. ports not yet scanned) are left visible — they signal
+    the step depends on evidence an earlier step gathers; the runner refuses to run
+    a command that still has an unfilled token.
+    """
+    cmd = fill_command(action, ws, max(0, (getattr(step, "cmd", 1) or 1) - 1))
+    extra = fill_template(step.args_extra, ws).strip() if getattr(step, "args_extra", "") else ""
+    return f"{cmd} {extra}".strip() if extra else cmd
+
+
+def render_playbook(pb, steps, ws: Workspace) -> None:
+    """Plan view for a playbook: the ordered command sequence. Executes nothing.
+
+    Stays within the product's UX guardrails — an ordered plan with the exact
+    commands and a marker for the noisy steps that need `--approve`; no
+    proves/blocked language.
+    """
+    if _RICH:
+        body: list[str] = []
+        if pb.description:
+            body.append(f"[dim]{pb.description}[/dim]\n")
+        for i, (step, action) in enumerate(steps, 1):
+            tag = " [yellow](--approve)[/yellow]" if step.require_approval else ""
+            body.append(f"[bold cyan]{i}.[/bold cyan] {step.label}{tag}  [dim]{action.id}[/dim]")
+            body.append(f"   [cyan]$ {render_step_command(step, action, ws)}[/cyan]")
+            if step.note:
+                body.append(f"   [dim]{step.note}[/dim]")
+        _console.print(Panel("\n".join(body), title=f"playbook · {pb.title}", border_style="cyan"))
+        _console.print(f"[dim]run a step:[/dim] obol playbook {pb.name} --step <n>   "
+                       f"[dim](steps marked (--approve) need it)[/dim]")
+    else:
+        print(f"\n== playbook · {pb.title} ==")
+        if pb.description:
+            print(f"  {pb.description}")
+        for i, (step, action) in enumerate(steps, 1):
+            tag = "  (--approve)" if step.require_approval else ""
+            print(f"\n  {i}. {step.label}{tag}   [{action.id}]")
+            print(f"     $ {render_step_command(step, action, ws)}")
+            if step.note:
+                print(f"     {step.note}")
+        print(f"\nrun a step: obol playbook {pb.name} --step <n>   ·   noisy steps need --approve\n")
+
+
 def render_command(action: Action, ws: Workspace) -> None:
     """`explain` — the full Orange card: reasoning, every command variant, refs."""
     ctx = command_context(ws)

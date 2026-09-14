@@ -14,6 +14,13 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
   dry-run, raw output capture under `.obol/runs/`, nmap-first TCP discovery,
   targeted `-Pn -sC -sV` follow-up from parsed ports, generic nmap/nxc/LDAP/AS-REP
   parsers, and key findings in the read-only web view.
+- **OSCP report generation** (item 4): `obol report` narrated from the run ledger,
+  facts, and evidence lineage, with secret redaction by default.
+- **Playbooks — terminal slice** (item 5, first piece): named, ordered sequences of
+  pack actions as data (`obol/playbooks/*.json`), run through the same
+  runner/parser/store via `obol playbooks` / `obol playbook <name>[ --step N]`, with
+  per-step `require_approval` gating. First playbook: `ad-recon`. Web
+  run-from-site and the playbook path-map view are still pending under item 5.
 
 ## 1. Expand parser coverage and service-specific playbooks (TOP PRIORITY)
 
@@ -79,11 +86,13 @@ scope-enforced runner + parsers + `.obol` store as the terminal.
   localhost-bound; never expose execution off-box. Do not add a second runner or
   a second state store.
 - **Playbooks (both surfaces).** A playbook is a named, ordered list of steps,
-  each `{label, action/tool, args_extra?, require_approval?}`, stored as data
+  each `{label, action_id, cmd?, args_extra?, require_approval?}`, stored as data
   alongside packs. Run live or dry-run; pause for approval before noisy/risky
-  steps; propagate creds from workspace facts. Pentest Companion's
-  `tools/playbook_engine.py` is the reference (learn, don't copy). Playbooks get
-  a useful batch of evidence back in one move and present it neatly.
+  steps; creds propagate from workspace facts via the shared command context.
+  Pentest Companion's `tools/playbook_engine.py` is the reference (learn, don't
+  copy). Playbooks get a useful batch of evidence back in one move and present it
+  neatly. **The terminal side has landed** (`obol/playbook.py`, `ad-recon`); the
+  web still needs to render the plan and run steps once run-from-site exists.
 - **Path-map redesign.** Keep the map (users like it) but make it clearer. The
   current `graph.py` is a light top-down declutter (path walked + live moves, no
   blocked branches). The reference for "much more straightforward" is the prior

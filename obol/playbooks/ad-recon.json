@@ -1,0 +1,33 @@
+{
+  "name": "ad-recon",
+  "title": "AD Initial Recon",
+  "description": "The opening evidence sweep for a domain-joined target: nmap discovery through anonymous AD enumeration. Each step runs through the same scope-enforced runner and parser as `obol run`.",
+  "steps": [
+    {
+      "label": "Fast TCP open-port discovery",
+      "action_id": "nmap-fast-open-ports",
+      "note": "All TCP ports at a high rate; establishes the live host and open ports."
+    },
+    {
+      "label": "Targeted service and default-script scan",
+      "action_id": "nmap-version-scripts",
+      "note": "Fingerprints the discovered ports so AD service moves unlock. Runs after step 1 fills the port list."
+    },
+    {
+      "label": "Identify the domain controller and domain",
+      "action_id": "ad-dc-identify",
+      "note": "NetExec LDAP smoke test: DC candidate, domain name, and base DN."
+    },
+    {
+      "label": "Anonymous LDAP enumeration",
+      "action_id": "ad-anon-ldap-enum",
+      "note": "Unauthenticated bind for the domain user list."
+    },
+    {
+      "label": "SMB / RID user enumeration",
+      "action_id": "ad-user-enum",
+      "require_approval": true,
+      "note": "Guest RID brute-force — the noisiest recon step; use when anonymous LDAP is thin."
+    }
+  ]
+}

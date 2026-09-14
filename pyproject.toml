@@ -21,4 +21,4 @@ obol = "obol.cli:main"
 packages = ["obol"]
 
 [tool.setuptools.package-data]
-obol = ["packs/*.json", "packs/*.md"]
+obol = ["packs/*.json", "packs/*.md", "playbooks/*.json", "playbooks/*.md"]
