@@ -738,8 +738,7 @@ def create_app(base, *, token: Optional[str] = None):
         except ActionError as exc:
             raise HTTPException(404, str(exc))
 
-    # ── evidence
- ─────────────────────────────────────────────────────────────
+    # ── evidence ─────────────────────────────────────────────────────────────
     @app.post("/api/target/evidence")
     async def api_add_evidence(target: str = Form(...), file: UploadFile = File(...),
                                phase: str = Form(""), caption: str = Form("")):
