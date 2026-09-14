@@ -1,31 +1,33 @@
 # Next build queue after OSCP report v1
 
-## Current build addition: live web run feedback + target fact memory
+## Shipped: live web feedback, facts, composer, and Quick Start
 
-Point-and-click execution should not feel like a black box. When the web launches
-an action or playbook step, the target page should immediately show a run-result
-panel with:
+PR #17 shipped point-and-click run feedback and the target **Useful facts** memory
+panel. PR #18 shipped the command composer/preflight layer plus a visible
+per-target **Quick Start** button that runs nmap first and then safe service-aware
+enumeration, including nxc-first AD/SMB checks.
 
-- running / dry-run / success / failed / timeout status;
-- the exact redacted command that was attempted;
-- return code, duration, and raw evidence paths;
-- every new fact parsed and stored from the command output;
-- a small stdout/stderr preview when a command fails or produces no parsed facts.
+## Current build: Quick Start Orchestrator + Parser Expansion v1
 
-Each target overview should also show a grouped **Useful facts** memory panel built
-from the same fact store: target state, ports/services, directory/domain context,
-credentials and hashes, access, web leads, and loot/review material. This is both
-operator working memory and report source material. It must update via the existing
-SSE state refresh, with no manual page refresh and no second state store.
+Quick Start should feel alive, not like one long blocking request. This build turns
+Quick Start into a background job with a live step timeline:
 
-The next larger build is now the **Command Composer + Run Preflight v1** plus a
-per-target **Quick Start** runner: structured inputs for command tokens,
-parser-support indicators, missing-tool warnings, missing-variable warnings,
-approval gates, copy/manual-handoff controls, run buttons only when the rendered
-command is actually runnable, and a visible starter button that runs nmap first
-then safe service-aware enumeration.
+- start immediately and return a job id;
+- show queued / running / success / failed / skipped / blocked for each step;
+- show the exact command for each running/completed step;
+- show facts parsed and stored per step and in the aggregate result;
+- tick the existing SSE stream when job state changes so the page updates without
+  refresh;
+- bind the job to the engagement it started in, even if the operator changes the
+  active engagement later.
 
-This queue exists so agents do not drift after the report build lands.
+Parser expansion for this build focuses on the safe baseline tools Quick Start
+runs: nmap service/script output, nxc SMB/LDAP banners and shares, ldapsearch
+naming contexts/users, ffuf/feroxbuster/gobuster/dirb web paths, vhost hits, and
+nikto candidate leads. These facts must remain proof-bound: no exploit, credential,
+admin, or foothold fact is created from basic enumeration output.
+
+This queue exists so agents do not drift after each build lands.
 
 ## 1. Playbook data model and dry-run runner — DONE
 
