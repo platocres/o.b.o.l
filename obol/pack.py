@@ -88,6 +88,12 @@ class Action:
 # friendly fact-kind phrasing (blocked reasons, board)                         #
 # --------------------------------------------------------------------------- #
 _FRIENDLY = {
+    "target.configured": "a configured target",
+    "host.up": "a live host",
+    "ports.open": "open ports",
+    "scan.nmap.quick": "a quick nmap open-port scan",
+    "scan.nmap.version": "an nmap service/version scan",
+    "scan.nmap.udp": "an nmap UDP scan",
     "ad.dc_candidate": "a domain-controller candidate", "ad.domain_known": "the domain",
     "ad.base_dn": "the LDAP base DN", "ad.user_list": "a domain user list",
     "ad.anonymous_bind": "anonymous LDAP bind", "ad.graph.collected": "the AD graph",
@@ -106,6 +112,7 @@ _FRIENDLY = {
     "persistence.domain": "domain persistence", "enum.deep": "deep enumeration",
     "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",
     "config.review": "config review", "lateral.movement": "lateral movement",
+    "http.reachable": "HTTP is reachable", "winrm.reachable": "WinRM is reachable",
 }
 
 
@@ -114,6 +121,8 @@ def friendly(kind: str) -> str:
         return _FRIENDLY[kind]
     if kind.startswith("port:"):
         return f"port {kind.split(':', 1)[1]} open"
+    if kind.startswith("service."):
+        return f"{kind.split('.', 1)[1]} service evidence"
     return kind
 
 

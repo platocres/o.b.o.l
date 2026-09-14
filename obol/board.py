@@ -32,7 +32,10 @@ except Exception:                   # pragma: no cover
 # --------------------------------------------------------------------------- #
 def command_context(ws: Workspace) -> dict:
     f = ws.facts
-    ctx = {"target": ws.target or "<target>"}
+    ctx = {"target": ws.target or "<target>", **ws.inputs}
+    ports = _open_ports(f)
+    if ports:
+        ctx["nmap_ports"] = ",".join(str(p) for p in ports)
     dom = f.values("ad.domain_known")
     if dom and dom[0].get("name"):
         name = dom[0]["name"]
@@ -46,12 +49,20 @@ def command_context(ws: Workspace) -> dict:
     return ctx
 
 
-def fill_command(action: Action, ws: Workspace) -> str:
+def fill_template(text: str, ws: Workspace) -> str:
     """Substitute known {{tokens}}; leave operator-supplied placeholders visible."""
-    cmd = action.command
+    cmd = text
     for key, val in command_context(ws).items():
         cmd = cmd.replace("{{" + key + "}}", str(val))
     return cmd
+
+
+def fill_command(action: Action, ws: Workspace, command_index: int = 0) -> str:
+    """Fill command variant N (zero-based); default to the action's primary command."""
+    commands = action.commands or [{"run": action.command}]
+    if not 0 <= command_index < len(commands):
+        raise IndexError("command variant out of range")
+    return fill_template(commands[command_index].get("run", action.command), ws)
 
 
 # --------------------------------------------------------------------------- #
@@ -59,6 +70,8 @@ def fill_command(action: Action, ws: Workspace) -> str:
 # --------------------------------------------------------------------------- #
 _NOTABLE = [
     ("host.up", "host    up"),
+    ("scan.nmap.quick", "scan    quick nmap complete"),
+    ("scan.nmap.version", "scan    version/script nmap complete"),
     ("ad.domain_known", "domain  known"),
     ("ad.anonymous_bind", "ad      anonymous LDAP bind allowed"),
     ("ad.user_list", "ad      domain user list obtained"),
@@ -75,6 +88,17 @@ _NOTABLE = [
 ]
 
 
+def _open_ports(facts: FactSet) -> list[int]:
+    ports: set[int] = set()
+    for fact in facts.facts:
+        if fact.kind.startswith("port:"):
+            try:
+                ports.add(int(fact.kind.split(":", 1)[1]))
+            except ValueError:
+                continue
+    return sorted(ports)
+
+
 def _proven_lines(facts: FactSet) -> list[str]:
     lines: list[str] = []
     for kind, label in _NOTABLE:
@@ -87,6 +111,12 @@ def _proven_lines(facts: FactSet) -> list[str]:
                 nm = (facts.values(kind)[0] or {}).get("name", "")
                 extra = f": {nm}" if nm else ""
             lines.append(label + extra)
+    ports = _open_ports(facts)
+    if ports:
+        shown = ", ".join(str(p) for p in ports[:18])
+        if len(ports) > 18:
+            shown += f", +{len(ports) - 18} more"
+        lines.append(f"ports   open: {shown}")
     if not (facts.has("credential.available") or facts.has("access.admin") or facts.has("access.system")):
         lines.append("——  no validated credential or privileged access  ——")
     return lines
@@ -130,7 +160,6 @@ def render_board(ws: Workspace) -> None:
 
 def render_command(action: Action, ws: Workspace) -> None:
     """`explain` — the full Orange card: reasoning, every command variant, refs."""
-    primary = fill_command(action, ws)
     ctx = command_context(ws)
 
     def _fill(run: str) -> str:
@@ -143,8 +172,8 @@ def render_command(action: Action, ws: Workspace) -> None:
         body.append(f"[green]proves:[/green]   {action.proves}")
         body.append(f"[yellow]does NOT:[/yellow] {action.does_not_prove}\n")
         body.append("[bold]commands[/bold] (you run these):")
-        for c in action.commands:
-            body.append(f"  [cyan]${_fill(c['run'])}[/cyan]")
+        for i, c in enumerate(action.commands, 1):
+            body.append(f"  [bold cyan]{i}.[/bold cyan] [cyan]${_fill(c['run'])}[/cyan]")
             if c.get("note"):
                 body.append(f"    [dim]{c['note']}[/dim]")
         if action.refs:
@@ -159,8 +188,8 @@ def render_command(action: Action, ws: Workspace) -> None:
         print(f"  proves:   {action.proves}")
         print(f"  does NOT: {action.does_not_prove}")
         print("  commands:")
-        for c in action.commands:
-            print(f"    $ {_fill(c['run'])}")
+        for i, c in enumerate(action.commands, 1):
+            print(f"    {i}. $ {_fill(c['run'])}")
             if c.get("note"):
                 print(f"        {c['note']}")
         if action.refs:

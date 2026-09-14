@@ -35,6 +35,7 @@ _TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><h1>obol <small>· {name} · {target}</small></h1></header>
 <main>
+  <section><h2>Key findings</h2><table>{finding_rows}</table></section>
   <section><h2>Path</h2><div class="graph"><pre class="mermaid">{mermaid}</pre></div></section>
   <section><h2>Proven facts</h2><table>{facts_rows}</table></section>
   <section><h2>Next actions</h2><table>{next_rows}</table></section>
@@ -43,6 +44,67 @@ _TEMPLATE = """<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
 </body></html>"""
+
+
+def _open_ports(ws: Workspace) -> list[tuple[int, str, str]]:
+    rows: list[tuple[int, str, str]] = []
+    for fact in ws.facts.facts:
+        if not fact.kind.startswith("port:"):
+            continue
+        try:
+            port = int(fact.kind.split(":", 1)[1])
+        except ValueError:
+            continue
+        protocol = fact.value.get("protocol", "tcp")
+        service = fact.value.get("service", "")
+        rows.append((port, protocol, service))
+    return sorted(set(rows))
+
+
+def _key_findings(ws: Workspace) -> str:
+    rows: list[tuple[str, str]] = []
+    ports = _open_ports(ws)
+    if ports:
+        rendered = ", ".join(
+            f"{port}/{proto}" + (f" {service}" if service else "")
+            for port, proto, service in ports[:24]
+        )
+        if len(ports) > 24:
+            rendered += f", +{len(ports) - 24} more"
+        rows.append(("Open ports", rendered))
+    else:
+        rows.append(("Open ports", "none parsed yet"))
+
+    domain = ws.facts.values("ad.domain_known")
+    if domain and domain[0].get("name"):
+        rows.append(("Domain", domain[0]["name"]))
+
+    if ws.facts.has("credential.available"):
+        rows.append(("Credential state", "validated credential available"))
+    elif ws.facts.has("credential.candidate"):
+        rows.append(("Credential state", "candidate material only, not validated"))
+    else:
+        rows.append(("Credential state", "no validated credential"))
+
+    if ws.facts.has("access.admin") or ws.facts.has("access.system"):
+        rows.append(("Access state", "privileged access proven"))
+    elif ws.facts.has("foothold.windows"):
+        rows.append(("Access state", "foothold proven, privilege not proven"))
+    else:
+        rows.append(("Access state", "no access proven"))
+
+    next_up = next_actions(ws.facts)
+    if next_up:
+        rows.append(("Recommended next", next_up[0].title))
+
+    if ws.runs:
+        last = ws.runs[-1]
+        rows.append(("Last run", f"{last.get('tool', '')}: {last.get('command', '')}"))
+
+    return "".join(
+        f"<tr><td class='kind'>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>"
+        for label, value in rows
+    )
 
 
 def build_page(ws: Workspace) -> str:
@@ -69,6 +131,7 @@ def build_page(ws: Workspace) -> str:
     return _TEMPLATE.format(
         name=html.escape(ws.name), target=html.escape(ws.target),
         mermaid=html.escape(build_mermaid(facts)),
+        finding_rows=_key_findings(ws),
         facts_rows=fact_rows, next_rows=next_rows, blocked_rows=blocked_rows,
     )
 

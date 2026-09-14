@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from .facts import Fact, FactSet
+from .scope import normalize_target
 
 STATE_DIR = ".obol"
 
@@ -21,6 +22,8 @@ class Workspace:
         self.dir = self.root / STATE_DIR
         self.name: str = self.root.name
         self.target: str = ""
+        self.scope: list[str] = []
+        self.inputs: dict[str, str] = {}
         self.facts = FactSet()
         self.runs: list[dict] = []   # activity ledger: what was run, in order (report lineage)
 
@@ -28,6 +31,10 @@ class Workspace:
     @property
     def state_file(self) -> Path:
         return self.dir / "state.json"
+
+    @property
+    def runs_dir(self) -> Path:
+        return self.dir / "runs"
 
     def exists(self) -> bool:
         return self.state_file.exists()
@@ -37,6 +44,8 @@ class Workspace:
             data = json.loads(self.state_file.read_text())
             self.name = data.get("name", self.name)
             self.target = data.get("target", "")
+            self.scope = list(data.get("scope", []))
+            self.inputs = dict(data.get("inputs", {}))
             self.facts = FactSet([Fact.from_json(f) for f in data.get("facts", [])])
             self.runs = data.get("runs", [])
         return self
@@ -46,20 +55,34 @@ class Workspace:
         payload = {
             "name": self.name,
             "target": self.target,
+            "scope": self.scope,
+            "inputs": self.inputs,
             "facts": [f.to_json() for f in self.facts.facts],
             "runs": self.runs,
         }
         self.state_file.write_text(json.dumps(payload, indent=2))
 
+    # ---- scope / operator inputs --------------------------------------------
+    def add_scope(self, value: str) -> str:
+        target = normalize_target(value) if "/" not in str(value) else str(value).strip()
+        if target and target not in self.scope:
+            self.scope.append(target)
+        return target
+
+    def set_input(self, key: str, value: str) -> None:
+        self.inputs[str(key)] = str(value)
+
     # ---- activity ledger -----------------------------------------------------
-    def record_run(self, tool: str, command: str, produced: list[str]) -> None:
+    def record_run(self, tool: str, command: str, produced: list[str], **extra) -> None:
         """Append a run to the ledger. This is what the OSCP report is built from."""
-        self.runs.append({
+        row = {
             "tool": tool,
             "command": command,
             "produced": produced,
             "at": time.time(),
-        })
+        }
+        row.update(extra)
+        self.runs.append(row)
 
 
 def find_workspace(start: Path | None = None) -> Workspace | None:

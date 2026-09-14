@@ -42,6 +42,14 @@ function priority(produces) {
     if (produces.some((p) => kinds.includes(p))) best = Math.max(best, w);
   return best;
 }
+function actionPriority(id, produces) {
+  const override = {
+    "ad-dc-identify": 96,
+    "ad-anon-ldap-enum": 94,
+    "ad-user-enum": 92,
+  };
+  return override[id] || priority(produces);
+}
 
 // Conservative "does not prove" ceiling, derived from what the action produces.
 function doesNotProve(produces) {
@@ -66,6 +74,10 @@ function doesNotProve(produces) {
 }
 
 const FRIENDLY = {
+  "host.up": "a live host", "ports.open": "open ports",
+  "scan.nmap.quick": "a quick nmap open-port scan",
+  "scan.nmap.version": "an nmap service/version scan",
+  "scan.nmap.udp": "an nmap UDP scan",
   "ad.dc_candidate": "a domain-controller candidate", "ad.domain_known": "the domain",
   "ad.base_dn": "the LDAP base DN", "ad.user_list": "a domain user list",
   "ad.anonymous_bind": "anonymous LDAP bind", "ad.graph.collected": "the AD graph",
@@ -83,11 +95,131 @@ const FRIENDLY = {
 };
 const friendly = (k) => FRIENDLY[k] || k;
 
+function nmapPreludeActions() {
+  return [
+    {
+      id: "nmap-fast-open-ports",
+      title: "Nmap Fast TCP Open-Port Discovery",
+      hypothesis: "Start every run by finding the exposed TCP surface. A quick all-port scan gives obol real port evidence, keeps the first move cheap, and prevents service tools from firing just because a methodology card exists.",
+      tool: "nmap",
+      tools: ["nmap"],
+      os: ["linux", "windows"],
+      requires_all: ["target.configured"],
+      requires_any: [],
+      produces: ["host.up", "scan.nmap.quick", "ports.open"],
+      priority: 100,
+      proves: "establishes a live host, quick nmap open-port scan, open ports",
+      does_not_prove: "open ports only - not service identity, vulnerability, access, credential, or privilege",
+      report: { finding: "Initial TCP Attack Surface Identified", severity: "informational" },
+      refs: [],
+      commands: [
+        {
+          tool: "nmap",
+          run: "nmap -Pn -p- --min-rate 5000 --open -oN nmap-allports.txt {{target}}",
+          note: "PREFERRED: fast all-TCP-port discovery. Use this first in labs so every later recommendation is grounded in actual open ports.",
+        },
+        {
+          tool: "nmap",
+          run: "nmap -Pn --top-ports 1000 --open -oN nmap-top1000.txt {{target}}",
+          note: "Quieter and often enough for a first look, but it can miss services hiding outside the common ports.",
+        },
+        {
+          tool: "nmap",
+          run: "nmap -Pn -F --open -oN nmap-fast.txt {{target}}",
+          note: "Very fast triage. Good when you need movement immediately, not a replacement for the all-port pass.",
+        },
+      ],
+    },
+    {
+      id: "nmap-version-scripts",
+      title: "Nmap Targeted Service and Default Script Scan",
+      hypothesis: "Once open ports are known, run a focused -sC -sV scan only against those ports. This turns port numbers into service evidence and unlocks the right follow-up tools: LDAP ports should lead to nxc ldap and ldapsearch, SMB to nxc smb, HTTP to web enumeration, and so on.",
+      tool: "nmap",
+      tools: ["nmap"],
+      os: ["linux", "windows"],
+      requires_all: ["scan.nmap.quick", "ports.open"],
+      requires_any: [],
+      produces: ["scan.nmap.version"],
+      priority: 98,
+      proves: "establishes nmap service/version evidence for the discovered open ports",
+      does_not_prove: "service fingerprints only - not vulnerability, access, credential, or privilege",
+      report: { finding: "Service Fingerprinting Completed", severity: "informational" },
+      refs: [],
+      commands: [
+        {
+          tool: "nmap",
+          run: "nmap -Pn -sC -sV -p {{nmap_ports}} -oN nmap-version.txt {{target}}",
+          note: "PREFERRED: default scripts plus service versions against only the ports already found open. This is the scan that should fan out into service-specific tool runs.",
+        },
+        {
+          tool: "nmap",
+          run: "nmap -Pn -sV --version-all -p {{nmap_ports}} -oN nmap-version-all.txt {{target}}",
+          note: "Heavier service fingerprinting when the normal -sV answer is vague or wrong.",
+        },
+        {
+          tool: "nmap",
+          run: "nmap -Pn -A -p {{nmap_ports}} -oN nmap-aggressive.txt {{target}}",
+          note: "Aggressive follow-up. Useful in labs, but louder: OS detection, scripts, version detection, and traceroute.",
+        },
+      ],
+    },
+    {
+      id: "nmap-udp-top",
+      title: "Nmap Focused UDP Check",
+      hypothesis: "UDP is slow, noisy, and easy to overdo, but a focused pass can reveal DNS, SNMP, Kerberos, NTP, TFTP, and other services that change the path. Run it after the TCP spine is established or when TCP is sparse.",
+      tool: "nmap",
+      tools: ["nmap"],
+      os: ["linux", "windows"],
+      requires_all: ["host.up"],
+      requires_any: [],
+      produces: ["scan.nmap.udp"],
+      priority: 35,
+      proves: "establishes focused UDP scan evidence",
+      does_not_prove: "UDP exposure only - not service exploitability, access, credential, or privilege",
+      report: { finding: "Focused UDP Surface Checked", severity: "informational" },
+      refs: [],
+      commands: [
+        {
+          tool: "nmap",
+          run: "sudo nmap -Pn -sU --top-ports 20 --open -oN nmap-udp-top20.txt {{target}}",
+          note: "Practical UDP starter. It needs privileges and may take a while, but it catches the UDP services most likely to matter.",
+        },
+        {
+          tool: "nmap",
+          run: "sudo nmap -Pn -sU -p 53,67,68,69,88,123,137,138,161,162,500,514,520,1900,4500 --open -oN nmap-udp-common.txt {{target}}",
+          note: "Targeted UDP list for DNS, DHCP, TFTP, Kerberos, NTP, NetBIOS, SNMP, VPN, syslog, routing, UPnP, and IPsec.",
+        },
+      ],
+    },
+  ];
+}
+
 const actions = ad.cards.map((c) => {
-  const produces = c.produces || [];
-  const cmds = (c.commands || []).map((cmd) => ({
+  let produces = c.produces || [];
+  if (c.id === "ad-dc-identify")
+    produces = ["ad.dc_candidate", "ad.domain_known", "ad.base_dn", "ldap.reachable"];
+  let sourceCommands = c.commands || [];
+  if (c.id === "ad-dc-identify") {
+    sourceCommands = [
+      {
+        tool: "nxc",
+        run: "nxc ldap {{target}} -u '' -p ''",
+        note: "PREFERRED: NetExec LDAP smoke test. Confirms LDAP reachability and usually discloses hostname/domain context without committing to deeper enumeration yet.",
+      },
+      ...sourceCommands,
+    ];
+  }
+  const cmds = sourceCommands.map((cmd) => ({
     tool: cmd.tool || "", run: cmd.run || "", note: cmd.note || "",
   }));
+  const requiresAll = ((c.prereq && c.prereq.all) || []).slice();
+  let requiresAny = ((c.prereq && c.prereq.any) || []).slice();
+  if (c.id === "asrep-roast" && !requiresAny.includes("ad.dc_candidate"))
+    requiresAny.splice(1, 0, "ad.dc_candidate");
+  if (["nxc-arsenal", "kerberos-tickets"].includes(c.id) && !requiresAll.includes("credential.available"))
+    requiresAll.push("credential.available");
+  if (c.id === "nxc-arsenal")
+    requiresAny = requiresAny.filter((kind) => kind !== "credential.available");
   return {
     id: c.id,
     title: c.title,
@@ -95,10 +227,10 @@ const actions = ad.cards.map((c) => {
     tool: (c.tools && c.tools[0]) || (cmds[0] && cmds[0].tool) || "",
     tools: c.tools || [],
     os: c.os || [],
-    requires_all: (c.prereq && c.prereq.all) || [],
-    requires_any: (c.prereq && c.prereq.any) || [],
+    requires_all: requiresAll,
+    requires_any: requiresAny,
     produces,
-    priority: priority(produces),
+    priority: actionPriority(c.id, produces),
     proves: produces.length ? "establishes " + produces.map(friendly).join(", ") : "",
     does_not_prove: doesNotProve(produces),
     report: c.report || null,
@@ -113,6 +245,6 @@ process.stdout.write(JSON.stringify({
   source: "Orange Cyberdefense ocd-mindmaps AD 2025.03",
   upstream_commit: "6d16ca0d1434875e0617f2f3cfa825fad0bc7d7e",
   license: "GPL-3.0 (methodology data); see obol/packs/NOTICE.md",
-  actions,
+  actions: [...nmapPreludeActions(), ...actions],
 }, null, 1) + "\n");
-console.error(`converted ${actions.length} AD actions`);
+console.error(`converted ${actions.length} AD actions plus ${nmapPreludeActions().length} nmap prelude actions`);

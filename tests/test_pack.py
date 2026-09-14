@@ -17,9 +17,17 @@ from obol.workspace import Workspace
 
 def test_pack_loads_all_ad_actions():
     pack = load_pack()
-    assert len(pack) == 30
+    assert len(pack) == 33
     ids = {a.id for a in pack}
-    assert {"ad-anon-ldap-enum", "asrep-roast", "kerberoast", "dcsync", "bloodhound-collect"} <= ids
+    assert {
+        "nmap-fast-open-ports",
+        "nmap-version-scripts",
+        "ad-anon-ldap-enum",
+        "asrep-roast",
+        "kerberoast",
+        "dcsync",
+        "bloodhound-collect",
+    } <= ids
 
 
 def test_every_action_has_a_proof_boundary():
