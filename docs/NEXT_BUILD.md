@@ -1,5 +1,17 @@
 # Next build queue after OSCP report v1
 
+## Shipped: SQLite store, live SSE deltas, morphdom UI, debug package
+
+An architecture pass replaced the single `state.json` with a SQLite store
+(`obol/store.py`, `.obol/state.db`) so the terminal and web can both write the same
+engagement without clobbering (WAL + idempotent, targeted writes); `state.json`
+stays as the export/report/snapshot/migration format. The web SSE endpoint now tails
+the store's `events` change feed and pushes *what changed*, and the SPA patches the
+DOM with vendored **morphdom** through one delegated `data-act` handler (no full
+re-render, no build step). New `obol debug package` / `obol debug capture` bundle a
+review `.zip` for AI-agent review, including terminal + site PNG screenshots when a
+headless browser is present. See `docs/ARCHITECTURE.md` and `docs/DEBUG.md`.
+
 ## Shipped: live web feedback, facts, composer, and Quick Start
 
 PR #17 shipped point-and-click run feedback and the target **Useful facts** memory

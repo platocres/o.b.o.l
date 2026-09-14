@@ -35,6 +35,7 @@ obol playbooks                  # named, ordered action sequences (e.g. AD initi
 obol playbook ad-recon          # show the command plan; --step N runs one step
 obol report                     # OSCP-style markdown report from the evidence ledger
 obol serve                      # live web console on localhost (mirrors AND drives it)
+obol debug package              # bundle a review .zip (state, evidence, screenshots)
 
 # still supported: a single-directory engagement, no library
 obol init --demo                # seed a workspace here (HTB Forest, post-nmap)
@@ -72,7 +73,9 @@ surface that drives the *same* store as the terminal, not a separate app:
   id + target, so the server fills the command from that target's facts and secrets
   never reach the browser. Noisy steps still require approval.
 - **Real-time** — every page updates the instant the store changes, whether from the
-  web or a terminal `obol run` (Server-Sent Events).
+  web or a terminal `obol run`: the server streams *what changed* over Server-Sent
+  Events (from the store's change feed), and the browser patches just the affected
+  DOM with morphdom — no full-page reload, so scroll, focus, and charts stay put.
 - **Report** — the OSCP report as the primary report interface: per-target findings
   and embedded screenshots roll up into one document, with a Markdown download and a
   secrets-redaction toggle.
@@ -84,13 +87,21 @@ under `$OBOL_HOME` (default `~/.obol`).
 ## Design: one state, synced surfaces
 
 ```
-        fact / evidence store  (.obol/state.json — single source of truth)
-        ▲ writes  ▲ writes          │ reads
-   terminal loop   web surface       OSCP report / web report
-   (obol run …)    (run from site)   (narrated from the ledger)
+        fact / evidence store  (.obol/state.db — SQLite, single source of truth)
+        ▲ writes  ▲ writes          │ reads          │ change feed (events)
+   terminal loop   web surface       OSCP report /     web SSE → live UI
+   (obol run …)    (run from site)   web report        (payload deltas)
         └──────────┴─ one scope-enforced runner · parser · store ─┘
 ```
 
+The store is SQLite because the terminal and the web are *separate processes*
+writing the same engagement: WAL + targeted, idempotent writes let both land
+without clobbering each other, and an append-only `events` table is the change feed
+the web streams over SSE. `state.json` stays as the export/report/snapshot format.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+- **One store, no clobbering.** `.obol/state.db` (SQLite) is the single source of
+  truth; the terminal loop and the web surface both write it as separate processes.
 - **The fact layer is the point.** Nothing is "true" unless a `Fact` records it,
   scoped to exactly what the evidence supports, with a `ProofState`
   (`supported` / `refuted` / `inconclusive`) and the command that produced it.
@@ -152,10 +163,11 @@ pip install --user ".[all]"
 pip install -e ".[all]"
 ```
 
-Extras: `rich` (nicer terminal output), `web` (the `obol serve` web surface), and
-`all` (both). The terminal core has no hard dependencies, so `pip install .`
-also works and degrades to clean plain text; `pip install ".[web]"` adds the web
-console.
+Extras: `rich` (nicer terminal output), `web` (the `obol serve` web surface),
+`debug` (Playwright, for PNG screenshots in `obol debug package` — a system chromium
+also works, and it degrades to text-only), and `all` (rich + web). The terminal core
+has no hard dependencies, so `pip install .` also works and degrades to clean plain
+text; `pip install ".[web]"` adds the web console.
 
 ### Try it in 20 seconds
 

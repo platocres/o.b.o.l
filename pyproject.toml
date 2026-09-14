@@ -15,6 +15,10 @@ dependencies = []
 rich = ["rich>=13"]
 # python-multipart backs the web surface's file uploads (evidence + BloodHound)
 web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+# debug packages can render PNG screenshots of the console/terminal; playwright is
+# optional — obol also drives a system chromium, and degrades to text-only if neither
+# is present.
+debug = ["playwright>=1.40"]
 # convenience: everything an operator typically wants
 all = ["rich>=13", "fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 # extras needed to run the test suite (the web tests use FastAPI's TestClient)

@@ -4,6 +4,13 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
 
 ## Done
 
+- **Architecture: SQLite store + live SSE deltas + morphdom UI + debug package.**
+  The durable store is SQLite (`obol/store.py`, `.obol/state.db`) so the terminal and
+  web can both write without clobbering; the web SSE loop tails an `events` change
+  feed and the browser patches the DOM with morphdom via delegated handlers; and
+  `obol debug package` / `obol debug capture` bundle a review `.zip` (state, events,
+  facts, ledger + raw output, report, tools/env, terminal renders, site snapshot, and
+  optional screenshots). See `docs/ARCHITECTURE.md` and `docs/DEBUG.md`.
 - **Vertical slice** (PR #1's base): fact model, planner, terminal board, read-only
   web view + mermaid path graph, `explain`, tests.
 - **Multi-target engagement platform:** an app-managed engagement library
@@ -107,8 +114,11 @@ parsers + `.obol` store as the terminal, via the shared `obol/service.py`.
   action id; the server fills the command from workspace facts and runs it through
   `service.run_action` (same runner/parser/store), so both surfaces reflect it.
   Secrets never travel to the browser. Localhost-bound + per-start access token.
-- **Real-time — DONE.** `/api/events` (SSE) watches the state file and pushes a tick
-  on any change — web- OR terminal-launched — so every open page refreshes itself.
+- **Real-time — DONE.** `/api/events` (SSE) tails the store's `events` change feed and
+  pushes *what changed* (new facts/runs/targets) — web- OR terminal-launched — as a
+  JSON payload. The browser patches only the affected DOM with morphdom (vendored, no
+  build step) via one delegated `data-act` handler, so a live refresh keeps scroll,
+  focus, and charts. See `docs/ARCHITECTURE.md`.
 - **Playbooks (both surfaces) — DONE.** The web renders each playbook's plan and
   runs steps through the shared service, with the same `require_approval` gate
   (a confirm on the web, a 409 from the API without approval).
@@ -146,6 +156,9 @@ blocked/proof panels in `board.py` or `web.py`.
   path graph is blank offline. The live `obol serve` surface is fully offline
   (vendored Chart.js, SVG flow chart); porting the static snapshot onto
   `build_graph_model`'s SVG renderer would close the gap.
-- The web surface loads the whole `.obol/state.json` per request — fine for a single
-  box / the exam, but see the state-model note before scaling to large multi-host
-  engagements (flat fact list, whole-file rewrites, single-target shape).
+- ~~The web surface loads the whole `.obol/state.json` per request (flat fact list,
+  whole-file rewrites, single-target shape).~~ **DONE.** The store is now SQLite
+  (`.obol/state.db`, `obol/store.py`): WAL, idempotent/targeted writes so the
+  terminal and web can both write without clobbering, indexed fact queries, and an
+  `events` change feed the web SSE loop tails to push payload deltas. `state.json`
+  remains the export/report/snapshot/migration format. See `docs/ARCHITECTURE.md`.

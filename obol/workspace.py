@@ -1,25 +1,48 @@
-"""Durable workspace state under .obol/ in the engagement directory.
+"""Durable workspace state under `.obol/` in the engagement directory.
 
-Everything obol knows lives here as plain JSON so a run is inspectable and
-resumable, and so the terminal loop and the read-only web view can read the
-exact same source of truth. The terminal is the only writer; the web only reads.
+Everything obol knows about an engagement lives here so a run is inspectable and
+resumable, and so the terminal loop and the web surface read (and now write) the
+exact same source of truth. The durable store is SQLite (`.obol/state.db`, see
+`store.py`) — chosen because both surfaces are separate processes writing the same
+engagement, which a single `state.json` cannot do safely.
+
+`Workspace` keeps the whole engagement in memory as a plain domain model (a
+`FactSet`, target/run/evidence lists, …) exactly as before: `ws.facts.add(...)`,
+`ws.record_run(...)`, `ws.add_target(...)` all mutate memory and nothing hits disk
+until `save()`. `save()` reconciles the in-memory model into the database with
+targeted, idempotent writes (facts by content hash, runs by id), so a concurrent
+`obol run` in the terminal and a run-from-site in the browser both land instead of
+clobbering each other. `state.json` remains the interchange format for export,
+migration, the offline `obol web` snapshot, and the debug package.
 """
 from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 
 from .facts import Fact, FactSet
 from .scope import normalize_target
+from .store import STATE_DB, Store, fact_hash
 
 STATE_DIR = ".obol"
+LEGACY_STATE_FILE = "state.json"
+
+
+def has_state(engagement_dir: Path) -> bool:
+    """True if a `.obol/` directory holds an engagement — either the SQLite store
+    or a legacy `state.json` not yet migrated. Used everywhere the library used to
+    test for `state.json` directly."""
+    d = Path(engagement_dir) / STATE_DIR
+    return (d / STATE_DB).exists() or (d / LEGACY_STATE_FILE).exists()
 
 
 class Workspace:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.dir = self.root / STATE_DIR
+        self.store = Store(self.dir / STATE_DB)
         self.name: str = self.root.name
         self.created_at: float = 0.0
         self.target: str = ""            # the ACTIVE target host (per-target pivot)
@@ -31,42 +54,67 @@ class Workspace:
         self.evidence: list[dict] = []   # attachments: [{id, target, phase, caption, filename, path, added_at}]
         self.checklist: dict[str, dict] = {}  # {host: {item_id: bool}} — manual per-target checklist ticks
         self.bloodhound: dict = {}       # last BloodHound ingest summary (engagement-wide)
+        # persistence bookkeeping: what is already on disk, and what this session
+        # has explicitly removed (so save() writes only diffs and never resurrects
+        # or clobbers rows another process wrote).
+        self._persisted_fact_hashes: set[str] = set()
+        self._persisted_run_ids: set[str] = set()
+        self._deleted_targets: set[str] = set()
+        self._deleted_evidence: set[str] = set()
 
     # ---- persistence ---------------------------------------------------------
     @property
-    def state_file(self) -> Path:
-        return self.dir / "state.json"
+    def db_file(self) -> Path:
+        return self.dir / STATE_DB
+
+    @property
+    def legacy_state_file(self) -> Path:
+        return self.dir / LEGACY_STATE_FILE
 
     @property
     def runs_dir(self) -> Path:
         return self.dir / "runs"
 
-    def exists(self) -> bool:
-        return self.state_file.exists()
-
     @property
     def evidence_dir(self) -> Path:
         return self.dir / "evidence"
 
+    def exists(self) -> bool:
+        return has_state(self.root)
+
     def load(self) -> "Workspace":
-        if self.exists():
-            data = json.loads(self.state_file.read_text())
-            self.name = data.get("name", self.name)
-            self.created_at = data.get("created_at", 0.0)
-            self.target = data.get("target", "")
-            self.targets = list(data.get("targets", []))
-            self.scope = list(data.get("scope", []))
-            self.inputs = dict(data.get("inputs", {}))
-            self.facts = FactSet([Fact.from_json(f) for f in data.get("facts", [])])
-            self.runs = data.get("runs", [])
-            self.evidence = list(data.get("evidence", []))
-            self.checklist = dict(data.get("checklist", {}))
-            self.bloodhound = dict(data.get("bloodhound", {}))
+        """Populate the in-memory model from the SQLite store. If only a legacy
+        `state.json` exists, read it in (the next `save()` migrates it to the
+        database); a fresh directory loads as empty."""
+        if self.store.exists():
+            self.apply_payload(self.store.read_all())
+        elif self.legacy_state_file.exists():
+            self.apply_payload(json.loads(self.legacy_state_file.read_text()))
+            # legacy load: nothing is in the database yet, so save() will insert all.
+            self._persisted_fact_hashes.clear()
+            self._persisted_run_ids.clear()
         return self
 
     def save(self) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        payload = {
+        """Reconcile the in-memory model into the database (targeted, idempotent,
+        concurrency-safe). Returns nothing; the change events it appends drive the
+        web SSE feed."""
+        self.store.reconcile(
+            self.to_payload(),
+            persisted_fact_hashes=self._persisted_fact_hashes,
+            persisted_run_ids=self._persisted_run_ids,
+            deleted_targets=self._deleted_targets,
+            deleted_evidence=self._deleted_evidence,
+        )
+        self._deleted_targets.clear()
+        self._deleted_evidence.clear()
+
+    # ---- JSON interchange (export / import / migration) ----------------------
+    def to_payload(self) -> dict:
+        """The engagement as a plain JSON-serializable dict — the same shape the
+        old single-file store used. Source of truth for export, migration, the
+        offline snapshot, and the debug package."""
+        return {
             "name": self.name,
             "created_at": self.created_at,
             "target": self.target,
@@ -79,7 +127,29 @@ class Workspace:
             "checklist": self.checklist,
             "bloodhound": self.bloodhound,
         }
-        self.state_file.write_text(json.dumps(payload, indent=2))
+
+    def apply_payload(self, data: dict) -> "Workspace":
+        """Load an interchange payload into the in-memory model and record which
+        facts/runs it represents as already-persisted."""
+        self.name = data.get("name", self.name)
+        self.created_at = data.get("created_at", 0.0)
+        self.target = data.get("target", "")
+        self.targets = list(data.get("targets", []))
+        self.scope = list(data.get("scope", []))
+        self.inputs = dict(data.get("inputs", {}))
+        self.facts = FactSet([Fact.from_json(f) for f in data.get("facts", [])])
+        self.runs = list(data.get("runs", []))
+        self.evidence = list(data.get("evidence", []))
+        self.checklist = dict(data.get("checklist", {}))
+        self.bloodhound = dict(data.get("bloodhound", {}))
+        self._persisted_fact_hashes = {
+            fact_hash(f.kind, f.scope, f.value) for f in self.facts.facts
+        }
+        self._persisted_run_ids = {r["id"] for r in self.runs if r.get("id")}
+        return self
+
+    def export_json(self, *, indent: int | None = 2) -> str:
+        return json.dumps(self.to_payload(), indent=indent, default=str)
 
     # ---- scope / operator inputs --------------------------------------------
     def add_scope(self, value: str) -> str:
@@ -113,6 +183,7 @@ class Workspace:
             "status": "active", "notes": "", "added_at": time.time(),
         }
         self.targets.append(rec)
+        self._deleted_targets.discard(norm)
         # Seed the configured-target fact so the nmap prelude unlocks for this host
         # (same fact `obol init --target` records), scoped to the host.
         self.facts.add(Fact("target.configured", f"host:{norm}", {"target": norm},
@@ -127,6 +198,7 @@ class Workspace:
             return False
         self.targets.remove(rec)
         self.checklist.pop(rec["host"], None)
+        self._deleted_targets.add(rec["host"])
         if self.target == rec["host"]:
             self.target = self.targets[0]["host"] if self.targets else ""
         return True
@@ -178,6 +250,7 @@ class Workspace:
                 except OSError:
                     pass
                 self.evidence.remove(rec)
+                self._deleted_evidence.add(eid)
                 return True
         return False
 
@@ -187,8 +260,11 @@ class Workspace:
 
     # ---- activity ledger -----------------------------------------------------
     def record_run(self, tool: str, command: str, produced: list[str], **extra) -> None:
-        """Append a run to the ledger. This is what the OSCP report is built from."""
+        """Append a run to the ledger. This is what the OSCP report is built from.
+        Each run carries a stable id so `save()` can persist it idempotently even
+        with the terminal and web both writing."""
         row = {
+            "id": uuid.uuid4().hex,
             "tool": tool,
             "command": command,
             "produced": produced,
@@ -199,9 +275,10 @@ class Workspace:
 
 
 def find_workspace(start: Path | None = None) -> Workspace | None:
-    """Walk up from the current directory looking for an existing .obol/ workspace."""
+    """Walk up from the current directory looking for an existing `.obol/`
+    workspace (SQLite store or legacy JSON), like git finds its root."""
     cur = Path(start or Path.cwd()).resolve()
     for candidate in [cur, *cur.parents]:
-        if (candidate / STATE_DIR / "state.json").exists():
+        if has_state(candidate):
             return Workspace(candidate).load()
     return None

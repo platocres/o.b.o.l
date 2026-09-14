@@ -10,9 +10,12 @@ sharing one runner/parser/store with the terminal:
   `service.run_action(target=…)` — the same scope-checked runner/parser/ledger the
   terminal uses. The browser sends an action id + target; the server fills the
   command from that target's facts, so secrets never reach the browser.
-* **Real-time.** `/api/events` (SSE) watches the active engagement's state file and
-  the active-engagement pointer, pushing a tick on any change (web- or
-  terminal-driven) so open pages refresh themselves.
+* **Real-time.** `/api/events` (SSE) tails the active engagement's store change
+  feed (the `events` table in `state.db`) and the active-engagement pointer,
+  pushing *what changed* — new facts, runs, targets, evidence — as a JSON payload
+  on every change, web- or terminal-driven. The browser patches only the affected
+  UI and shows a toast, instead of blindly re-fetching everything. Quick Start job
+  progress (in-memory, not in the store) rides the same stream via a version tick.
 
 Localhost-only, token-gated (`X-Obol-Token` header or `?token=`).
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import mimetypes
 import re
 import shlex
@@ -52,6 +56,7 @@ from ..report import (
 )
 from ..runner import RunnerError
 from ..scope import target_in_scope
+from ..store import STATE_DB, Store
 from ..service import (
     ActionError,
     build_command,
@@ -1199,29 +1204,52 @@ def create_app(base, *, token: Optional[str] = None):
         return {"name": pb.name, "title": pb.title, "description": pb.description, "steps": out}
 
     # ── real-time ────────────────────────────────────────────────────────────
+    def _active_store() -> tuple[Optional[str], Optional[Store]]:
+        slug = library.active_slug()
+        if not slug:
+            return None, None
+        return slug, Store(library.engagement_path(slug) / ".obol" / STATE_DB)
+
     @app.get("/api/events")
     async def api_events(request: Request):
+        """Server-sent change feed. Each `state` event carries JSON describing what
+        changed in the active engagement's store since the last one — so the page
+        patches the affected panels and shows a toast rather than re-fetching
+        wholesale. An engagement switch emits `{reset:true}` (full reload); Quick
+        Start job progress rides along as `qs` (a version the client uses to refetch
+        the running job)."""
         async def gen():
-            last = None
+            slug, store = _active_store()
+            # Start from the current tail: the initial page load already fetched the
+            # full state, so we stream only events that happen from now on.
+            last_slug = slug
+            last_event_id = store.latest_event_id() if store else 0
+            last_qs = quickstart_signal["version"]
             yield "event: hello\ndata: connected\n\n"
             while True:
                 if await request.is_disconnected():
                     break
-                slug = library.active_slug()
-                mtime = None
-                if slug:
-                    sf = library.engagement_path(slug) / ".obol" / "state.json"
-                    try:
-                        mtime = sf.stat().st_mtime_ns
-                    except OSError:
-                        mtime = None
-                sig = (slug, mtime, quickstart_signal["version"])
-                if sig != last:
-                    last = sig
-                    yield f"event: state\ndata: {slug}:{mtime}:{quickstart_signal['version']}\n\n"
+                slug, store = _active_store()
+                payload: dict = {}
+                if slug != last_slug:
+                    # active engagement changed under us — tell the client to reload.
+                    last_slug = slug
+                    last_event_id = store.latest_event_id() if store else 0
+                    last_qs = quickstart_signal["version"]
+                    payload = {"engagement": slug, "reset": True}
+                else:
+                    events = store.read_events(last_event_id) if store else []
+                    if events:
+                        last_event_id = events[-1]["id"]
+                    qs = quickstart_signal["version"]
+                    if events or qs != last_qs:
+                        payload = {"engagement": slug, "events": events, "qs": qs}
+                        last_qs = qs
+                if payload:
+                    yield f"event: state\ndata: {json.dumps(payload)}\n\n"
                 else:
                     yield ": keep-alive\n\n"
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.8)
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

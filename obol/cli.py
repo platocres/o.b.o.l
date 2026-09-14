@@ -313,6 +313,28 @@ def cmd_report(args) -> None:
         print("secrets redacted — use --include-secrets only for private exam notes")
 
 
+def cmd_debug(args) -> None:
+    from . import debug
+    ws = _load_or_exit()
+    out = Path(args.out) if getattr(args, "out", None) else None
+    screenshots = not getattr(args, "no_screenshots", False)
+    if getattr(args, "debug_cmd", "package") == "capture":
+        print(f"capturing every {args.interval}s — Ctrl-C to stop and bundle…")
+        zip_path = debug.capture(
+            lambda: _load_or_exit(), out=out, interval=args.interval,
+            count=args.count, duration=args.duration,
+            include_secrets=args.include_secrets, screenshots=screenshots,
+            on_tick=lambda seq, s: print(f"  snapshot {seq}: {s['facts_total']} facts · {s['runs_total']} runs"),
+        )
+    else:
+        zip_path = debug.build_debug_package(
+            ws, out=out, include_secrets=args.include_secrets, screenshots=screenshots,
+            live_url=getattr(args, "url", "") or "", live_token=getattr(args, "token", "") or "")
+    print(f"wrote {zip_path}")
+    if not args.include_secrets:
+        print("secrets redacted in report.md — raw run output under runs/ is verbatim; treat the package as sensitive")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="obol", description="Evidence-driven OSCP operator companion.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -399,6 +421,25 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--include-secrets", action="store_true", help="include passwords, hashes, tickets, and secrets in the report")
     prep.add_argument("--max-next", type=int, default=8, help="maximum recommended next actions to include")
     prep.set_defaults(func=cmd_report)
+
+    pdbg = sub.add_parser("debug", help="build a debug package for review (state, evidence, terminal/site screenshots)")
+    dbg_sub = pdbg.add_subparsers(dest="debug_cmd")
+    d_pkg = dbg_sub.add_parser("package", help="write a one-shot debug package (.zip)")
+    d_pkg.add_argument("--out", help="output directory (default .obol/debug)")
+    d_pkg.add_argument("--include-secrets", action="store_true", help="include secrets in the embedded report")
+    d_pkg.add_argument("--no-screenshots", action="store_true", help="skip PNG screenshots even if a browser is available")
+    d_pkg.add_argument("--url", help="live `obol serve` URL to screenshot the real console (e.g. http://127.0.0.1:8765)")
+    d_pkg.add_argument("--token", help="access token for --url (from the `obol serve` banner)")
+    d_pkg.set_defaults(func=cmd_debug, debug_cmd="package")
+    d_cap = dbg_sub.add_parser("capture", help="snapshot on a timer during a test run, then bundle a .zip")
+    d_cap.add_argument("--interval", type=int, default=30, help="seconds between snapshots (default 30)")
+    d_cap.add_argument("--count", type=int, help="stop after this many snapshots")
+    d_cap.add_argument("--duration", type=int, help="stop after this many seconds")
+    d_cap.add_argument("--out", help="output directory (default .obol/debug)")
+    d_cap.add_argument("--include-secrets", action="store_true", help="include secrets in embedded reports")
+    d_cap.add_argument("--no-screenshots", action="store_true", help="skip PNG screenshots")
+    d_cap.set_defaults(func=cmd_debug, debug_cmd="capture")
+    pdbg.set_defaults(func=cmd_debug, debug_cmd="package")
     return p
 
 
