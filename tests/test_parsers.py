@@ -84,6 +84,46 @@ Service detection performed. Please report any incorrect results.
     assert "foothold.windows" not in kinds
 
 
+def test_nmap_scripts_extract_domain_signing_and_web_leads():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "nmap-version-scripts")
+    out = """
+Nmap scan report for 10.10.10.10
+Host is up.
+PORT    STATE SERVICE       VERSION
+80/tcp  open  http          Apache httpd 2.4.58
+88/tcp  open  kerberos-sec  Microsoft Windows Kerberos
+389/tcp open  ldap          Microsoft Windows Active Directory LDAP
+445/tcp open  microsoft-ds  Windows Server 2019 Standard
+| smb-os-discovery:
+|   Computer name: DC01
+|   Domain name: corp.local
+|_  FQDN: DC01.corp.local
+| smb2-security-mode:
+|   3:1:1:
+|_    Message signing enabled and required
+|_http-title: Internal Portal
+|_http-server-header: Apache/2.4.58
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nmap -Pn -sC -sV -p 80,88,389,445 -oN nmap-version.txt 10.10.10.10",
+        out,
+        "",
+        "test",
+    )
+    values = {fact.kind: fact.value for fact in facts}
+    assert values["ad.domain_known"]["name"] == "corp.local"
+    assert values["ad.base_dn"]["base_dn"] == "DC=corp,DC=local"
+    assert values["ad.dc_candidate"]["name"] == "DC01"
+    assert values["smb.signing"]["required"] is True
+    assert values["web.title"]["titles"] == ["Internal Portal"]
+    assert values["web.server"]["headers"] == ["Apache/2.4.58"]
+    assert "credential.available" not in values
+    assert "access.admin" not in values
+
+
 def test_nxc_ldap_smoke_produces_domain_and_reachability_not_access():
     ws = _workspace()
     action = next(action for action in load_pack() if action.id == "ad-dc-identify")
@@ -132,11 +172,14 @@ def test_nxc_smb_banner_produces_domain_and_smb_reachability_not_ldap_bind():
     ws = _workspace()
     action = next(action for action in load_pack() if action.id == "ad-dc-identify")
     out = """
-SMB         10.10.10.10     445    DC01         [*] Windows Server 2019 Build 17763 x64 (name:DC01) (domain:corp.local) (signing:True)
+SMB         10.10.10.10     445    DC01         [*] Windows Server 2019 Build 17763 x64 (name:DC01) (domain:corp.local) (signing:True) (SMBv1:False)
 """
     facts = parse_action_output(action, ws, "nxc smb 10.10.10.10", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "smb.reachable"} <= kinds
+    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "smb.reachable", "smb.signing", "smb.smbv1"} <= kinds
+    values = {fact.kind: fact.value for fact in facts}
+    assert values["smb.signing"]["enabled"] is True
+    assert values["smb.smbv1"]["enabled"] is False
     assert "ad.anonymous_bind" not in kinds
     assert "credential.available" not in kinds
     assert "access.admin" not in kinds
@@ -324,7 +367,8 @@ def test_ldapsearch_naming_contexts_parse_base_dn():
     action = next(action for action in load_pack() if action.id == "ad-anon-ldap-enum")
     out = """
 dn:
-namingContexts: DC=example,DC=internal
+defaultNamingContext: DC=example,DC=internal
+rootDomainNamingContext: DC=example,DC=internal
 """
     facts = parse_action_output(
         action,
