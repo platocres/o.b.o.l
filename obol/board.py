@@ -9,12 +9,26 @@ from __future__ import annotations
 import re
 
 from .facts import FactSet
-from .pack import Action, friendly, next_actions, blocked_actions
+from .pack import Action, friendly, next_actions
 from .workspace import Workspace
 
 SYM_NEXT = ">>"
 SYM_OK = "*"
-SYM_BLOCK = "·"
+
+
+def action_desc(action: Action) -> str:
+    """A short, plain 'what this does' line for the board — no proof language.
+
+    Prefers the first sentence of the card's hypothesis (real operator guidance);
+    falls back to a plain phrasing of what it turns up.
+    """
+    h = (action.hypothesis or "").strip()
+    if h:
+        first = re.split(r"(?<=[.!?])\s", h)[0].strip()
+        return first if len(first) <= 150 else first[:147].rstrip() + "…"
+    if action.produces:
+        return "turns up " + ", ".join(friendly(k) for k in action.produces)
+    return ""
 
 try:                                # pragma: no cover - presentation only
     from rich.console import Console
@@ -123,39 +137,33 @@ def _proven_lines(facts: FactSet) -> list[str]:
 
 
 def render_board(ws: Workspace) -> None:
+    """Proven so far + the live actions that matter. No blocked list, no proof talk."""
     facts = ws.facts
     nxt = next_actions(facts)
-    blk = blocked_actions(facts)
 
     if _RICH:
         _console.print(Panel("\n".join(_proven_lines(facts)),
                              title=f"obol · {ws.name} · {ws.target}", border_style="green"))
         t = Table(show_edge=False, expand=True)
         t.add_column("#", justify="right", style="bold cyan", width=3)
-        t.add_column("action")
-        t.add_column("proves / does not", style="dim")
+        t.add_column("do this")
+        t.add_column("", style="dim")
         for i, a in enumerate(nxt, 1):
-            t.add_row(str(i), a.title, f"proves: {a.proves}\nnot: {a.does_not_prove}")
-        _console.print(Panel(t, title=f"{SYM_NEXT} NEXT ACTIONS", border_style="cyan"))
-        if blk:
-            rows = "\n".join(f"{SYM_BLOCK}  {a.title} — {a.unmet(facts)}" for a in blk[:8])
-            _console.print(Panel(rows, title="blocked", border_style="grey37"))
-        _console.print("[dim]run:[/dim] obol run <#>   [dim]explain:[/dim] obol explain <#>")
+            t.add_row(str(i), a.title, action_desc(a))
+        _console.print(Panel(t, title=f"{SYM_NEXT} NEXT", border_style="cyan"))
+        _console.print("[dim]run:[/dim] obol run <#>   [dim]see the command:[/dim] obol explain <#>")
     else:
         print(f"\n== obol · {ws.name} · {ws.target} ==")
         print(f"\n{SYM_OK} PROVEN")
         for ln in _proven_lines(facts):
             print(f"   {ln}")
-        print(f"\n{SYM_NEXT} NEXT ACTIONS")
+        print(f"\n{SYM_NEXT} NEXT")
         for i, a in enumerate(nxt, 1):
             print(f"  {i}  {a.title}")
-            print(f"       proves: {a.proves}")
-            print(f"       not:    {a.does_not_prove}")
-        if blk:
-            print("\n   blocked")
-            for a in blk[:8]:
-                print(f"   {SYM_BLOCK}  {a.title} — {a.unmet(facts)}")
-        print("\nrun: obol run <#>   ·   explain: obol explain <#>\n")
+            desc = action_desc(a)
+            if desc:
+                print(f"       {desc}")
+        print("\nrun: obol run <#>   ·   see the command: obol explain <#>\n")
 
 
 def render_command(action: Action, ws: Workspace) -> None:
@@ -169,8 +177,6 @@ def render_command(action: Action, ws: Workspace) -> None:
 
     if _RICH:
         body = [f"[dim]{action.hypothesis}[/dim]\n" if action.hypothesis else ""]
-        body.append(f"[green]proves:[/green]   {action.proves}")
-        body.append(f"[yellow]does NOT:[/yellow] {action.does_not_prove}\n")
         body.append("[bold]commands[/bold] (you run these):")
         for i, c in enumerate(action.commands, 1):
             body.append(f"  [bold cyan]{i}.[/bold cyan] [cyan]${_fill(c['run'])}[/cyan]")
@@ -185,8 +191,6 @@ def render_command(action: Action, ws: Workspace) -> None:
         print(f"\n{action.title}  ({', '.join(action.tools) or action.tool})")
         if action.hypothesis:
             print(f"  {action.hypothesis}")
-        print(f"  proves:   {action.proves}")
-        print(f"  does NOT: {action.does_not_prove}")
         print("  commands:")
         for i, c in enumerate(action.commands, 1):
             print(f"    {i}. $ {_fill(c['run'])}")

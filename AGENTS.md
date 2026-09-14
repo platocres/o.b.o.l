@@ -14,28 +14,40 @@ best action from that model. Built for the OSCP exam: the terminal scrollback is
 the operator's evidence log.
 
 **What makes it different** from the tools it learns from (see `docs/SOURCES.md`):
-a **proof-gated decision model** — facts with an explicit `ProofState`, actions
-gated on facts, and honest *negative space* ("blocked until X") — instead of a
-stateless service→tool map. And **one state, three views**: the terminal drives,
-a read-only web page mirrors, and (planned) an OSCP report is narrated from the
-same fact/run ledger.
+a **fact-gated decision model** — actions are gated on proven facts (each carrying
+a `ProofState`) instead of a stateless service→tool map, so the moves it surfaces
+are the ones that actually matter *now*. The gating is an internal engine detail;
+the UI shows clean, ranked **live options only** — it does NOT lecture users with
+"proves / does not prove" or "blocked until X" text (a deliberate product
+decision: this is a fast OSCP-exam tool). And **one state, multiple synced
+views**: the terminal drives, a web page mirrors it (and, planned, can drive it
+too), and an OSCP report is narrated from the same fact/run ledger.
 
 ## The non-negotiable principles (the "always/never")
 
 1. **Facts are the source of truth.** Nothing is true unless a `Fact` records it,
    scoped to exactly what the evidence supports, with a `ProofState`
    (`supported`/`refuted`/`inconclusive`) and the command that produced it. An
-   action **never proves more than the facts it produces** — a WinRM login proves
-   *authenticated user*, never *admin*; an AS-REP hash is *crackable material*,
-   never *a credential*. Preserve this when you add parsers: map output to the
-   narrowest supported fact, prefer no fact over a convenient one.
+   action **never records more than the facts it actually establishes** — a WinRM
+   login yields *authenticated user*, not *admin*; an AS-REP hash is *crackable
+   material*, not *a credential*. Preserve this when you add parsers: map output
+   to the narrowest supported fact, prefer no fact over a convenient one. **This
+   discipline is internal** — it drives which options are live; it is NOT surfaced
+   as proof/blocked language in the UI (see the differentiator note above).
 2. **Methodology is data, not code.** Actions live in `obol/packs/*.json` and are
    loaded by the planner. Add methodology by adding pack entries, **never** by
    putting box-specific or branch-specific logic in the planner.
-3. **The terminal is the only actor.** The web view is read-only and
-   localhost-only; it never executes anything. State drift is thereby impossible.
-4. **Scope enforcement is mandatory for the (future) runner.** It may only touch
-   an authorized target. This is a hard gate, not a noise tier.
+3. **Terminal and web are both actors over one shared state.** Either surface may
+   launch a run through the same scope-enforced runner; both stay synced through
+   the single `.obol` store (the web is localhost-only). The web is read-only
+   today; running-from-site is planned — until it lands, keep the web read-only.
+   Never create a second state store for the web.
+4. **Scope enforcement is mandatory for the runner** (`obol/scope.py`,
+   `obol/runner.py`). It may only touch an authorized target — a hard gate, not a
+   noise tier — and it applies equally to terminal-, web-, and playbook-launched
+   runs. **Playbooks** are named, ordered sequences of pack actions, stored as
+   data, runnable from terminal and web, with per-step approval for noisy/risky
+   steps (see `docs/ROADMAP.md`, modeled on Pentest Companion).
 5. **The path graph is projected once** (`graph.py`) and rendered to every surface
    (terminal board, web mermaid, report), so surfaces never disagree.
 6. **Tool/action contract** (inherited from the prior obol): an action is only
