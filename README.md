@@ -29,6 +29,7 @@ obol scope paste "10.10.10.161 junk 10.10.10.175 10.10.10.0/24"  # keep only IPs
 obol scan                       # sweep every scope entry, then Quick Start targets
 obol scan --extract "10.10.10.161 junk 10.10.10.0/24"  # authorize + scan pasted IP/CIDR text
 obol overview                   # scope, targets, services, domains, and top moves
+obol findings                   # cross-host findings roll-up with evidence refs
 obol target use 10.10.10.161    # pick the active target
 obol next                       # proven facts · ranked next moves for the active target
 obol explain 1                  # first real target move is nmap open-port discovery
@@ -149,6 +150,13 @@ pack: an HTTP port from the nmap spine unlocks content discovery, nikto, and
 virtual-host recon, with parsers that record discovered surface as candidate
 context — never a confirmed vuln or foothold. Packs share one fact-kind namespace,
 so cross-domain gating works.
+
+Parser coverage now reaches the common early-service metadata operators need for
+next-move selection: nmap/NetExec/curl/whatweb/SNMP/FTP/SSH output can land narrow
+facts for SSH, FTP, RDP, DNS, SNMP, HTTP metadata, service authentication, banners,
+host keys, anonymous FTP, and web technology fingerprints. The terminal also has
+`obol findings`, an engagement-wide roll-up matching the web Activity findings view:
+category-grouped, host/domain-tagged findings with evidence source lines.
 
 **Playbooks** bundle a flow into one deliberate move: a playbook is a named,
 ordered list of pack actions stored as data. `obol playbook ad-recon` (or

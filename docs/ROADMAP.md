@@ -132,10 +132,13 @@ exists. The current spine is:
 
 Next work should widen this carefully:
 
-- **More service parsers.** Add generic parsers for SMB share/session output,
-  WinRM validation, HTTP enumeration, FTP/SSH banners, SNMP, and common nmap NSE
-  script findings. Every parser must map output to the narrowest fact and include
-  anti-overfit tests.
+- **More service parsers — PARTLY DONE.** Generic parser coverage now includes SMB
+  shares/sessions, WinRM/RDP/SSH/FTP service authentication, HTTP metadata
+  (curl/whatweb), FTP/SSH banners, SNMP walk/check output, and common nmap service
+  script findings for SSH host keys, FTP anonymous login, SNMP info, HTTP redirects,
+  and technology fingerprints. Continue with exploitation-card success signals,
+  privesc/pivot outputs, and more real-tool fixtures. Every parser must map output
+  to the narrowest fact and include anti-overfit tests.
 - **Better port-to-playbook gating.** The Orange AD pack now has a small exam-flow
   priority override for nmap → DC identify → anonymous LDAP → user enum. Extend
   that idea across web/privesc sibling packs without hardcoding box wins.
@@ -459,10 +462,14 @@ summary that links into it.
   falls back to an arbitrary domain when the credential has none. Fix: one node per
   distinct credential, and a cred→host edge only where a fact ties that credential
   to that host. Largely subsumed by §6(f) (the topology-map redesign).
-- **Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
+- ~~**Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
   overview`) so the CLI operator gets the same cross-host, category-organized
-  findings view the web Activity view added.
-- `run`'s "new facts" detail line is still sparse for port/service facts.
+  findings view the web Activity view added.~~ **DONE.** `obol findings` prints an
+  engagement-wide, category-grouped, host/domain-tagged findings roll-up with source
+  command lineage and optional redaction.
+- ~~`run`'s "new facts" detail line is still sparse for port/service facts.~~
+  **DONE.** CLI run feedback now uses compact fact summaries for ports, services,
+  web titles, shares, banners, users, redirects, and other common parser payloads.
 - Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
   ahead of roasting).
 - `obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its

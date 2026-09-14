@@ -103,14 +103,38 @@ surfaces** (report, findings roll-up, ledger, sessions, run outputs) — redacti
 opt-in (report "redact secrets" toggle, `obol report --redact`, `WEB_SHOW_SECRETS`).
 The shareable debug package stays redacted by default.
 
+## Shipped: Parser Coverage v2 + terminal findings roll-up
+
+The evidence engine now recognizes more of the safe, high-signal baseline output
+operators see immediately after nmap/Quick Start:
+
+- nmap service/script output now lands proof-bound reachability and metadata facts
+  for SSH, FTP, RDP, DNS, SNMP, HTTP redirects/generators, SSH host keys, SNMP
+  system info, and anonymous FTP.
+- NetExec auth parsing now covers SSH/FTP/RDP as service authentication without
+  overclaiming shells, admin, or footholds. WinRM/RDP still use the existing access
+  proof rules; SSH only becomes a Linux foothold when command output proves a shell
+  (`uid=`/`id`).
+- curl/whatweb output now records HTTP responses, redirects, server headers, titles,
+  and web technology fingerprints as context only.
+- SNMP walk/check output records reachable SNMP, community proof, and system info;
+  FTP/SSH banners land as banner facts.
+- CLI run feedback now prints compact fact details, and `obol findings` provides
+  terminal parity with the web Activity findings roll-up: category-grouped,
+  host/domain-tagged findings with evidence source lines and optional redaction.
+
+Boundary kept: these parsers produce context, reachability, service authentication,
+or candidate material only. They do not invent vulnerabilities, credentials,
+footholds, admin, or loot from banner/metadata output.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 
-- **Parser coverage (ROADMAP item 1, TOP PRIORITY).** The main gap: `run` only
-  produces facts where a parser exists. Widen to SMB shares/sessions, WinRM
-  validation, HTTP enum, FTP/SSH/SNMP banners, and common NSE findings — each mapped
-  to the narrowest fact with anti-overfit tests.
+- **Parser coverage (ROADMAP item 1, still important).** The broad v2 baseline is
+  shipped. Continue with exploitation-card success signals, privesc/pivot outputs,
+  more real-tool fixtures, and action-specific parsers for the remaining Orange AD
+  branches.
 - **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
   interlock note is **item 3 privesc packs** (unlocked by the access fact), then
   post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware
@@ -123,8 +147,8 @@ Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
   One-click upload/staging to a foothold, a Kali material cache (locate/cache/upload),
   and one-click download of missing items. Deferred pending a design conversation.
 - **Remaining found-items** in ROADMAP "Known smaller issues": the engagement-map
-  credential fix, terminal parity for the 0e findings roll-up, and an engagement-wide
-  redact switch for the findings/ledger surfaces.
+  credential fix and an engagement-wide redact switch for the findings/ledger
+  surfaces.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

@@ -127,6 +127,87 @@ PORT    STATE SERVICE       VERSION
     assert "access.admin" not in values
 
 
+def test_nmap_service_scan_produces_generic_service_and_script_metadata():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "nmap-version-scripts")
+    out = """
+Nmap scan report for 10.10.10.10
+Host is up.
+PORT     STATE SERVICE       VERSION
+21/tcp   open  ftp           vsftpd 3.0.3
+22/tcp   open  ssh           OpenSSH 8.9p1 Ubuntu
+53/udp   open  domain        ISC BIND
+80/tcp   open  http          nginx 1.24.0
+161/udp  open  snmp          SNMPv2c server
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| ssh-hostkey:
+|   256 aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99 (ECDSA)
+|_  256 11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00 (ED25519)
+|_http-title: Did not follow redirect to http://portal.local/login
+|_http-generator: WordPress 6.4.3
+| snmp-info:
+|   enterprise: net-snmp
+|   name: edge-router
+|_  description: Linux edge-router 5.15
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nmap -Pn -sC -sV -sU -p T:21,22,80,3389,U:53,161 10.10.10.10",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {
+        "ftp.reachable", "ftp.anonymous_login", "ssh.reachable", "ssh.hostkey",
+        "dns.reachable", "snmp.reachable", "snmp.info", "rdp.reachable",
+        "http.redirect", "web.tech",
+    } <= kinds
+    snmp = next(fact for fact in facts if fact.kind == "snmp.info")
+    assert snmp.value["name"] == "edge-router"
+    assert any(fact.kind == "host.hostname" and fact.value["name"] == "edge-router" for fact in facts)
+    ssh = next(fact for fact in facts if fact.kind == "ssh.hostkey")
+    assert ssh.value["count"] == 2
+    assert "credential.available" not in kinds
+    assert "foothold.linux" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_http_ssh_ftp_and_snmp_metadata_parsers_do_not_claim_access():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "nmap-version-scripts")
+
+    http = parse_action_output(
+        action,
+        ws,
+        "curl -I http://10.10.10.10",
+        "HTTP/1.1 302 Found\nServer: nginx/1.24.0\nX-Powered-By: PHP/8.2\nLocation: /login\n",
+        "",
+        "test",
+    )
+    ssh = parse_action_output(action, ws, "nc -nv 10.10.10.10 22", "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3\n", "", "test")
+    ftp = parse_action_output(action, ws, "ftp -n 10.10.10.10 anonymous", "220 vsFTPd 3.0.3\n230 Login successful.\n", "", "test")
+    snmp = parse_action_output(
+        action,
+        ws,
+        "snmpwalk -v2c -c public 10.10.10.10 1.3.6.1.2.1.1",
+        "SNMPv2-MIB::sysDescr.0 = STRING: Linux appliance\nSNMPv2-MIB::sysName.0 = STRING: appliance01\n",
+        "",
+        "test",
+    )
+    facts = http + ssh + ftp + snmp
+    kinds = {fact.kind for fact in facts}
+    assert {"http.response", "web.server", "web.tech", "http.redirect"} <= kinds
+    assert {"ssh.reachable", "ssh.banner"} <= kinds
+    assert {"ftp.reachable", "ftp.banner", "ftp.anonymous_login"} <= kinds
+    assert {"snmp.reachable", "snmp.community", "snmp.info", "host.hostname"} <= kinds
+    assert "credential.available" not in kinds
+    assert "access.shell" not in kinds
+    assert "foothold.linux" not in kinds
+
+
 def test_nxc_ldap_smoke_produces_domain_and_reachability_not_access():
     ws = _workspace()
     action = next(action for action in load_pack() if action.id == "ad-dc-identify")
