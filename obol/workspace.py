@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from .facts import Fact, FactSet
-from .scope import normalize_target
+from .scope import normalize_scope_entry, normalize_target
 from .store import STATE_DB, Store, fact_hash
 
 STATE_DIR = ".obol"
@@ -153,10 +153,21 @@ class Workspace:
 
     # ---- scope / operator inputs --------------------------------------------
     def add_scope(self, value: str) -> str:
-        target = normalize_target(value) if "/" not in str(value) else str(value).strip()
+        target = normalize_scope_entry(value)
         if target and target not in self.scope:
             self.scope.append(target)
         return target
+
+    def remove_scope(self, value: str) -> bool:
+        """Remove a scope entry. Matches the entry as stored (CIDRs are kept raw,
+        hosts are normalized), so callers can pass either form. Returns True if an
+        entry was removed."""
+        raw = str(value or "").strip()
+        for candidate in (raw, normalize_target(raw)):
+            if candidate and candidate in self.scope:
+                self.scope.remove(candidate)
+                return True
+        return False
 
     def set_input(self, key: str, value: str) -> None:
         self.inputs[str(key)] = str(value)

@@ -44,6 +44,53 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
   per-step `require_approval` gating. First playbook: `ad-recon`. Web
   run-from-site and the playbook path-map view are still pending under item 5.
 
+## 0. Engagement-level discovery sweep + scope UI + host grouping (IN PROGRESS)
+
+An operator should be able to point obol at a network, sweep it, and watch
+targets populate — names, services, and domain grouping filling in as
+enumeration proceeds — without hand-adding a single host. Modeled on Pentest
+Companion's auto-scan orchestrator (`tools/auto_orchestrator.py`: an nmap-first
+pass, then a service→tool rule table drives follow-up enumeration) and its host
+tooling (`docs/SOURCES.md §5`). Everything below still runs through the one
+scope-enforced runner and the one store — no second engine.
+
+The build sequence (each a reviewable PR):
+
+- **(a) Scope in the web app — DONE.** `GET/POST/DELETE /api/scope` over
+  `Workspace.scope`; the overview shows a Scope panel where the operator
+  authorizes hosts and CIDR ranges. Scope is the runner's hard authorization
+  gate (`obol/scope.py`), so it is also the precondition for a sweep: obol will
+  only sweep a range the operator has put in scope. `normalize_scope_entry`
+  keeps genuine CIDRs verbatim and reduces hosts/URLs/`host:port` to a bare host;
+  a live target's own scope entry can't be removed out from under it.
+- **(b) Engagement discovery sweep.** A new engagement-level action: an nmap
+  host-discovery pass (`-sn` with TCP-SYN/ACK + ICMP + a few UDP probes so
+  ICMP-filtered AD hosts like Forest are still found — *not* a bare ping sweep)
+  against an authorized scope entry, run through the existing Quick Start job
+  engine (`obol/webapp/server.py`). A discovery parser records each live host and
+  auto-creates a target via `ws.add_target`. Gate: the swept range must be an
+  authorized scope entry (an exact-entry check, stricter than host membership).
+- **(c) Per-host enumeration fan-out.** After discovery, run the existing
+  service-aware Quick Start baseline against each new host — nmap service scan,
+  then nxc SMB/LDAP and the safe baseline the packs already gate. Reuse the
+  per-target Quick Start orchestrator per discovered host. PC's `DEFAULT_RULES`
+  service→tool table is the reference for coverage (SMB/LDAP/WinRM/DNS/HTTP/…).
+- **(d) Target enrichment — hostname + domain.** A parser maps nmap/nxc/LDAP
+  hostname and FQDN output to the discovered host; `ws` renames the target's
+  label from IP to hostname when found. Add a `domain` field to the target
+  record (store migration: new `targets.domain` column) and group the web target
+  list by domain as `ad.domain_known` / BloodHound data lands.
+- **(e) Engagement-level run & findings view.** Surface sweep runs and the
+  facts/findings they produce at the *engagement* level (not just per-target):
+  a live activity feed of the sweep's steps and a clean, category-organized
+  findings roll-up across all discovered hosts. The Quick Start job engine is
+  already engagement-bound; this is the aesthetic/organization layer.
+
+Non-negotiables this must respect: the sweep only touches authorized scope
+(hard gate); discovery/enumeration facts stay proof-bound (a live host and its
+open ports are *not* access, creds, or a foothold); one runner, one store; and
+no "blocked/proves" language in the UI (roadmap "UX guardrails" below).
+
 ## 1. Expand parser coverage and service-specific playbooks (TOP PRIORITY)
 
 `run` is no longer a pure stub, but execution is only real where parser coverage

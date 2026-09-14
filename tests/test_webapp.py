@@ -74,6 +74,37 @@ def test_targets_and_bundle(cx):
     assert cx.get("/api/target", params={"target": "9.9.9.9"}, headers=H).status_code == 404
 
 
+def test_scope_add_list_remove(cx):
+    # adding a target already put its host in scope
+    assert cx.get("/api/scope", headers=H).json()["scope"] == ["10.10.10.161"]
+    # a CIDR range is kept verbatim; a host is normalized
+    r = cx.post("/api/scope", json={"value": "10.10.10.0/24"}, headers=H).json()
+    assert "10.10.10.0/24" in r["scope"] and r["added"] == "10.10.10.0/24"
+    r = cx.post("/api/scope", json={"value": "http://10.10.10.9:8080/x"}, headers=H).json()
+    assert r["added"] == "10.10.10.9" and "10.10.10.9" in r["scope"]
+    # the overview and meta payloads both expose the authorization boundary
+    assert "10.10.10.0/24" in cx.get("/api/overview", headers=H).json()["scope"]
+    assert "10.10.10.0/24" in cx.get("/api/meta", headers=H).json()["scope"]
+    # remove the range and the unused host, leaving the target's own entry
+    assert cx.request("DELETE", "/api/scope", params={"value": "10.10.10.0/24"}, headers=H).status_code == 200
+    cx.request("DELETE", "/api/scope", params={"value": "10.10.10.9"}, headers=H)
+    assert cx.get("/api/scope", headers=H).json()["scope"] == ["10.10.10.161"]
+
+
+def test_scope_add_rejects_garbage(cx):
+    assert cx.post("/api/scope", json={"value": ""}, headers=H).status_code == 422
+    assert cx.post("/api/scope", json={"value": "not a host!!"}, headers=H).status_code == 422
+
+
+def test_scope_remove_guards_active_target_and_missing(cx):
+    # a live target's authorization can't be pulled out from under it
+    r = cx.request("DELETE", "/api/scope", params={"value": "10.10.10.161"}, headers=H)
+    assert r.status_code == 409 and "target" in r.json()["detail"].lower()
+    assert cx.get("/api/scope", headers=H).json()["scope"] == ["10.10.10.161"]
+    # removing something not in scope is a 404
+    assert cx.request("DELETE", "/api/scope", params={"value": "10.10.10.99"}, headers=H).status_code == 404
+
+
 def test_run_from_site_scoped_to_target(cx):
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     action = next(a for a in b["next"] if a["id"] == "nmap-fast-open-ports")

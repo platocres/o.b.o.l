@@ -55,7 +55,7 @@ from ..report import (
     _target_open_ports,
 )
 from ..runner import RunnerError
-from ..scope import target_in_scope
+from ..scope import normalize_target, target_in_scope
 from ..store import STATE_DB, Store
 from ..service import (
     ActionError,
@@ -876,7 +876,8 @@ def create_app(base, *, token: Optional[str] = None):
         dom = ws.facts.values("ad.domain_known")
         return {"name": ws.name, "slug": ws.root.name,
                 "domain": (dom[0].get("name") if dom else "") or "",
-                "targets": ws.targets, "active_target": ws.target, "phases": PHASES,
+                "targets": ws.targets, "active_target": ws.target,
+                "scope": list(ws.scope), "phases": PHASES,
                 "phase_labels": PHASE_LABEL}
 
     # ── engagement overview + graph + report ─────────────────────────────────
@@ -888,6 +889,7 @@ def create_app(base, *, token: Optional[str] = None):
                      "produced": r["produced"], "at_display": r["at_display"],
                      "playbook": r.get("playbook")} for r in ctx["timeline"][-14:][::-1]]
         return {"meta": ctx["meta"], "tiles": ctx["tiles"], "targets": ctx["targets"],
+                "scope": list(ws.scope),
                 "category_counts": ctx["category_counts"], "severity_counts": ctx["severity_counts"],
                 "access_ladder": ctx["access_ladder"], "activity": activity,
                 "engagement_graph": ctx["engagement_graph"], "bloodhound": ctx["bloodhound"]}
@@ -904,6 +906,43 @@ def create_app(base, *, token: Optional[str] = None):
     def api_report_md(include_secrets: bool = Query(False)):
         md = build_report(active(), include_secrets=include_secrets)
         return PlainTextResponse(md, headers={"Content-Disposition": 'attachment; filename="obol-report.md"'})
+
+    # ── scope ────────────────────────────────────────────────────────────────
+    # Engagement scope is the runner's authorization boundary (obol/scope.py): the
+    # runner may only touch a host inside one of these entries. Exposing it here
+    # lets the operator authorize hosts and CIDR ranges from the web before a
+    # discovery sweep can run against them.
+    @app.get("/api/scope")
+    def api_scope():
+        return {"scope": list(active().scope)}
+
+    @app.post("/api/scope")
+    def api_add_scope(payload: dict = Body(...)):
+        value = (payload or {}).get("value", "").strip()
+        if not value:
+            raise HTTPException(422, "value is required (a host, IP, or CIDR)")
+        with _RUN_LOCK:
+            ws = active()
+            entry = ws.add_scope(value)
+            if not entry:
+                raise HTTPException(422, f"could not parse scope entry {value!r}")
+            ws.save()
+            return {"scope": list(ws.scope), "added": entry}
+
+    @app.delete("/api/scope")
+    def api_remove_scope(value: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            # Never strip authorization out from under a live target: the exact host
+            # entry that add_target created keeps it in scope for the runner.
+            norm = normalize_target(value)
+            if norm and any(t.get("host") == norm for t in ws.targets):
+                raise HTTPException(
+                    409, f"{value} is an active target — remove the target first")
+            if not ws.remove_scope(value):
+                raise HTTPException(404, f"{value} is not in scope")
+            ws.save()
+            return {"scope": list(ws.scope), "removed": value}
 
     # ── targets ──────────────────────────────────────────────────────────────
     @app.post("/api/targets")

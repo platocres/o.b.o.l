@@ -120,16 +120,21 @@ obol/
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)
     orange_ad_2025_03.json   nmap prelude + 30 Orange AD actions
+    orange_web_2025_03.json  23 Orange web-lane actions (recon parsers live;
+                             exploitation cards explain-only)
+  playbook.py    named, ordered sequences of pack actions as data; renders a
+                 command plan and runs one step through the shared service.run_action
+                 (same runner/parser/store), with per-step require_approval gating
+  playbooks/     playbooks as DATA (+ NOTICE.md): ad-recon.json, web-recon.json
   board.py       terminal render (rich + plain fallback); {{token}} templating;
                  explain view shows the full card (hypothesis, commands, refs)
   scope.py       target normalization + exact/CIDR scope checks
   runner.py      fixed-argv runner; timeout, dry-run, raw output capture
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
+                 (target=... pins a run to a host); eligible_actions = tool palette
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
   graph.py       facts+actions -> per-target graph model + mermaid (one projection);
                  build_engagement_graph stitches all targets + BloodHound overlay
-  service.py     run -> parse -> record -> save; the ONE path both surfaces call
-                 (target=... pins a run to a host); eligible_actions = tool palette
   report.py      OSCP markdown report + build_report_context (per-target rollup +
                  evidence + engagement graph, structured for the web)
   web.py         self-contained read-only static HTML snapshot (`obol web`)
@@ -152,9 +157,12 @@ obol/
                  playbook(s) / scope / facts / report / serve / web / debug
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
+  import_orange_web.js  converter: old-obol lanes.js web lane -> pack JSON
 tests/
   test_pack.py      pack loads, proof boundaries, gating, seed unlocks chain
   test_parsers.py   parser proof boundaries; no walkthrough-name hardcoding
+  …                 also store, service, playbook, report, graph, tools, webapp,
+                    multitarget, web-pack/parser, and AD-path-expansion suites
 ```
 
 **Fact-kind namespace** (adopted from the prior obol, used across packs & seed):

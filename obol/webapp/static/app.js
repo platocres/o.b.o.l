@@ -52,7 +52,9 @@ async function apiPost(path, body) {
 }
 async function apiDelete(path) {
   const r = await fetch(path, { method: "DELETE", headers: { "X-Obol-Token": TOKEN } });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(data.detail?.message || data.detail || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return data;
 }
 async function apiUpload(path, form) {
   const r = await fetch(path, { method: "POST", headers: { "X-Obol-Token": TOKEN }, body: form });
@@ -255,6 +257,8 @@ function onClick(e) {
     case "eng-new": newEngagement(); break;
     case "open": openTarget(el.dataset.open); break;
     case "add-target": e.preventDefault(); addTargetPrompt(); break;
+    case "scope-add": e.preventDefault(); addScopePrompt(); break;
+    case "scope-del": e.stopPropagation(); delScope(el.dataset.scope); break;
     case "quickstart": e.preventDefault(); e.stopPropagation(); runQuickStart(el.dataset.host); break;
     case "activate-target": activateTarget(host); break;
     case "del-target": e.stopPropagation(); delTarget(el.dataset.host); break;
@@ -450,10 +454,17 @@ async function buildEngagement() {
     <div class="fd">${esc(a.command)}</div><div class="fd" style="color:var(--text-2)">${esc(a.status)}${a.produced?.length ? " · +" + a.produced.join(", ") : ""}</div></span></div>`).join("")
     || `<div class="empty">No activity yet.</div>`;
 
+  const scopeChips = (s.scope || []).length
+    ? s.scope.map((v) => `<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${esc(v)}<button data-act="scope-del" data-scope="${esc(v)}" title="Remove ${esc(v)} from scope" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button></span>`).join("")
+    : `<span class="muted">No scope yet — add a host or CIDR the runner is allowed to touch.</span>`;
+
   // catChart data is stashed for syncDonut after paint (charts are created, not morphed).
   pendingDonut = catTotal ? { id: "catChart", counts: s.category_counts, map: CAT_COLOR } : null;
   return `
     <div class="stat-grid">${tiles}</div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Scope</h2><button class="btn sm" data-act="scope-add">＋ Add scope</button></div>
+      <div class="muted" style="margin-bottom:10px;font-size:12px">Hosts and CIDR ranges the runner is authorized to touch. Everything obol runs is gated on this list.</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">${scopeChips}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Targets</h2><button class="btn sm primary" data-act="add-target">＋ Add target</button></div>
       <div class="tgrid">${tgtCards}</div></div>
     <div class="grid-2" style="margin-top:16px">
@@ -472,6 +483,16 @@ async function addTargetPrompt() {
   const label = prompt("Label (optional):") || "";
   try { await apiPost("/api/targets", { host, label }); toast("Target added", host, "ok"); render(); }
   catch (e) { toast("Could not add target", e.message, "err"); }
+}
+async function addScopePrompt() {
+  const value = prompt("Scope entry — a host, IP, or CIDR the runner may touch (e.g. 10.10.10.0/24):");
+  if (!value) return;
+  try { const r = await apiPost("/api/scope", { value }); toast("Scope added", r.added || value, "ok"); render(); }
+  catch (e) { toast("Could not add scope", e.message, "err"); }
+}
+async function delScope(value) {
+  try { await apiDelete(`/api/scope?value=${encodeURIComponent(value)}`); render(); }
+  catch (e) { toast("Could not remove scope", e.message, "err"); }
 }
 async function uploadBloodhound(input) {
   const files = input.files; if (!files.length) return;
