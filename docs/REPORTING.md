@@ -3,9 +3,12 @@
 `obol report` writes an OSCP-style markdown report from the same workspace state
 used by the terminal board and the local web view.
 
-The report is not a separate notes system. It is a projection of:
+The report is not a separate notes system. It is a projection of the same
+workspace state the terminal and web read from the SQLite store
+(`.obol/state.db`; `state.json` is the export/snapshot format, see
+[`ARCHITECTURE.md`](ARCHITECTURE.md)):
 
-- `.obol/state.json` facts
+- workspace facts (`Workspace.facts`)
 - `Workspace.runs` activity ledger entries
 - `Fact.source` evidence lineage
 - raw stdout/stderr paths saved by `obol run`
