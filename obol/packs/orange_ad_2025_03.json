@@ -407,6 +407,7 @@
    "hypothesis": "Legacy Group Policy Preferences stored local-account passwords in XML files in SYSVOL — a share any domain user (and sometimes anonymous sessions) can read. The cpassword value is AES-encrypted with a key Microsoft published in 2012, making it effectively plaintext. SYSVOL often also holds scripts and configs with other secrets.",
    "tool": "smbclient",
    "tools": [
+    "nxc",
     "smbclient",
     "gpp-decrypt",
     "smbmap"
@@ -432,6 +433,11 @@
    },
    "refs": [],
    "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc smb {{target}} -u '' -p '' --shares",
+     "note": "Quick Start preferred: enumerate SMB shares with null auth first. SYSVOL/NETLOGON readability flags config review and GPP follow-up."
+    },
     {
      "tool": "smbclient",
      "run": "smbclient '//{{target}}/SYSVOL' -N -c 'recurse; ls'",
