@@ -107,17 +107,111 @@ def _action_view(action, ws: Workspace, target: str = "") -> dict:
     }
 
 
-def _outcome_view(outcome) -> dict:
-    r = outcome.result
+def _text_preview(text: str, limit: int = 1800) -> str:
+    """Small output preview for the web run-result panel.
+
+    Raw evidence still lives on disk; this is only enough to explain a failure or
+    an empty parse without making the user hunt through the run ledger.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return "..." + text[-limit:]
+
+
+def _fact_view(f) -> dict:
     return {
-        "action_id": outcome.action_id, "command": redact_command(outcome.command, include_secrets=False),
-        "tool": outcome.tool, "dry_run": outcome.dry_run, "returncode": r.returncode,
-        "timed_out": r.timed_out, "duration_ms": r.duration_ms,
-        "added": [{"kind": f.kind, "label": friendly(f.kind),
-                   "value": _redact_value(f.value, include_secrets=False)} for f in outcome.added],
-        "added_count": len(outcome.added),
+        "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
+        "scope": f.scope, "state": f.state.value,
+        "value": _redact_value(f.value, include_secrets=False),
+        "evidence": redact_command(f.source or "", include_secrets=False),
+        "created_at": f.created_at,
     }
 
+
+def _target_fact_summary(tf) -> list[dict]:
+    """Grouped, useful facts for a target overview.
+
+    Findings are still the report-ish evidence table. This summary is the operator
+    working memory: ports/services, domain context, creds, access, web leads, loot.
+    Shared domain facts remain visible on each target because they change what the
+    target can do next.
+    """
+    supported = sorted(
+        [f for f in tf.facts if f.state.value == "supported"],
+        key=lambda f: (f.created_at, f.kind),
+    )
+    sections = [
+        ("target", "Target", lambda k: k == "target.configured" or k == "host.up"),
+        ("network", "Network & services",
+         lambda k: k.startswith("port:") or k.startswith("scan.") or k.startswith("service.")
+         or k in {"ldap.reachable", "smb.reachable", "kerberos.reachable", "winrm.reachable", "http.reachable"}),
+        ("domain", "Directory / domain", lambda k: k.startswith("ad.")),
+        ("credentials", "Credentials & hashes",
+         lambda k: k.startswith("credential.") or k.startswith("hash.") or k.startswith("kerberos.")),
+        ("access", "Access", lambda k: k.startswith("access.") or k.startswith("foothold.")),
+        ("web", "Web leads",
+         lambda k: k.startswith("web.") or k in {"db.creds", "exploit.candidate", "cloud.aws_access"}),
+        ("loot", "Loot / review",
+         lambda k: k.startswith("loot.") or k in {"config.review", "enum.deep", "vuln.candidates", "lateral.movement", "persistence.domain"}),
+    ]
+
+    out: list[dict] = []
+    used: set[int] = set()
+    for sid, title, pred in sections:
+        facts = []
+        for f in supported:
+            if id(f) in used:
+                continue
+            if pred(f.kind):
+                facts.append(_fact_view(f))
+                used.add(id(f))
+        if facts:
+            out.append({"id": sid, "title": title, "count": len(facts), "facts": facts})
+
+    other = [_fact_view(f) for f in supported if id(f) not in used]
+    if other:
+        out.append({"id": "other", "title": "Other facts", "count": len(other), "facts": other})
+    return out
+
+
+def _outcome_view(outcome) -> dict:
+    r = outcome.result
+    if outcome.dry_run:
+        status, success = "dry-run", True
+        message = "Command was rendered but not executed."
+    elif r.timed_out:
+        status, success = "timeout", False
+        message = "Command timed out before completion."
+    elif r.returncode == 0:
+        status, success = "success", True
+        message = "Command completed successfully."
+    else:
+        status, success = "failed", False
+        message = f"Command exited with return code {r.returncode}."
+
+    added = [_fact_view(f) for f in outcome.added]
+    return {
+        "action_id": outcome.action_id,
+        "command": redact_command(outcome.command, include_secrets=False),
+        "tool": outcome.tool,
+        "dry_run": outcome.dry_run,
+        "success": success,
+        "status": status,
+        "message": message,
+        "returncode": r.returncode,
+        "timed_out": r.timed_out,
+        "duration_ms": r.duration_ms,
+        "stdout_path": str(r.stdout_path),
+        "stderr_path": str(r.stderr_path),
+        "stdout_preview": _text_preview(r.stdout),
+        "stderr_preview": _text_preview(r.stderr),
+        "added": added,
+        "facts": added,
+        "added_count": len(added),
+    }
 
 def _target_bundle(ws: Workspace, host: str) -> dict:
     """Everything a target's tabbed view needs, in one payload."""
@@ -183,6 +277,8 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
                  "active": host == ws.target},
         "access": target_access_level(tf), "phase": cur,
         "open_ports": _target_open_ports(host_facts),
+        "facts_total": len([f for f in tf.facts if f.state.value == "supported"]),
+        "facts_summary": _target_fact_summary(tf),
         "chain": chain, "next": [_action_view(a, ws, target=host) for a in nxt],
         "tools": tools, "checklist": checklist, "findings": findings,
         "commands": commands,
