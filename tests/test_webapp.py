@@ -11,6 +11,9 @@ pytest.importorskip("fastapi")
 pytest.importorskip("multipart")  # python-multipart, for file uploads
 from fastapi.testclient import TestClient  # noqa: E402
 
+from obol.facts import Fact  # noqa: E402
+from obol.runner import RunResult  # noqa: E402
+from obol.service import RunOutcome  # noqa: E402
 from obol.webapp.server import create_app  # noqa: E402
 
 TOKEN = "test-token"
@@ -123,6 +126,48 @@ def test_playbook_steps_include_preflight(cx):
     assert pb["steps"]
     assert {"preflight", "command"}.issubset(pb["steps"][0])
     assert pb["steps"][0]["preflight"]["command"].endswith("10.10.10.161")
+
+
+def test_quickstart_runs_nmap_then_nxc_when_unlocked(cx, monkeypatch):
+    import obol.webapp.server as server
+
+    calls = []
+
+    def fake_which(binary):
+        return f"/usr/bin/{binary}" if binary in {"nmap", "nxc"} else None
+
+    def fake_run_action(ws, action, **kwargs):
+        target = kwargs.get("target") or ws.target
+        calls.append((action.id, kwargs.get("command_index", 0)))
+        if action.id == "nmap-fast-open-ports":
+            added = [
+                Fact("host.up", f"host:{target}", {"target": target}, source="fake nmap"),
+                Fact("scan.nmap.quick", f"host:{target}", {"ports": [445]}, source="fake nmap"),
+                Fact("ports.open", f"host:{target}", {"ports": [445]}, source="fake nmap"),
+                Fact("port:445", f"host:{target}", {"port": 445, "service": "microsoft-ds"}, source="fake nmap"),
+            ]
+        else:
+            added = [Fact("smb.reachable", f"host:{target}", {"tool": "nxc"}, source="fake nxc")]
+        for fact in added:
+            ws.facts.add(fact)
+        ws.record_run(action.tool, f"fake {action.id} {target}", [f.kind for f in added],
+                      action_id=action.id, command_index=kwargs.get("command_index", 0) + 1,
+                      returncode=0, timed_out=False, dry_run=False, target=target, quickstart=True)
+        ws.save()
+        result = RunResult(f"fake {action.id} {target}", ["fake", target], 0, "", "",
+                           ws.runs_dir / "stdout.txt", ws.runs_dir / "stderr.txt", 0.0, 1)
+        return RunOutcome(action.id, result.command, action.tool, result, added)
+
+    monkeypatch.setattr(server.shutil, "which", fake_which)
+    monkeypatch.setattr(server, "run_action", fake_run_action)
+
+    out = cx.post("/api/run/quickstart", json={"target": "10.10.10.161"}, headers=H).json()
+
+    assert out["quickstart"] is True
+    assert out["status"] == "success"
+    assert calls[0] == ("nmap-fast-open-ports", 0)
+    assert ("gpp-passwords", 0) in calls  # nxc smb --shares is the first SMB/GPP variant
+    assert {f["kind"] for f in out["facts"]} >= {"port:445", "smb.reachable"}
 
 
 def test_checklist_toggle_persists(cx):
