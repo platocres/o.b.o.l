@@ -1,5 +1,27 @@
 # Next build queue after OSCP report v1
 
+## Current build addition: live web run feedback + target fact memory
+
+Point-and-click execution should not feel like a black box. When the web launches
+an action or playbook step, the target page should immediately show a run-result
+panel with:
+
+- running / dry-run / success / failed / timeout status;
+- the exact redacted command that was attempted;
+- return code, duration, and raw evidence paths;
+- every new fact parsed and stored from the command output;
+- a small stdout/stderr preview when a command fails or produces no parsed facts.
+
+Each target overview should also show a grouped **Useful facts** memory panel built
+from the same fact store: target state, ports/services, directory/domain context,
+credentials and hashes, access, web leads, and loot/review material. This is both
+operator working memory and report source material. It must update via the existing
+SSE state refresh, with no manual page refresh and no second state store.
+
+The next larger build remains the **Command Composer + Run Preflight v1**: structured
+inputs/toggles for the commands, parser-support indicators, missing-tool warnings,
+missing-variable warnings, approval gates, and copy/dry-run/run controls.
+
 This queue exists so agents do not drift after the report build lands.
 
 ## 1. Playbook data model and dry-run runner — DONE
