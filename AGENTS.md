@@ -133,7 +133,8 @@ obol/
                  scope_target gates a range/discovery run on an authorized entry
   discovery.py   engagement discovery sweep: nmap host discovery over an authorized
                  scope range (through the one runner) -> live hosts -> auto-created
-                 targets. Scaffolding, not Orange methodology; stays proof-bound
+                 targets, then the web fans out the Quick Start baseline onto each
+                 new host. Scaffolding, not Orange methodology; stays proof-bound
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
                  (target=... pins a run to a host); eligible_actions = tool palette
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts

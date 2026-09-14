@@ -234,7 +234,8 @@ def test_sweep_discovers_hosts_and_creates_targets(cx, monkeypatch):
 
     monkeypatch.setattr(server.discovery, "run_sweep", fake_run_sweep)
 
-    started = cx.post("/api/run/sweep", json={"range": "10.10.10.0/24"}, headers=H).json()
+    started = cx.post("/api/run/sweep",
+                      json={"range": "10.10.10.0/24", "enumerate": False}, headers=H).json()
     assert started["kind"] == "sweep" and started["pending"] is True and started["job_id"]
 
     out = started
@@ -255,6 +256,66 @@ def test_sweep_refuses_unauthorized_range(cx):
     r = cx.post("/api/run/sweep", json={"range": "192.168.0.0/24"}, headers=H)
     assert r.status_code == 400 and "scope" in r.json()["detail"].lower()
     assert cx.post("/api/run/sweep", json={"range": ""}, headers=H).status_code == 422
+
+
+def test_sweep_chains_quickstart_enumeration_per_host(cx, monkeypatch):
+    import obol.webapp.server as server
+
+    cx.post("/api/scope", json={"value": "10.10.10.0/24"}, headers=H)
+
+    def fake_run_sweep(ws, range_, **kwargs):
+        for host in ("10.10.10.5", "10.10.10.7"):
+            ws.add_target(host)
+        ws.save()
+        return {"range": range_, "command": f"nmap -sn {range_}", "dry_run": False,
+                "returncode": 0, "timed_out": False,
+                "hosts": ["10.10.10.5", "10.10.10.7"],
+                "created": ["10.10.10.5", "10.10.10.7"], "existing": []}
+
+    enum_hosts = []
+
+    def fake_which(binary):
+        return f"/usr/bin/{binary}" if binary in {"nmap", "nxc"} else None
+
+    def fake_run_action(ws, action, **kwargs):
+        # the sweep's enumeration fan-out drives Quick Start, which calls run_action
+        target = kwargs.get("target") or ws.target
+        enum_hosts.append((action.id, target))
+        added = ([Fact("port:445", f"host:{target}", {"port": 445, "service": "microsoft-ds"}, source="fake")]
+                 if action.id == "nmap-fast-open-ports" else
+                 [Fact("smb.reachable", f"host:{target}", {"tool": "nxc"}, source="fake")])
+        for fact in added:
+            ws.facts.add(fact)
+        ws.record_run(action.tool, f"fake {action.id} {target}", [f.kind for f in added],
+                      action_id=action.id, command_index=kwargs.get("command_index", 0) + 1,
+                      returncode=0, timed_out=False, dry_run=False, target=target)
+        ws.save()
+        result = RunResult(f"fake {action.id}", ["fake", target], 0, "", "",
+                           ws.runs_dir / "o.txt", ws.runs_dir / "e.txt", 0.0, 1)
+        return RunOutcome(action.id, result.command, action.tool, result, added)
+
+    monkeypatch.setattr(server.discovery, "run_sweep", fake_run_sweep)
+    monkeypatch.setattr(server.shutil, "which", fake_which)
+    monkeypatch.setattr(server, "run_action", fake_run_action)
+
+    started = cx.post("/api/run/sweep", json={"range": "10.10.10.0/24"}, headers=H).json()
+    out = started
+    for _ in range(200):
+        out = cx.get(f"/api/sweep/jobs/{started['job_id']}", headers=H).json()
+        if not out["pending"]:
+            break
+        time.sleep(0.02)
+
+    assert out["status"] == "success"
+    # both discovered hosts were enumerated, and enumeration actually ran per host
+    assert set(out["enumerated"]) == {"10.10.10.5", "10.10.10.7"}
+    assert out["enum_jobs"] and len(out["enum_jobs"]) == 2
+    hosts_enumerated = {h for _, h in enum_hosts}
+    assert hosts_enumerated == {"10.10.10.5", "10.10.10.7"}
+    assert ("nmap-fast-open-ports", "10.10.10.5") in enum_hosts
+    # the per-host baseline populated facts on each new target
+    b = cx.get("/api/target", params={"target": "10.10.10.7"}, headers=H).json()
+    assert any(f["kind"] == "port:445" for f in b["findings"])
 
 
 def test_checklist_toggle_persists(cx):

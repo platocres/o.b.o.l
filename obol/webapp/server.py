@@ -834,16 +834,17 @@ def create_app(base, *, token: Optional[str] = None):
     # target for each, through the one scope-enforced runner (obol/discovery.py).
     # It rides the same background-job map and SSE signal as Quick Start, and the
     # new targets reach the browser live as `target_added` store events.
-    def _new_sweep_job(slug: str, range_: str) -> dict:
+    def _new_sweep_job(slug: str, range_: str, enumerate_: bool = True) -> dict:
         now = time.time()
         job_id = uuid.uuid4().hex[:12]
         job = {
             "id": job_id, "job_id": job_id, "kind": "sweep", "range": range_,
             "slug": slug, "tool": "nmap", "command": "", "status": "queued",
-            "success": False, "pending": True,
+            "success": False, "pending": True, "enumerate": enumerate_,
             "message": f"Discovery sweep of {range_} queued.",
             "created_at": now, "updated_at": now, "started_at": None, "ended_at": None,
             "steps": [], "facts": [], "found": 0, "created": [], "existing": [],
+            "enumerated": [], "enum_jobs": [],
         }
         with quickstart_jobs_lock:
             quickstart_jobs[job_id] = job
@@ -862,7 +863,7 @@ def create_app(base, *, token: Optional[str] = None):
     def _run_sweep_job(job_id: str) -> None:
         with quickstart_jobs_lock:
             job = quickstart_jobs[job_id]
-            range_, slug = job["range"], job["slug"]
+            range_, slug, enumerate_ = job["range"], job["slug"], job.get("enumerate", True)
         _job_update(job_id, status="running", started_at=time.time(),
                     message=f"Sweeping {range_} for live hosts…")
         try:
@@ -876,13 +877,48 @@ def create_app(base, *, token: Optional[str] = None):
                         message=str(exc), ended_at=time.time())
             return
         found, created = len(summary["hosts"]), summary["created"]
-        _job_update(
-            job_id, status="success", success=True, pending=False,
-            command=summary["command"], found=found,
-            created=created, existing=summary["existing"], ended_at=time.time(),
-            message=(f"Swept {range_}: {found} live host{'' if found == 1 else 's'}, "
-                     f"{len(created)} new target{'' if len(created) == 1 else 's'}."),
-        )
+        base = (f"Swept {range_}: {found} live host{'' if found == 1 else 's'}, "
+                f"{len(created)} new target{'' if len(created) == 1 else 's'}")
+        _job_update(job_id, command=summary["command"], found=found,
+                    created=created, existing=summary["existing"])
+
+        # Fan out: run the service-aware Quick Start baseline against each new host,
+        # one at a time, so services and facts populate without the operator opening
+        # each target. Each host's run is a normal Quick Start job (same engine), so
+        # its steps and facts stream to the page live. Only newly discovered hosts
+        # are enumerated — a re-sweep never re-runs enumeration on existing targets.
+        enumerated: list[str] = []
+        if enumerate_ and created:
+            for i, host in enumerate(created):
+                _job_update(job_id,
+                            message=f"{base}. Enumerating {host} ({i + 1}/{len(created)})…")
+                try:
+                    if _active_quickstart_job(slug, host):
+                        continue
+                    with _RUN_LOCK:
+                        ws = library.get_engagement(slug)
+                        if ws is None or not ws.get_target(host):
+                            continue
+                        qs = _new_quickstart_job(slug, ws, host)
+                    # run synchronously in this thread (it takes _RUN_LOCK per step
+                    # itself, so it must not be held here); the sweep waits for the
+                    # baseline before moving to the next host.
+                    _run_quickstart_job(qs["id"])
+                    enumerated.append(host)
+
+                    def _record(j, cid=qs["id"], en=list(enumerated)):
+                        j["enum_jobs"].append(cid)
+                        j["enumerated"] = en
+                    _job_update(job_id, _record)
+                except Exception:
+                    # one host's enumeration failing must not strand the sweep job;
+                    # the host is still a target, and can be Quick-Started by hand.
+                    continue
+
+        tail = (f". Enumerated {len(enumerated)} host{'' if len(enumerated) == 1 else 's'}."
+                if enumerate_ and created else ".")
+        _job_update(job_id, status="success", success=True, pending=False,
+                    enumerated=enumerated, ended_at=time.time(), message=base + tail)
 
     def active() -> Workspace:
         ws = library.resolve_active()
@@ -1219,6 +1255,9 @@ def create_app(base, *, token: Optional[str] = None):
     @app.post("/api/run/sweep")
     def api_run_sweep(payload: dict = Body(...)):
         range_ = (payload or {}).get("range", "").strip()
+        # Default on: a sweep discovers hosts AND runs the safe baseline enumeration
+        # against each new one. `enumerate: false` does discovery only.
+        enumerate_ = bool((payload or {}).get("enumerate", True))
         if not range_:
             raise HTTPException(422, "range is required (an authorized scope entry)")
         with _RUN_LOCK:
@@ -1230,7 +1269,7 @@ def create_app(base, *, token: Optional[str] = None):
             existing = _active_sweep_job(slug, range_)
             if existing:
                 return existing
-            job = _new_sweep_job(slug, range_)
+            job = _new_sweep_job(slug, range_, enumerate_)
         threading.Thread(target=_run_sweep_job, args=(job["id"],), daemon=True).start()
         return job
 
