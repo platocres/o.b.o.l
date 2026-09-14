@@ -18,9 +18,12 @@ credentials and hashes, access, web leads, and loot/review material. This is bot
 operator working memory and report source material. It must update via the existing
 SSE state refresh, with no manual page refresh and no second state store.
 
-The next larger build remains the **Command Composer + Run Preflight v1**: structured
-inputs/toggles for the commands, parser-support indicators, missing-tool warnings,
-missing-variable warnings, approval gates, and copy/dry-run/run controls.
+The next larger build is now the **Command Composer + Run Preflight v1** plus a
+per-target **Quick Start** runner: structured inputs for command tokens,
+parser-support indicators, missing-tool warnings, missing-variable warnings,
+approval gates, copy/manual-handoff controls, run buttons only when the rendered
+command is actually runnable, and a visible starter button that runs nmap first
+then safe service-aware enumeration.
 
 This queue exists so agents do not drift after the report build lands.
 
@@ -101,3 +104,26 @@ Move the path map away from a raw dependency DAG and toward a phase/lane layout:
 Recon, Enumeration, Credentials, Access, Privilege, Loot, Report.
 
 Do not reintroduce blocked branches into the user-facing board or web view.
+
+## Current build addition: Command Composer + Quick Start
+
+The web surface should make point-and-click execution explain itself before and
+after every command:
+
+- each command variant carries a preflight result from the same command renderer
+  the shared runner uses;
+- missing facts or operator inputs are shown inline, with promptable values saved
+  into the engagement input store;
+- missing binaries resolve against the Tools inventory before Run is enabled;
+- shell pipelines/redirection are treated as copy/manual handoff, not silent web
+  execution;
+- parser coverage is visible before a run, and successful runs still show the
+  facts actually parsed and stored in real time;
+- each target card and target header exposes a **Quick Start** button;
+- Quick Start runs the nmap spine first, then re-evaluates the new facts to run
+  only safe baseline enumeration unlocked by the target's exposed services;
+- nxc is preferred for the AD/SMB baseline where pack variants support it;
+- credential attacks, exploit probes, dumps, shell launchers, spraying, and
+  privilege/loot actions stay out of the automatic starter lane;
+- dry-run remains a lower-level CLI/backend compatibility feature, not a primary
+  website control.

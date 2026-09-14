@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import re
+import shlex
+import shutil
 import secrets
 import threading
 from pathlib import Path
@@ -45,6 +48,7 @@ from ..report import (
     _target_open_ports,
 )
 from ..runner import RunnerError
+from ..scope import target_in_scope
 from ..service import (
     ActionError,
     build_command,
@@ -77,6 +81,40 @@ PHASE_LABEL = {"recon": "Recon", "enum": "Enumerate", "creds": "Credentials",
                "access": "Access", "escalate": "Escalate", "loot": "Loot / domain"}
 
 _RUN_LOCK = threading.Lock()
+_TOKEN_RE = re.compile(r"{{\s*([^}]+?)\s*}}|<([^>]+)>")
+_INPUT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+_SHELL_META_RE = re.compile(r"[|;&<>`]")
+_EVIDENCE_ONLY_INPUTS = {"target", "nmap_ports"}
+_INPUT_HINTS = {
+    "nmap_ports": "Run the open-port nmap prelude first so O.B.O.L can fill the discovered ports.",
+    "domain": "Set this if you already know the AD DNS domain, or run domain/DC identification first.",
+    "basedn": "Set the LDAP base DN, for example DC=example,DC=local.",
+    "dc": "Set the domain controller hostname or domain when the command needs it.",
+    "user": "Set a username or let O.B.O.L fill this from a validated credential fact.",
+    "password": "Set a password or let O.B.O.L fill this from a validated credential fact.",
+    "userlist": "Set the path to a username file, for example users.txt.",
+    "hashfile": "Set the output/input hash file path, for example hashes.asrep.",
+    "wordlist": "Set the wordlist path, for example /usr/share/wordlists/rockyou.txt.",
+    "hash": "Paste or point at the hash/cpassword value this command consumes.",
+    "lhost": "Set your callback/listener host.",
+    "lport": "Set your callback/listener port.",
+}
+QUICKSTART_ACTION_IDS = [
+    "nmap-fast-open-ports",
+    "nmap-version-scripts",
+    "ad-dc-identify",
+    "ad-anon-ldap-enum",
+    "ad-user-enum",
+    "gpp-passwords",
+    "content-discovery",
+    "vhost-discovery",
+    "nikto-scan",
+]
+QUICKSTART_VARIANT_PREFERENCE = {
+    # Prefer the lighter ffuf common-wordlist pass over recursive feroxbuster when
+    # both are available; Quick Start should populate leads without surprise crawls.
+    "content-discovery": [1, 0, 2],
+}
 
 
 def _missing_dep() -> "SystemExit":
@@ -87,16 +125,206 @@ def _action_phase(action) -> str:
     return phase_of_kind(action.produces[0]) if action.produces else "recon"
 
 
+def _issue(kind: str, severity: str, message: str, fix: str = "") -> dict:
+    return {"kind": kind, "severity": severity, "message": message, "fix": fix}
+
+
+def _token_names(command: str) -> list[str]:
+    names: list[str] = []
+    for match in _TOKEN_RE.finditer(command or ""):
+        name = (match.group(1) or match.group(2) or "").strip().strip("{}<> ")
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _input_view(name: str) -> dict:
+    promptable = name not in _EVIDENCE_ONLY_INPUTS
+    return {
+        "name": name,
+        "promptable": promptable,
+        "source": "fact" if not promptable else "input",
+        "hint": _INPUT_HINTS.get(name, f"Set a value for {{{{{name}}}}}.")
+    }
+
+
+def _tool_binary(argv: list[str]) -> str:
+    if not argv:
+        return ""
+    if argv[0] == "sudo" and len(argv) > 1:
+        return argv[1]
+    return argv[0]
+
+
+def _tool_state(binary: str, declared_tool: str) -> dict:
+    label = declared_tool or binary
+    key = ""
+    manual = False
+    for tool in tool_inventory.REGISTRY:
+        names = tool.all_names()
+        if binary in names or declared_tool in names:
+            key = tool.key
+            label = tool.label
+            manual = tool.manual
+            break
+
+    path = shutil.which(binary) if binary else ""
+    source = "path" if path else ""
+    if binary and not path:
+        resolved = tool_inventory.resolve_binary(binary)
+        if resolved:
+            path = resolved
+            source = "inventory"
+    return {
+        "binary": binary,
+        "declared": declared_tool,
+        "key": key,
+        "label": label,
+        "found": bool(path),
+        "path": path or "",
+        "source": source,
+        "manual": manual,
+    }
+
+
+def _parser_status(action, command: str) -> dict:
+    lowered = (command or "").lower()
+    padded = f" {lowered} "
+    supported = (
+        any(f" {name} " in padded for name in (
+            "nmap", "nxc", "ldapsearch", "smbclient", "smbmap", "rpcclient",
+            "enum4linux", "hashcat", "john", "penelope", "certipy", "pywhisker",
+            "feroxbuster", "ffuf", "nikto", "dirb", "gobuster",
+        ))
+        or any(marker in lowered for marker in (
+            "getnpusers", "getuserspns", "secretsdump", "bloodhound-python",
+            "sharphound", "evil-winrm", "wmiexec", "psexec", "atexec", "smbexec",
+            "kerberoast", "asreproast", "host: fuzz",
+        ))
+    )
+    expected = [friendly(kind) for kind in action.produces]
+    if supported:
+        return {"state": "supported", "label": "Parser-supported", "facts": expected}
+    if expected:
+        return {
+            "state": "raw",
+            "label": "Raw evidence first",
+            "facts": expected,
+            "message": "This action declares expected facts, but no parser coverage is known for this command shape yet.",
+        }
+    return {"state": "raw", "label": "Raw evidence only", "facts": []}
+
+
+def _command_preflight(action, ws: Workspace, *, target: str = "", command_index: int = 0,
+                       args_extra: str = "", require_approval: bool = False) -> dict:
+    command, tool = build_command(action, ws, command_index=command_index,
+                                  args_extra=args_extra, target=target)
+    issues: list[dict] = []
+    missing = [_input_view(name) for name in _token_names(command)]
+    for item in missing:
+        issues.append(_issue("missing_input", "blocker", item["hint"],
+                             "Set the value or collect the prerequisite fact."))
+
+    command_without_tokens = _TOKEN_RE.sub("", command)
+    needs_handoff = bool(_SHELL_META_RE.search(command_without_tokens))
+    if needs_handoff:
+        issues.append(_issue(
+            "guided_handoff", "blocker",
+            "This command uses shell metacharacters; copy it into a terminal so the operator can verify the pipeline/redirection.",
+            "Use Copy and run it manually, then import or paste the output."
+        ))
+
+    argv: list[str] = []
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        issues.append(_issue("parse_error", "blocker", f"Command could not be parsed: {exc}"))
+
+    binary = _tool_binary(argv)
+    tool_state = _tool_state(binary, tool)
+    if binary and not tool_state["found"]:
+        issues.append(_issue(
+            "missing_tool", "blocker",
+            f"{tool_state['label'] or binary} was not found on PATH or in O.B.O.L's tool inventory.",
+            "Install it from the Tools page or add the absolute path."
+        ))
+
+    scoped_target = target or ws.target
+    scope_ok = False
+    if not scoped_target:
+        issues.append(_issue("scope", "blocker", "No target is selected for this command."))
+    else:
+        allowed, reason = target_in_scope(scoped_target, ws.scope)
+        command_text = " ".join(argv) if argv else command
+        if not allowed:
+            issues.append(_issue("scope", "blocker", f"Scope refused {scoped_target}: {reason}"))
+        elif scoped_target not in command_text:
+            issues.append(_issue(
+                "scope", "blocker",
+                f"The rendered command does not include scoped target {scoped_target}.",
+                "Use copy/manual handoff until this action declares a different target field."
+            ))
+        else:
+            scope_ok = True
+
+    if require_approval:
+        issues.append(_issue(
+            "approval", "warning",
+            "This step is marked noisy or intrusive and asks for confirmation before running."
+        ))
+
+    blockers = [i for i in issues if i.get("severity") == "blocker"]
+    can_run = not blockers
+    status = "ready" if can_run else ("manual" if needs_handoff else "blocked")
+    return {
+        "action_id": action.id,
+        "command_index": command_index + 1,
+        "command": redact_command(command, include_secrets=False),
+        "tool": tool_state,
+        "parser": _parser_status(action, command),
+        "missing_inputs": missing,
+        "issues": issues,
+        "can_run": can_run,
+        "can_copy": bool(command),
+        "needs_handoff": needs_handoff,
+        "scope_ok": scope_ok,
+        "requires_approval": require_approval,
+        "status": status,
+        "summary": "Ready to run" if can_run else blockers[0]["message"],
+    }
+
+
+def _apply_inputs(ws: Workspace, raw_inputs: dict) -> list[str]:
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(422, "inputs must be an object")
+    saved: list[str] = []
+    for raw_key, raw_value in raw_inputs.items():
+        key = str(raw_key).strip().strip("{}<> ")
+        if not _INPUT_KEY_RE.match(key):
+            raise HTTPException(422, f"invalid input name {raw_key!r}")
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        ws.set_input(key, value)
+        saved.append(key)
+    return saved
+
+
 def _action_view(action, ws: Workspace, target: str = "") -> dict:
     variants = []
     for i in range(len(action.commands or [{"run": action.command}])):
         try:
-            cmd, tool = build_command(action, ws, command_index=i, target=target)
+            preflight = _command_preflight(action, ws, command_index=i, target=target)
         except ActionError:
             continue
         note = (action.commands[i].get("note", "") if action.commands else "")
-        variants.append({"index": i + 1, "command": redact_command(cmd, include_secrets=False),
-                         "tool": tool, "note": note})
+        variants.append({
+            "index": i + 1,
+            "command": preflight["command"],
+            "tool": preflight["tool"]["declared"] or preflight["tool"]["binary"],
+            "note": note,
+            "preflight": preflight,
+        })
     return {
         "id": action.id, "title": action.title, "desc": board.action_desc(action),
         "hypothesis": action.hypothesis,
@@ -105,6 +333,73 @@ def _action_view(action, ws: Workspace, target: str = "") -> dict:
         "produces": [friendly(k) for k in action.produces],
         "report": action.report or None, "variants": variants,
     }
+
+
+def _action_done(ws: Workspace, target: str, action) -> bool:
+    if any(r.get("action_id") == action.id and r.get("target") == target and not r.get("dry_run")
+           for r in ws.runs):
+        return True
+    tf = ws.facts_for_target(target)
+    return bool(action.produces) and all(tf.has(kind) for kind in action.produces)
+
+
+def _quickstart_variant_indices(action) -> list[int]:
+    total = len(action.commands or [{"run": action.command}])
+    preferred = [i for i in QUICKSTART_VARIANT_PREFERENCE.get(action.id, []) if 0 <= i < total]
+    return preferred + [i for i in range(total) if i not in preferred]
+
+
+def _first_runnable_variant(action, ws: Workspace, target: str) -> tuple[int | None, dict | None]:
+    fallback = None
+    for i in _quickstart_variant_indices(action):
+        try:
+            preflight = _command_preflight(action, ws, command_index=i, target=target)
+        except ActionError:
+            continue
+        fallback = fallback or preflight
+        if preflight["can_run"] and not preflight["needs_handoff"]:
+            return i, preflight
+    return None, fallback
+
+
+def _quickstart_plan(ws: Workspace, target: str) -> dict:
+    steps = []
+    ready = 0
+    tf = ws.facts_for_target(target)
+    for action_id in QUICKSTART_ACTION_IDS:
+        try:
+            action = find_action(action_id)
+        except ActionError:
+            continue
+        applicable = action.eligible(tf)
+        done = _action_done(ws, target, action)
+        preflight = None
+        status = "done" if done else "waiting"
+        summary = "Already has facts or a prior run for this target." if done else "Waiting for nmap/service facts."
+        if applicable and not done:
+            _idx, preflight = _first_runnable_variant(action, ws, target)
+            status = (preflight or {}).get("status", "blocked")
+            summary = (preflight or {}).get("summary", "No runnable command variant.")
+            if (preflight or {}).get("can_run"):
+                ready += 1
+        steps.append({
+            "action_id": action.id,
+            "title": action.title,
+            "phase": _action_phase(action),
+            "applicable": applicable,
+            "done": done,
+            "status": status,
+            "summary": summary,
+            "preflight": preflight,
+        })
+    return {
+        "title": "Quick Start",
+        "description": "Runs nmap first, then safe baseline enumeration unlocked by the discovered services.",
+        "action_ids": QUICKSTART_ACTION_IDS,
+        "ready_count": ready,
+        "steps": steps,
+    }
+
 
 
 def _text_preview(text: str, limit: int = 1800) -> str:
@@ -279,6 +574,7 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
         "open_ports": _target_open_ports(host_facts),
         "facts_total": len([f for f in tf.facts if f.state.value == "supported"]),
         "facts_summary": _target_fact_summary(tf),
+        "quickstart": _quickstart_plan(ws, host),
         "chain": chain, "next": [_action_view(a, ws, target=host) for a in nxt],
         "tools": tools, "checklist": checklist, "findings": findings,
         "commands": commands,
@@ -429,6 +725,30 @@ def create_app(base, *, token: Optional[str] = None):
             ws.save()
         return {"ok": True}
 
+    @app.post("/api/inputs")
+    def api_inputs(payload: dict = Body(...)):
+        with _RUN_LOCK:
+            ws = active()
+            target = (payload or {}).get("target", "")
+            if target:
+                target_or_404(ws, target)
+            saved = _apply_inputs(ws, (payload or {}).get("inputs", {}) or {})
+            ws.save()
+        return {"ok": True, "saved": saved}
+
+    @app.get("/api/action/preflight")
+    def api_action_preflight(action_id: str = Query(...), target: str = Query(""),
+                             cmd_index: int = Query(1)):
+        ws = active()
+        if target:
+            target_or_404(ws, target)
+        try:
+            action = find_action(action_id)
+            return _command_preflight(action, ws, target=target,
+                                      command_index=max(0, cmd_index - 1))
+        except ActionError as exc:
+            raise HTTPException(404, str(exc))
+
     # ── evidence ─────────────────────────────────────────────────────────────
     @app.post("/api/target/evidence")
     async def api_add_evidence(target: str = Form(...), file: UploadFile = File(...),
@@ -510,19 +830,98 @@ def create_app(base, *, token: Optional[str] = None):
         cmd_index = max(0, int((payload or {}).get("cmd_index", 1)) - 1)
         dry_run = bool((payload or {}).get("dry_run", False))
         target = (payload or {}).get("target", "")
+        args_extra = str((payload or {}).get("args_extra", "") or "")
+        allow_shell = bool((payload or {}).get("allow_shell", False))
         with _RUN_LOCK:
             ws = active()
             if target:
                 target_or_404(ws, target)
+            inputs = (payload or {}).get("inputs", {}) or {}
+            if inputs:
+                _apply_inputs(ws, inputs)
+                ws.save()
             try:
                 action = find_action(action_id)
                 outcome = run_action(ws, action, command_index=cmd_index, dry_run=dry_run,
+                                     allow_shell=allow_shell, args_extra=args_extra,
                                      target=target, ledger_extra={"surface": "web", "target": target or ws.target})
             except ActionError as exc:
                 raise HTTPException(404, str(exc))
             except RunnerError as exc:
                 raise HTTPException(400, str(exc))
         return _outcome_view(outcome)
+
+    @app.post("/api/run/quickstart")
+    def api_run_quickstart(payload: dict = Body(...)):
+        target = (payload or {}).get("target", "")
+        if not target:
+            raise HTTPException(422, "target is required")
+        ran = []
+        skipped = []
+        facts = []
+        with _RUN_LOCK:
+            ws = active()
+            host = target_or_404(ws, target)
+            for action_id in QUICKSTART_ACTION_IDS:
+                try:
+                    action = find_action(action_id)
+                except ActionError as exc:
+                    skipped.append({"action_id": action_id, "status": "missing", "reason": str(exc)})
+                    continue
+                tf = ws.facts_for_target(host)
+                if _action_done(ws, host, action):
+                    skipped.append({"action_id": action.id, "title": action.title, "status": "done",
+                                    "reason": "already has facts or a prior run"})
+                    continue
+                if not action.eligible(tf):
+                    skipped.append({"action_id": action.id, "title": action.title, "status": "waiting",
+                                    "reason": "waiting for service facts from earlier quick-start steps"})
+                    continue
+                cmd_index, preflight = _first_runnable_variant(action, ws, host)
+                if cmd_index is None:
+                    skipped.append({"action_id": action.id, "title": action.title, "status": "blocked",
+                                    "reason": (preflight or {}).get("summary", "no runnable command variant"),
+                                    "preflight": preflight})
+                    continue
+                try:
+                    outcome = run_action(
+                        ws, action, command_index=cmd_index, target=host,
+                        ledger_extra={"surface": "web", "quickstart": True, "target": host},
+                    )
+                except RunnerError as exc:
+                    skipped.append({"action_id": action.id, "title": action.title, "status": "refused",
+                                    "reason": str(exc), "preflight": preflight})
+                    continue
+                view = _outcome_view(outcome)
+                view["title"] = action.title
+                ran.append(view)
+                facts.extend(view.get("facts", []))
+        failures = [step for step in ran if not step.get("success")]
+        status = "success" if ran and not failures else ("partial" if ran else "blocked")
+        message = f"Quick Start ran {len(ran)} command(s), stored {len(facts)} fact(s), skipped {len(skipped)} step(s)."
+        return {
+            "quickstart": True,
+            "target": target,
+            "tool": "quick-start",
+            "command": "quick-start baseline: " + " -> ".join(step.get("action_id", "") for step in ran),
+            "success": status == "success",
+            "status": status,
+            "message": message,
+            "dry_run": False,
+            "returncode": None,
+            "timed_out": any(step.get("timed_out") for step in ran),
+            "duration_ms": sum(int(step.get("duration_ms") or 0) for step in ran),
+            "stdout_path": "",
+            "stderr_path": "",
+            "stdout_preview": "",
+            "stderr_preview": "",
+            "steps": ran,
+            "skipped": skipped,
+            "facts": facts,
+            "added": facts,
+            "added_count": len(facts),
+        }
+
 
     @app.post("/api/run/playbook")
     def api_run_playbook(payload: dict = Body(...)):
@@ -532,12 +931,16 @@ def create_app(base, *, token: Optional[str] = None):
         approve = bool((payload or {}).get("approve", False))
         dry_run = bool((payload or {}).get("dry_run", False))
         target = (payload or {}).get("target", "")
+        inputs = (payload or {}).get("inputs", {}) or {}
         if not name or step_no < 1:
             raise HTTPException(422, "name and a 1-based step are required")
         with _RUN_LOCK:
             ws = active()
             if target:
                 target_or_404(ws, target)
+            if inputs:
+                _apply_inputs(ws, inputs)
+                ws.save()
             try:
                 pb = playbook.load_playbook(name)
             except FileNotFoundError:
@@ -586,13 +989,17 @@ def create_app(base, *, token: Optional[str] = None):
         out = []
         for i, (step, action) in enumerate(steps, 1):
             try:
-                cmd = board.fill_command(action, ws, max(0, (step.cmd or 1) - 1), target)
-                extra = board.fill_template(step.args_extra, ws, target).strip() if step.args_extra else ""
-                cmd = f"{cmd} {extra}".strip() if extra else cmd
+                preflight = _command_preflight(
+                    action, ws, target=target, command_index=max(0, (step.cmd or 1) - 1),
+                    args_extra=step.args_extra, require_approval=bool(step.require_approval),
+                )
+                cmd = preflight["command"]
             except Exception:
+                preflight = {}
                 cmd = action.command
             out.append({"step": i, "label": step.label, "action_id": action.id, "title": action.title,
-                        "command": redact_command(cmd, include_secrets=False),
+                        "command": cmd,
+                        "preflight": preflight,
                         "require_approval": bool(step.require_approval),
                         "note": getattr(step, "note", "") or ""})
         return {"name": pb.name, "title": pb.title, "description": pb.description, "steps": out}

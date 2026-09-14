@@ -85,16 +85,18 @@ def run_command(
     """Execute command safely and save raw evidence under .obol/runs/."""
     argv = _build_argv(command, allow_shell_tokens=allow_shell_tokens)
     _scope_check(argv, ws)
-    if shutil.which(argv[0]) is None and not dry_run:
+    binary_index = 1 if argv[0] == "sudo" and len(argv) > 1 else 0
+    if shutil.which(argv[binary_index]) is None and not dry_run:
         # Not on PATH — but the tool inventory may know where it is (a default Kali
         # location, or a path the operator added on the Tools page). Resolve to an
         # absolute path so a tool the UI reports as "found" is guaranteed to launch.
+        # For sudo-prefixed commands, resolve the actual tool after sudo.
         from .tools import resolve_binary
-        resolved = resolve_binary(argv[0])
+        resolved = resolve_binary(argv[binary_index])
         if resolved:
-            argv[0] = resolved
+            argv[binary_index] = resolved
         else:
-            raise RunnerError(f"binary `{argv[0]}` was not found in PATH")
+            raise RunnerError(f"binary `{argv[binary_index]}` was not found in PATH")
 
     started = time.time()
     ts = time.strftime("%Y%m%d-%H%M%S", time.localtime(started))

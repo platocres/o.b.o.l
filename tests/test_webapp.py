@@ -11,6 +11,9 @@ pytest.importorskip("fastapi")
 pytest.importorskip("multipart")  # python-multipart, for file uploads
 from fastapi.testclient import TestClient  # noqa: E402
 
+from obol.facts import Fact  # noqa: E402
+from obol.runner import RunResult  # noqa: E402
+from obol.service import RunOutcome  # noqa: E402
 from obol.webapp.server import create_app  # noqa: E402
 
 TOKEN = "test-token"
@@ -54,11 +57,12 @@ def test_targets_and_bundle(cx):
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     assert set(b) >= {"meta", "access", "phase", "chain", "next", "tools", "checklist",
                       "findings", "commands", "evidence", "graph", "facts_summary",
-                      "facts_total"}
+                      "facts_total", "quickstart"}
     # a bare target unlocks the nmap prelude (so you can start from the UI)
     assert any(a["id"] == "nmap-fast-open-ports" for a in b["next"])
-    # the target bundle carries accumulated useful facts for the operator memory panel
+    # the target bundle carries accumulated useful facts and a Quick Start plan
     assert b["facts_total"] >= 1
+    assert b["quickstart"]["steps"][0]["action_id"] == "nmap-fast-open-ports"
     assert any(
         f["kind"] == "target.configured"
         for section in b["facts_summary"]
@@ -72,6 +76,10 @@ def test_targets_and_bundle(cx):
 def test_run_from_site_scoped_to_target(cx):
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     action = next(a for a in b["next"] if a["id"] == "nmap-fast-open-ports")
+    preflight = action["variants"][0]["preflight"]
+    assert preflight["command"].endswith("10.10.10.161")
+    assert preflight["missing_inputs"] == []
+    assert preflight["parser"]["state"] == "supported"
     out = cx.post("/api/run/action",
                   json={"action_id": action["id"], "target": "10.10.10.161", "dry_run": True},
                   headers=H).json()
@@ -83,6 +91,83 @@ def test_run_from_site_scoped_to_target(cx):
 def test_run_unknown_and_missing(cx):
     assert cx.post("/api/run/action", json={"action_id": "nope"}, headers=H).status_code == 404
     assert cx.post("/api/run/action", json={}, headers=H).status_code == 422
+
+
+def test_preflight_reports_missing_fact_prerequisite(cx):
+    r = cx.get("/api/action/preflight",
+               params={"action_id": "nmap-version-scripts", "target": "10.10.10.161"},
+               headers=H)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["can_run"] is False
+    assert "nmap_ports" in {i["name"] for i in data["missing_inputs"]}
+    assert any(i["kind"] == "missing_input" for i in data["issues"])
+
+
+def test_inputs_fill_command_tokens(cx):
+    before = cx.get("/api/action/preflight",
+                    params={"action_id": "asrep-roast", "target": "10.10.10.161"},
+                    headers=H).json()
+    assert {"userlist", "hashfile"}.issubset({i["name"] for i in before["missing_inputs"]})
+    r = cx.post("/api/inputs",
+                json={"target": "10.10.10.161",
+                      "inputs": {"userlist": "users.txt", "hashfile": "hashes.asrep"}},
+                headers=H)
+    assert r.status_code == 200 and set(r.json()["saved"]) == {"userlist", "hashfile"}
+    after = cx.get("/api/action/preflight",
+                   params={"action_id": "asrep-roast", "target": "10.10.10.161"},
+                   headers=H).json()
+    assert "users.txt" in after["command"] and "hashes.asrep" in after["command"]
+    assert not ({"userlist", "hashfile"} & {i["name"] for i in after["missing_inputs"]})
+
+
+def test_playbook_steps_include_preflight(cx):
+    pb = cx.get("/api/playbook/ad-recon", params={"target": "10.10.10.161"}, headers=H).json()
+    assert pb["steps"]
+    assert {"preflight", "command"}.issubset(pb["steps"][0])
+    assert pb["steps"][0]["preflight"]["command"].endswith("10.10.10.161")
+
+
+def test_quickstart_runs_nmap_then_nxc_when_unlocked(cx, monkeypatch):
+    import obol.webapp.server as server
+
+    calls = []
+
+    def fake_which(binary):
+        return f"/usr/bin/{binary}" if binary in {"nmap", "nxc"} else None
+
+    def fake_run_action(ws, action, **kwargs):
+        target = kwargs.get("target") or ws.target
+        calls.append((action.id, kwargs.get("command_index", 0)))
+        if action.id == "nmap-fast-open-ports":
+            added = [
+                Fact("host.up", f"host:{target}", {"target": target}, source="fake nmap"),
+                Fact("scan.nmap.quick", f"host:{target}", {"ports": [445]}, source="fake nmap"),
+                Fact("ports.open", f"host:{target}", {"ports": [445]}, source="fake nmap"),
+                Fact("port:445", f"host:{target}", {"port": 445, "service": "microsoft-ds"}, source="fake nmap"),
+            ]
+        else:
+            added = [Fact("smb.reachable", f"host:{target}", {"tool": "nxc"}, source="fake nxc")]
+        for fact in added:
+            ws.facts.add(fact)
+        ws.record_run(action.tool, f"fake {action.id} {target}", [f.kind for f in added],
+                      action_id=action.id, command_index=kwargs.get("command_index", 0) + 1,
+                      returncode=0, timed_out=False, dry_run=False, target=target, quickstart=True)
+        ws.save()
+        result = RunResult(f"fake {action.id} {target}", ["fake", target], 0, "", "",
+                           ws.runs_dir / "stdout.txt", ws.runs_dir / "stderr.txt", 0.0, 1)
+        return RunOutcome(action.id, result.command, action.tool, result, added)
+
+    monkeypatch.setattr(server.shutil, "which", fake_which)
+    monkeypatch.setattr(server, "run_action", fake_run_action)
+
+    out = cx.post("/api/run/quickstart", json={"target": "10.10.10.161"}, headers=H).json()
+
+    assert out["quickstart"] is True
+    assert out["status"] == "success"
+    assert calls[0] == ("nmap-fast-open-ports", 0)
+    assert ("gpp-passwords", 0) in calls  # nxc smb --shares is the first SMB/GPP variant
+    assert {f["kind"] for f in out["facts"]} >= {"port:445", "smb.reachable"}
 
 
 def test_checklist_toggle_persists(cx):

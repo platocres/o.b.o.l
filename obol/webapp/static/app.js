@@ -18,7 +18,7 @@ const ACCESS = {
 };
 const NODE_COLOR = { domain: "#6366F1", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
-const state = { view: "engagement", target: null, tab: "overview", secrets: false, lastRun: null };
+const state = { view: "engagement", target: null, tab: "overview", secrets: false, toolTarget: "", lastRun: null };
 const charts = {};
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -77,11 +77,63 @@ function factsSummaryHtml(summary) {
     <div class="fact-chip-grid">${(s.facts || []).map(factChip).join("")}</div>
   </section>`).join("")}</div>`;
 }
+function statusText(p) {
+  if (!p) return "Unknown";
+  if (p.status === "ready") return "Ready";
+  if (p.status === "manual") return "Manual handoff";
+  if (p.status === "done") return "Done";
+  if (p.status === "waiting") return "Waiting";
+  return "Blocked";
+}
+function preflightBadges(p) {
+  if (!p) return `<span class="pf-badge blocked">No preflight</span>`;
+  const cls = p.status === "ready" ? "ready" : (p.status === "manual" ? "manual" : "blocked");
+  const tool = p.tool || {};
+  const parser = p.parser || {};
+  const toolCls = tool.found ? "ready" : "blocked";
+  const parserCls = parser.state === "supported" ? "parser" : "warn";
+  const miss = (p.missing_inputs || []).length;
+  return `<div class="preflight-badges"><span class="pf-badge ${cls}">${esc(statusText(p))}</span>` +
+    `<span class="pf-badge ${toolCls}">${tool.found ? "tool found" : "tool missing"}: ${esc(tool.label || tool.binary || p.tool || "tool")}</span>` +
+    `<span class="pf-badge ${parserCls}">${esc(parser.label || "Raw evidence")}</span>` +
+    (miss ? `<span class="pf-badge blocked">${miss} input${miss === 1 ? "" : "s"} needed</span>` : "") + `</div>`;
+}
+function preflightIssues(p) {
+  const issues = (p && p.issues) || [];
+  if (!issues.length) return "";
+  return `<div class="pf-issues">${issues.slice(0, 4).map((i) => `<div class="pf-issue ${esc(i.severity || "")}">${esc(i.message || i.kind)}${i.fix ? ` <span class="muted">${esc(i.fix)}</span>` : ""}</div>`).join("")}</div>`;
+}
+function missingInputControls(p) {
+  const inputs = (p && p.missing_inputs) || [];
+  if (!inputs.length) return "";
+  return `<div class="missing-inputs"><span class="hint">Missing:</span>${inputs.map((i) => i.promptable
+    ? `<button class="btn xs" data-setinput="${esc(i.name)}" title="${esc(i.hint || "")}">Set ${esc(i.name)}</button>`
+    : `<span class="pill" title="${esc(i.hint || "")}">${esc(i.name)} from facts</span>`).join("")}</div>`;
+}
+function variantRows(a, host) {
+  const variants = a.variants || [];
+  if (!variants.length) return `<div class="empty compact">No command variants available.</div>`;
+  return `<div class="composer">${variants.map((v) => {
+    const p = v.preflight || {};
+    const canRun = !!p.can_run;
+    const copyLabel = p.needs_handoff ? "Copy handoff" : "Copy";
+    return `<div class="variant-row">
+      <div class="variant-top"><div class="variant-title"><span class="pill mono">#${esc(v.index)}</span><span class="mono muted">${esc(v.tool || "")}</span></div>${preflightBadges(p)}</div>
+      <pre class="cmd sm">$ ${esc(v.command)}</pre>
+      ${v.note ? `<div class="variant-note">${esc(v.note)}</div>` : ""}
+      ${missingInputControls(p)}${preflightIssues(p)}
+      <div class="composer-actions"><button class="btn primary sm" data-run="${esc(a.id)}" data-cmd="${esc(v.index)}" ${canRun ? "" : "disabled"}>Run</button>
+        <button class="btn sm" data-copycmd="${esc(v.command)}">${copyLabel}</button></div>
+    </div>`;
+  }).join("")}</div>`;
+}
 function runStatusPanel(host) {
   const r = state.lastRun;
   if (!r || r.target !== host) return "";
   if (r.pending) {
-    return `<div class="run-panel pending"><div class="run-head"><span class="pulse"></span><div><b>${esc(r.dry ? "Dry-running" : "Running command")}</b><div class="muted">Waiting for the shared runner to return…</div></div></div>
+    const title = r.quickstart ? "Quick Start running" : "Running command";
+    const detail = r.quickstart ? "Running nmap first, then service-aware baseline enumeration as facts unlock it." : "Waiting for the shared runner to return…";
+    return `<div class="run-panel pending"><div class="run-head"><span class="pulse"></span><div><b>${esc(title)}</b><div class="muted">${esc(detail)}</div></div></div>
       <div class="muted mono" style="margin-top:8px">${esc(r.action_id || "")}</div></div>`;
   }
   if (r.error) {
@@ -89,20 +141,24 @@ function runStatusPanel(host) {
   }
   const o = r.outcome || {};
   const facts = o.facts || o.added || [];
-  const okClass = o.success ? (o.dry_run ? "pending" : "ok") : "failed";
-  const title = o.dry_run ? "Dry-run complete" : (o.success ? "Command succeeded" : "Command failed");
+  const okClass = o.success ? (o.dry_run ? "pending" : "ok") : (o.status === "partial" ? "pending" : "failed");
+  const title = o.quickstart ? (o.success ? "Quick Start complete" : (o.status === "partial" ? "Quick Start partially complete" : "Quick Start blocked")) : (o.dry_run ? "Preview complete" : (o.success ? "Command succeeded" : "Command failed"));
   const preview = (!o.success || !facts.length)
     ? `<div class="run-previews">${o.stderr_preview ? `<div><div class="rp-label">stderr preview</div><pre>${esc(o.stderr_preview)}</pre></div>` : ""}${o.stdout_preview ? `<div><div class="rp-label">stdout preview</div><pre>${esc(o.stdout_preview)}</pre></div>` : ""}</div>`
     : "";
+  const steps = (o.steps || []).length ? `<div class="run-steps"><div class="rp-label">Commands run (${o.steps.length})</div>${o.steps.map((s) => `<div class="step-row"><span class="status-dot ${s.success ? "good" : "bad"}"></span><span>${esc(s.title || s.action_id)}</span><span class="muted mono">${esc(s.status || "")}${s.added_count ? ` · +${s.added_count}` : ""}</span></div>`).join("")}</div>` : "";
+  const skipped = (o.skipped || []).length ? `<details class="skipped"><summary>${o.skipped.length} skipped quick-start step${o.skipped.length === 1 ? "" : "s"}</summary>${o.skipped.map((s) => `<div class="muted">${esc(s.title || s.action_id)} · ${esc(s.reason || s.status || "skipped")}</div>`).join("")}</details>` : "";
   return `<div class="run-panel ${okClass}">
     <div class="run-head"><span class="status-dot ${o.success ? "good" : "bad"}"></span>
       <div><b>${esc(title)}</b><div class="muted">${esc(o.message || "")}${o.duration_ms ? ` · ${o.duration_ms}ms` : ""}${o.returncode !== null && o.returncode !== undefined ? ` · rc ${o.returncode}` : ""}</div></div></div>
     ${o.command ? `<pre class="cmd run-cmd">$ ${esc(o.command)}</pre>` : ""}
+    ${steps}${skipped}
     ${facts.length ? `<div class="run-facts"><div class="rp-label">Facts stored (${facts.length})</div><div class="fact-chip-grid compact">${facts.map(factChip).join("")}</div></div>` : `<div class="muted" style="margin-top:8px">No new facts were parsed and stored from this output.</div>`}
     ${preview}
     ${o.stdout_path || o.stderr_path ? `<div class="muted mono" style="font-size:11px;margin-top:8px">${o.stdout_path ? `stdout ${esc(o.stdout_path)}` : ""}${o.stderr_path ? ` · stderr ${esc(o.stderr_path)}` : ""}</div>` : ""}
   </div>`;
 }
+
 // ── boot ───────────────────────────────────────────────────────────────────
 let ENGS = { engagements: [], active: null };
 async function boot() {
@@ -188,6 +244,7 @@ async function renderEngagement(c) {
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
         <span class="pill">${(tg.open_ports || []).length} ports</span>
         <span class="pill">${(tg.findings || []).length} findings</span>
+        <span class="spacer" style="flex:1"></span><button class="btn primary sm" data-quickstart="${esc(tg.host)}">Quick Start</button>
       </div></div>`;
   }).join("") : `<div class="empty">No targets yet. <a href="#" id="add-first-tgt">Add one</a>.</div>`;
 
@@ -221,7 +278,8 @@ async function renderEngagement(c) {
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Activity</h2></div><div class="feed">${feed}</div></div>`;
 
   drawDonut("catChart", s.category_counts, CAT_COLOR, "catLegend");
-  c.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => openTarget(el.dataset.open)));
+  c.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => { if (e.target.closest("[data-quickstart]")) return; openTarget(el.dataset.open); }));
+  wireQuickStart(c);
   const addBtn = $("#add-tgt") || $("#add-first-tgt");
   c.querySelectorAll("#add-tgt,#add-first-tgt").forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); addTargetPrompt(); }));
   $("#see-path").addEventListener("click", () => setView("engpath"));
@@ -269,15 +327,16 @@ async function renderTargets(c) {
       <div class="row" style="gap:6px">
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
-        <span class="pill">${(tg.open_ports || []).length} ports</span></div></div>`;
+        <span class="pill">${(tg.open_ports || []).length} ports</span><span class="spacer" style="flex:1"></span><button class="btn primary sm" data-quickstart="${esc(tg.host)}">Quick Start</button></div></div>`;
   }).join("") || `<div class="empty">No targets yet.</div>`;
   c.innerHTML = `<div class="card"><div class="panel-h"><h2>Targets</h2><button class="btn sm primary" id="add-tgt">＋ Add target</button></div><div class="tgrid">${cards}</div></div>`;
-  c.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => { if (e.target.closest("[data-del]")) return; openTarget(el.dataset.open); }));
+  c.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => { if (e.target.closest("[data-del],[data-quickstart]")) return; openTarget(el.dataset.open); }));
   c.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (confirm(`Remove target ${b.dataset.del}?`)) { await apiDelete(`/api/target?target=${encodeURIComponent(b.dataset.del)}`); render(); }
   }));
   $("#add-tgt").addEventListener("click", addTargetPrompt);
+  wireQuickStart(c);
 }
 
 // ── target detail (tabs) ────────────────────────────────────────────────────
@@ -300,6 +359,7 @@ async function renderTarget(c) {
           <div class="mono muted" style="font-size:12px">${esc(b.meta.host)}${b.meta.os ? " · " + esc(b.meta.os) : ""}</div></div>
         <span class="spacer" style="flex:1"></span>
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
+        <button class="btn primary sm" data-quickstart="${esc(b.meta.host)}">Quick Start</button>
         ${b.meta.active ? `<span class="pill" style="border-color:var(--green)66;color:var(--green)">active</span>` : `<button class="btn sm" id="mk-active">Make active</button>`}
       </div>
       ${chainBar(b.chain)}
@@ -313,6 +373,7 @@ async function renderTarget(c) {
   c.querySelectorAll("[data-chain]").forEach((seg) => seg.addEventListener("click", () => {
     state.tab = "overview"; renderTarget(c).then(() => { const el = document.getElementById("phase-" + seg.dataset.chain); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); });
   }));
+  wireQuickStart(c);
   renderTab($("#tabc"), b);
 }
 
@@ -336,15 +397,13 @@ function renderTab(el, b) {
 }
 
 function moveCard(a, host) {
-  const v = a.variants[0]; const pc = PHASE_COLOR[a.phase] || "#6B7591";
+  const pc = PHASE_COLOR[a.phase] || "#6B7591";
   return `<div class="move" id="move-${esc(a.id)}">
     <div class="move-h"><span class="phase-tag" style="background:${pc}22;color:${pc};border:1px solid ${pc}55">${esc(a.phase)}</span>
       <span class="t">${esc(a.title)}</span><span class="spacer" style="flex:1"></span>
       <span class="muted mono" style="font-size:11px">${esc((a.tools || []).join(", "))}</span></div>
     ${a.desc ? `<div class="desc">${esc(a.desc)}</div>` : ""}
-    ${v ? `<pre class="cmd">$ ${esc(v.command)}</pre>` : ""}
-    <div class="row" style="margin-top:11px"><button class="btn primary sm" data-run="${esc(a.id)}">Run</button>
-      <button class="btn sm" data-run="${esc(a.id)}" data-dry="1">Dry-run</button></div></div>`;
+    ${variantRows(a, host)}</div>`;
 }
 
 function tabOverview(el, b) {
@@ -402,14 +461,14 @@ async function renderTools(c) {
   c.querySelectorAll("[data-addpath]").forEach((b) => b.addEventListener("click", () => addToolPath(b.dataset.addpath)));
   c.querySelectorAll("[data-toolrun]").forEach((b) => b.addEventListener("click", () => {
     if (!state.toolTarget) { toast("Pick a target first", "add a target to run tools against", "err"); return; }
-    runAction(b.dataset.toolrun, state.toolTarget, b.dataset.dry === "1");
+    runAction(b.dataset.toolrun, state.toolTarget);
   }));
 }
 
 function toolAvailCard(t) {
   const runnable = t.found && t.actions.length;
   const actions = runnable ? `<div class="tool-actions">${t.actions.slice(0, 8).map((a) => `<div class="ta-row"><span class="ta-t">${esc(a.title)}</span>
-      <button class="btn primary xs" data-toolrun="${esc(a.id)}">Run</button><button class="btn xs" data-toolrun="${esc(a.id)}" data-dry="1">Dry</button></div>`).join("")}</div>` : "";
+      <button class="btn primary xs" data-toolrun="${esc(a.id)}">Run</button></div>`).join("")}</div>` : "";
   let foot = "";
   if (!t.found) {
     const install = t.install_cmd
@@ -446,12 +505,9 @@ function copyText(txt) {
   (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast("Copied", txt, "ok")).catch(() => toast("Copy this", txt, ""));
 }
 function toolCard(a) {
-  const v = a.variants[0];
   return `<div class="tool-card"><div class="tc-h"><span class="t">${esc(a.title)}</span></div>
     <div class="tc-tools mono">${esc((a.tools || []).join(", "))}</div>
-    ${v ? `<pre class="cmd sm">$ ${esc(v.command)}</pre>` : ""}
-    <div class="row" style="margin-top:9px"><button class="btn primary sm" data-run="${esc(a.id)}">Run</button>
-      <button class="btn sm" data-run="${esc(a.id)}" data-dry="1">Dry-run</button></div></div>`;
+    ${variantRows(a, state.target || "")}</div>`;
 }
 
 async function tabPlaybooks(el, b) {
@@ -464,12 +520,17 @@ async function tabPlaybooks(el, b) {
 }
 async function openPlaybook(name, host) {
   const pb = await api(`/api/playbook/${encodeURIComponent(name)}?target=${encodeURIComponent(host)}`);
-  $("#pb-detail").innerHTML = `<div class="panel-h" style="margin-top:16px"><h2>${esc(pb.title)} — steps</h2></div>${pb.steps.map((s) => `
-    <div class="move"><div class="move-h"><span class="phase-tag" style="background:var(--accent-soft);color:var(--accent-2)">step ${s.step}</span><span class="t">${esc(s.label)}</span>${s.require_approval ? `<span class="tag" style="background:#F9731622;color:#F97316">approval</span>` : ""}</div>
+  $("#pb-detail").innerHTML = `<div class="panel-h" style="margin-top:16px"><h2>${esc(pb.title)} — steps</h2></div>${pb.steps.map((s) => {
+    const p = s.preflight || {};
+    return `<div class="move"><div class="move-h"><span class="phase-tag" style="background:var(--accent-soft);color:var(--accent-2)">step ${s.step}</span><span class="t">${esc(s.label)}</span>${s.require_approval ? `<span class="tag" style="background:#F9731622;color:#F97316">approval</span>` : ""}</div>
+      <div style="margin-top:8px">${preflightBadges(p)}</div>
       <pre class="cmd">$ ${esc(s.command)}</pre>
-      <div class="row" style="margin-top:9px"><button class="btn primary sm" data-pbrun="${esc(pb.name)}" data-step="${s.step}" data-approval="${s.require_approval ? 1 : 0}">Run step</button>
-        <button class="btn sm" data-pbrun="${esc(pb.name)}" data-step="${s.step}" data-dry="1">Dry-run</button></div></div>`).join("")}`;
-  $("#pb-detail").querySelectorAll("[data-pbrun]").forEach((btn) => btn.addEventListener("click", () => runPlaybookStep(btn.dataset.pbrun, +btn.dataset.step, btn.dataset.dry === "1", btn.dataset.approval === "1", host)));
+      ${missingInputControls(p)}${preflightIssues(p)}
+      <div class="row" style="margin-top:9px"><button class="btn primary sm" data-pbrun="${esc(pb.name)}" data-step="${s.step}" data-approval="${s.require_approval ? 1 : 0}" ${p.can_run ? "" : "disabled"}>Run step</button>
+        <button class="btn sm" data-copycmd="${esc(s.command)}">${p.needs_handoff ? "Copy handoff" : "Copy"}</button></div></div>`;
+  }).join("")}`;
+  wireCommandControls($("#pb-detail"), host);
+  $("#pb-detail").querySelectorAll("[data-pbrun]").forEach((btn) => btn.addEventListener("click", () => runPlaybookStep(btn.dataset.pbrun, +btn.dataset.step, btn.dataset.approval === "1", host)));
 }
 
 function tabChecklist(el, b) {
@@ -524,17 +585,30 @@ function tabCommands(el, b) {
   el.innerHTML = `<div class="card"><div class="panel-h"><h2>Commands & evidence ledger</h2></div><div class="feed">${rows}</div></div>`;
 }
 
-function wireRun(el, host) {
-  el.querySelectorAll("[data-run]").forEach((b) => b.addEventListener("click", () => runAction(b.dataset.run, host, b.dataset.dry === "1")));
+function wireCommandControls(el, host) {
+  el.querySelectorAll("[data-copycmd]").forEach((b) => b.addEventListener("click", () => copyText(b.dataset.copycmd || "")));
+  el.querySelectorAll("[data-setinput]").forEach((b) => b.addEventListener("click", () => setInput(host, b.dataset.setinput)));
 }
-async function runAction(actionId, host, dry) {
-  state.lastRun = { target: host, pending: true, action_id: actionId, dry };
+function wireRun(el, host) {
+  el.querySelectorAll("[data-run]").forEach((b) => b.addEventListener("click", () => runAction(b.dataset.run, host, +(b.dataset.cmd || 1))));
+  wireCommandControls(el, host);
+}
+function wireQuickStart(el) {
+  el.querySelectorAll("[data-quickstart]").forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); runQuickStart(b.dataset.quickstart); }));
+}
+async function setInput(host, key) {
+  const value = prompt(`Value for ${key}:`);
+  if (!value) return;
+  try { await apiPost("/api/inputs", { target: host, inputs: { [key]: value } }); toast("Input saved", `${key} = ${value}`, "ok"); render(); }
+  catch (e) { toast("Could not save input", e.message, "err"); }
+}
+async function runAction(actionId, host, cmdIndex) {
+  state.lastRun = { target: host, pending: true, action_id: actionId };
   if (state.view === "target" && state.target === host) render();
   try {
-    const o = await apiPost("/api/run/action", { action_id: actionId, target: host, dry_run: dry });
+    const o = await apiPost("/api/run/action", { action_id: actionId, target: host, cmd_index: cmdIndex || 1 });
     state.lastRun = { target: host, pending: false, outcome: o };
-    if (o.dry_run) toast("Dry-run", `${o.command}\n(not executed)`, "ok");
-    else if (!o.success) toast("Run failed", o.message || "command failed", "err");
+    if (!o.success) toast("Run failed", o.message || "command failed", "err");
     else if (o.added_count) toast("Ran " + o.tool, `+${o.added_count}: ${o.facts.map((f) => f.kind).join(", ")}`, "ok");
     else toast("Ran " + o.tool, "no new facts — raw output saved", "");
     render();
@@ -544,15 +618,31 @@ async function runAction(actionId, host, dry) {
     if (state.view === "target" && state.target === host) render();
   }
 }
-async function runPlaybookStep(name, step, dry, needsApproval, host) {
-  if (needsApproval && !dry && !confirm(`Step ${step} is noisy/intrusive. Run it now?`)) return;
-  state.lastRun = { target: host, pending: true, action_id: `${name} step ${step}`, dry };
+async function runQuickStart(host) {
+  if (!host) return;
+  state.lastRun = { target: host, pending: true, action_id: "Quick Start", quickstart: true };
   if (state.view === "target" && state.target === host) render();
   try {
-    const o = await apiPost("/api/run/playbook", { name, step, target: host, dry_run: dry, approve: needsApproval });
+    const o = await apiPost("/api/run/quickstart", { target: host });
     state.lastRun = { target: host, pending: false, outcome: o };
-    if (o.dry_run) toast(`Dry-run · step ${step}`, o.command, "ok");
-    else if (!o.success) toast(`Step ${step} failed`, o.message || "command failed", "err");
+    if (o.success) toast("Quick Start complete", `ran ${o.steps.length} command(s), stored ${o.added_count} fact(s)`, "ok");
+    else if (o.status === "partial") toast("Quick Start partially complete", o.message || "some commands failed or were skipped", "");
+    else toast("Quick Start blocked", o.message || "no command could run", "err");
+    render();
+  } catch (e) {
+    state.lastRun = { target: host, pending: false, error: e.message };
+    toast("Quick Start failed", e.message, "err");
+    if (state.view === "target" && state.target === host) render();
+  }
+}
+async function runPlaybookStep(name, step, needsApproval, host) {
+  if (needsApproval && !confirm(`Step ${step} is noisy/intrusive. Run it now?`)) return;
+  state.lastRun = { target: host, pending: true, action_id: `${name} step ${step}` };
+  if (state.view === "target" && state.target === host) render();
+  try {
+    const o = await apiPost("/api/run/playbook", { name, step, target: host, approve: needsApproval });
+    state.lastRun = { target: host, pending: false, outcome: o };
+    if (!o.success) toast(`Step ${step} failed`, o.message || "command failed", "err");
     else if (o.added_count) toast(`Ran step ${step}`, `+${o.added_count}: ${o.facts.map((f) => f.kind).join(", ")}`, "ok");
     else toast(`Ran step ${step}`, "no new facts — raw output saved", "");
     render();
