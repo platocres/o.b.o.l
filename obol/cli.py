@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import board, library, service
+from . import board, discovery, library, service
 from .facts import Fact
 from .pack import load_packs, next_actions
 from .runner import RunnerError
@@ -215,6 +215,35 @@ def cmd_facts(args) -> None:
         print(f"  {f.state.value:12} {f.kind:28} {f.value}")
 
 
+def cmd_sweep(args) -> None:
+    ws = _load_or_exit()
+    range_ = args.range.strip()
+    if range_ not in ws.scope:
+        # Typing the range at the CLI is an explicit authorization; record it in
+        # scope so the runner gate (and any later web sweep) sees it.
+        added = ws.add_scope(range_)
+        if not added:
+            print(f"not a valid host, IP, or CIDR: {range_!r}")
+            return
+        range_ = added
+        ws.save()
+        print(f"authorized scope: {range_}")
+    try:
+        summary = discovery.run_sweep(ws, range_, dry_run=args.dry_run)
+    except RunnerError as exc:
+        print(f"sweep refused: {exc}")
+        return
+    if args.dry_run:
+        print(summary["command"])
+        return
+    hosts, created = summary["hosts"], summary["created"]
+    print(f"swept {range_}: {len(hosts)} live host(s), {len(created)} new target(s)")
+    for host in created:
+        print(f"  + {host}")
+    for host in summary["existing"]:
+        print(f"    {host} (already a target)")
+
+
 def cmd_scope(args) -> None:
     ws = _load_or_exit()
     if args.scope_cmd == "add":
@@ -375,6 +404,11 @@ def build_parser() -> argparse.ArgumentParser:
     pp.set_defaults(func=cmd_playbook)
 
     sub.add_parser("facts", help="list all proven facts").set_defaults(func=cmd_facts)
+
+    psweep = sub.add_parser("sweep", help="discover live hosts in a range and add them as targets")
+    psweep.add_argument("range", help="an authorized CIDR or host (added to scope if new)")
+    psweep.add_argument("--dry-run", action="store_true", help="print the discovery command without running it")
+    psweep.set_defaults(func=cmd_sweep)
 
     pscope = sub.add_parser("scope", help="list or add authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")

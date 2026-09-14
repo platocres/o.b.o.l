@@ -63,13 +63,17 @@ The build sequence (each a reviewable PR):
   only sweep a range the operator has put in scope. `normalize_scope_entry`
   keeps genuine CIDRs verbatim and reduces hosts/URLs/`host:port` to a bare host;
   a live target's own scope entry can't be removed out from under it.
-- **(b) Engagement discovery sweep.** A new engagement-level action: an nmap
-  host-discovery pass (`-sn` with TCP-SYN/ACK + ICMP + a few UDP probes so
+- **(b) Engagement discovery sweep — DONE.** `obol/discovery.py`: an nmap
+  host-discovery pass (`-sn` with TCP-SYN/ACK + ICMP + a UDP NetBIOS probe so
   ICMP-filtered AD hosts like Forest are still found — *not* a bare ping sweep)
-  against an authorized scope entry, run through the existing Quick Start job
-  engine (`obol/webapp/server.py`). A discovery parser records each live host and
-  auto-creates a target via `ws.add_target`. Gate: the swept range must be an
-  authorized scope entry (an exact-entry check, stricter than host membership).
+  over an authorized scope range, run through the one scope-enforced runner. It
+  parses live hosts and auto-creates a target for each via `ws.add_target`. The
+  runner's new `scope_target` gate requires the swept range to be an authorized
+  scope *entry* (an exact-entry check, stricter than host membership), so a sweep
+  can never touch a range the operator has not scoped. Web: a **Sweep** button on
+  each CIDR scope entry runs it as a background job (`POST /api/run/sweep`,
+  `GET /api/sweep/jobs/{id}`); new targets stream into the page live over the
+  existing `target_added` SSE feed. Terminal parity: `obol sweep <range>`.
 - **(c) Per-host enumeration fan-out.** After discovery, run the existing
   service-aware Quick Start baseline against each new host — nmap service scan,
   then nxc SMB/LDAP and the safe baseline the packs already gate. Reuse the

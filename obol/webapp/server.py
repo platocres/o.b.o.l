@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import board, bloodhound, library, tools as tool_inventory
+from .. import board, bloodhound, discovery, library, tools as tool_inventory
 from ..graph import (
     build_engagement_graph,
     build_graph_model,
@@ -829,6 +829,61 @@ def create_app(base, *, token: Optional[str] = None):
 
         _job_update(job_id, finish)
 
+    # ── discovery sweep job ──────────────────────────────────────────────────
+    # A sweep discovers live hosts in an authorized range and auto-creates a
+    # target for each, through the one scope-enforced runner (obol/discovery.py).
+    # It rides the same background-job map and SSE signal as Quick Start, and the
+    # new targets reach the browser live as `target_added` store events.
+    def _new_sweep_job(slug: str, range_: str) -> dict:
+        now = time.time()
+        job_id = uuid.uuid4().hex[:12]
+        job = {
+            "id": job_id, "job_id": job_id, "kind": "sweep", "range": range_,
+            "slug": slug, "tool": "nmap", "command": "", "status": "queued",
+            "success": False, "pending": True,
+            "message": f"Discovery sweep of {range_} queued.",
+            "created_at": now, "updated_at": now, "started_at": None, "ended_at": None,
+            "steps": [], "facts": [], "found": 0, "created": [], "existing": [],
+        }
+        with quickstart_jobs_lock:
+            quickstart_jobs[job_id] = job
+            quickstart_signal["version"] += 1
+            return _job_view(job)
+
+    def _active_sweep_job(slug: str, range_: str) -> dict | None:
+        with quickstart_jobs_lock:
+            for job in quickstart_jobs.values():
+                if (job.get("kind") == "sweep" and job.get("slug") == slug
+                        and job.get("range") == range_
+                        and job.get("status") in {"queued", "running"}):
+                    return _job_view(job)
+        return None
+
+    def _run_sweep_job(job_id: str) -> None:
+        with quickstart_jobs_lock:
+            job = quickstart_jobs[job_id]
+            range_, slug = job["range"], job["slug"]
+        _job_update(job_id, status="running", started_at=time.time(),
+                    message=f"Sweeping {range_} for live hosts…")
+        try:
+            with _RUN_LOCK:
+                ws = library.get_engagement(slug)
+                if ws is None:
+                    raise ActionError(f"engagement {slug!r} no longer exists")
+                summary = discovery.run_sweep(ws, range_)
+        except Exception as exc:  # RunnerError, ActionError, or an unexpected fault
+            _job_update(job_id, status="failed", success=False, pending=False,
+                        message=str(exc), ended_at=time.time())
+            return
+        found, created = len(summary["hosts"]), summary["created"]
+        _job_update(
+            job_id, status="success", success=True, pending=False,
+            command=summary["command"], found=found,
+            created=created, existing=summary["existing"], ended_at=time.time(),
+            message=(f"Swept {range_}: {found} live host{'' if found == 1 else 's'}, "
+                     f"{len(created)} new target{'' if len(created) == 1 else 's'}."),
+        )
+
     def active() -> Workspace:
         ws = library.resolve_active()
         if ws is None:
@@ -1158,6 +1213,33 @@ def create_app(base, *, token: Optional[str] = None):
             job = quickstart_jobs.get(job_id)
             if not job:
                 raise HTTPException(404, "no such Quick Start job")
+            return _job_view(job)
+
+    # ── discovery sweep ──────────────────────────────────────────────────────
+    @app.post("/api/run/sweep")
+    def api_run_sweep(payload: dict = Body(...)):
+        range_ = (payload or {}).get("range", "").strip()
+        if not range_:
+            raise HTTPException(422, "range is required (an authorized scope entry)")
+        with _RUN_LOCK:
+            ws = active()
+            slug = library.active_slug() or ws.root.name
+            if range_ not in ws.scope:
+                raise HTTPException(
+                    400, f"{range_} is not in scope — authorize the range first")
+            existing = _active_sweep_job(slug, range_)
+            if existing:
+                return existing
+            job = _new_sweep_job(slug, range_)
+        threading.Thread(target=_run_sweep_job, args=(job["id"],), daemon=True).start()
+        return job
+
+    @app.get("/api/sweep/jobs/{job_id}")
+    def api_sweep_job(job_id: str):
+        with quickstart_jobs_lock:
+            job = quickstart_jobs.get(job_id)
+            if not job or job.get("kind") != "sweep":
+                raise HTTPException(404, "no such sweep job")
             return _job_view(job)
 
 

@@ -217,6 +217,46 @@ def test_quickstart_runs_nmap_then_nxc_when_unlocked(cx, monkeypatch):
     assert steps["gpp-passwords"]["added_count"] >= 1
 
 
+def test_sweep_discovers_hosts_and_creates_targets(cx, monkeypatch):
+    import obol.webapp.server as server
+
+    # authorize a range, then sweep it — the real nmap is faked out
+    cx.post("/api/scope", json={"value": "10.10.10.0/24"}, headers=H)
+
+    def fake_run_sweep(ws, range_, **kwargs):
+        for host in ("10.10.10.5", "10.10.10.7"):
+            ws.add_target(host)
+        ws.save()
+        return {"range": range_, "command": f"nmap -sn {range_}", "dry_run": False,
+                "returncode": 0, "timed_out": False,
+                "hosts": ["10.10.10.5", "10.10.10.7"],
+                "created": ["10.10.10.5", "10.10.10.7"], "existing": []}
+
+    monkeypatch.setattr(server.discovery, "run_sweep", fake_run_sweep)
+
+    started = cx.post("/api/run/sweep", json={"range": "10.10.10.0/24"}, headers=H).json()
+    assert started["kind"] == "sweep" and started["pending"] is True and started["job_id"]
+
+    out = started
+    for _ in range(100):
+        out = cx.get(f"/api/sweep/jobs/{started['job_id']}", headers=H).json()
+        if not out["pending"]:
+            break
+        time.sleep(0.02)
+    assert out["pending"] is False and out["status"] == "success"
+    assert set(out["created"]) == {"10.10.10.5", "10.10.10.7"}
+    # the new hosts are now real targets in the engagement
+    hosts = {t["host"] for t in cx.get("/api/meta", headers=H).json()["targets"]}
+    assert {"10.10.10.5", "10.10.10.7"}.issubset(hosts)
+
+
+def test_sweep_refuses_unauthorized_range(cx):
+    # 192.168.0.0/24 was never added to scope
+    r = cx.post("/api/run/sweep", json={"range": "192.168.0.0/24"}, headers=H)
+    assert r.status_code == 400 and "scope" in r.json()["detail"].lower()
+    assert cx.post("/api/run/sweep", json={"range": ""}, headers=H).status_code == 422
+
+
 def test_checklist_toggle_persists(cx):
     assert cx.post("/api/target/checklist",
                    json={"target": "10.10.10.161", "item": "ad-dc-identify", "checked": True},
