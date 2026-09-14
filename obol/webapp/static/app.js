@@ -28,7 +28,7 @@ const ACCESS = {
 const NODE_COLOR = { scope: "#64748B", domain: "#6366F1", target: "#38BDF8",
   service: "#14B8A6", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
-const state = { view: "engagement", target: null, tab: "overview", secrets: false,
+const state = { view: "engagement", target: null, tab: "overview", redact: false,
   toolTarget: "", lastRun: null, playbook: null, scrollTo: null, findHost: "" };
 // charts[id] = { el: <canvas>, chart: Chart } — tracked so morphdom-preserved
 // canvases keep their Chart instance and orphaned ones are torn down.
@@ -281,6 +281,10 @@ function onClick(e) {
     case "ev-add": addEvidence(host); break;
     case "evdel": delEvidence(el.dataset.id); break;
     case "find-host": state.findHost = el.dataset.host || ""; render(); break;
+    case "login": runLogin(el.dataset.host || state.target, el.dataset.kind); break;
+    case "reveal-login": revealLogin(el.dataset.host || state.target, el.dataset.kind); break;
+    case "probe-session": probeSession(el.dataset.id); break;
+    case "close-session": closeSession(el.dataset.id); break;
   }
 }
 function onChange(e) {
@@ -289,7 +293,7 @@ function onChange(e) {
   switch (el.dataset.act) {
     case "eng-activate": activateEngagement(el.value); break;
     case "tool-target": state.toolTarget = el.value; break;
-    case "sec-toggle": state.secrets = el.checked; render(); break;
+    case "sec-toggle": state.redact = el.checked; render(); break;
     case "chk": toggleChecklist(el.dataset.host, el.dataset.item, el.checked, el); break;
     case "bh-upload": uploadBloodhound(el); break;
   }
@@ -634,9 +638,74 @@ function tabOverview(b) {
       <div class="card"><div class="panel-h"><h2>Open ports</h2></div>${(b.open_ports || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap">${b.open_ports.map((p) => `<span class="pill mono">${esc(p)}</span>`).join("")}</div>` : `<div class="muted">None parsed yet — run the nmap prelude.</div>`}</div>
       <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
+    ${sessionsCard(b)}
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Path</h2></div><div class="flow-scroll">${flowSVG(b.graph)}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Next moves — run from here</h2><span class="muted mono">${b.next.length}</span></div>${groups}</div>`;
+}
+
+// ── sessions layer (one-click login + live session state) ────────────────────
+function sessionsCard(b) {
+  const logins = b.logins || [];
+  const sessions = b.sessions || [];
+  if (!logins.length && !sessions.length) return "";
+  const offers = logins.map((o) => {
+    const title = o.ready ? `Validate ${o.label} access and open a session` : esc(o.reason || "");
+    return `<button class="btn sm ${o.ready ? "primary" : ""}" data-act="login" data-host="${esc(b.meta.host)}" data-kind="${esc(o.kind)}" ${o.ready ? "" : "disabled"} title="${title}">${o.ready ? "Log in — " : ""}${esc(o.label)}${o.proven ? " ✓" : ""}</button>`;
+  }).join("") || `<span class="muted">No logins available yet — need a validated credential and a reachable service (winrm / ssh / rdp).</span>`;
+  const rows = sessions.map((s) => {
+    const dot = s.status === "active" ? "good" : (s.status === "dead" ? "bad" : "wait");
+    return `<div class="sess-row">
+      <div class="sess-head"><span class="status-dot ${dot}"></span>
+        <span class="mono" style="min-width:52px">${esc(s.kind)}</span>
+        <span class="muted mono" title="proven by ${esc(s.proof_fact || "")}">${esc(s.user || "—")}</span>
+        <span class="pill" style="text-transform:capitalize">${esc(s.status)}</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn xs" data-act="probe-session" data-id="${esc(s.id)}" title="Re-validate and refresh status">Probe</button>
+        <button class="btn xs" data-act="close-session" data-id="${esc(s.id)}">Close</button></div>
+      ${s.login_command ? `<div class="row" style="gap:6px;margin-top:6px;align-items:center"><pre class="cmd sm" style="flex:1;margin:0">$ ${esc(s.login_command)}</pre>
+        <button class="btn xs" data-act="copy" data-copy="${esc(s.login_command)}" title="Copy the interactive login command">⧉</button></div>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Access &amp; sessions</h2><span class="muted">login is proven, then handed to your terminal</span></div>
+    <div class="row" style="gap:6px;flex-wrap:wrap">${offers}</div>
+    ${sessions.length ? `<div class="sess-list" style="margin-top:12px">${rows}</div>` : ""}
+    <div class="muted" style="margin-top:10px;font-size:11px">obol validates access non-interactively, then hands you the ready-to-paste interactive command to run in your terminal.</div></div>`;
+}
+async function runLogin(host, kind) {
+  if (!host || !kind) return;
+  suppressEventToastsUntil = Date.now() + 2500;
+  state.lastRun = { target: host, pending: true, action_id: `login (${kind})` };
+  if (state.view === "target" && state.target === host) render();
+  try {
+    const r = await apiPost("/api/run/login", { target: host, kind });
+    state.lastRun = { target: host, pending: false, outcome: r.outcome };
+    if (r.ok) {
+      toast("Session opened", `${kind} access proven — launching handoff`, "ok");
+      await revealLogin(host, kind);          // copy the command to paste immediately
+    } else {
+      toast("Login not confirmed", r.reason || "validation did not confirm access", "err");
+    }
+    render();
+  } catch (e) {
+    state.lastRun = { target: host, pending: false, error: e.message };
+    toast("Login failed", e.message, "err");
+    if (state.view === "target" && state.target === host) render();
+  }
+}
+async function revealLogin(host, kind) {
+  try {
+    const r = await api(`/api/session/login_command?target=${encodeURIComponent(host)}&kind=${encodeURIComponent(kind)}`);
+    copyText(r.command);   // copies + shows the command in a toast
+  } catch (e) { toast("Could not build login command", e.message, "err"); }
+}
+async function probeSession(id) {
+  try { const r = await apiPost("/api/session/probe", { id }); toast("Probed", r.alive ? "session active" : "session dead", r.alive ? "ok" : "err"); render(); }
+  catch (e) { toast("Probe failed", e.message, "err"); }
+}
+async function closeSession(id) {
+  try { await apiPost("/api/session/close", { id }); render(); }
+  catch (e) { toast("Could not close session", e.message, "err"); }
 }
 
 function tabTools(b) {
@@ -1019,7 +1088,7 @@ function flowSVG(g) {
 
 // ── report ──────────────────────────────────────────────────────────────────
 async function buildReport() {
-  const r = await api(`/api/report?include_secrets=${state.secrets ? "1" : "0"}`);
+  const r = await api(`/api/report?include_secrets=${state.redact ? "0" : "1"}`);
   const m = r.meta;
   const statRow = [["Engagement", esc(m.name)], ["Targets", r.targets.length], ["Facts", r.tiles.facts], ["Commands", r.tiles.runs], ["Domain", esc(m.domain || "—")]]
     .map(([l, v]) => `<div class="stat"><div class="stat-label">${l}</div><div class="stat-val" style="font-size:19px">${v}</div></div>`).join("");
@@ -1034,8 +1103,8 @@ async function buildReport() {
       ${ev ? `<div class="report-section-title">Evidence</div><div class="ev-grid">${ev}</div>` : ""}</div>`;
   }).join("");
   return `<div class="card"><div class="report-head"><h2>${esc(m.name)}</h2><span class="muted">OSCP-style evidence report</span><span class="spacer" style="flex:1"></span>
-      <label class="pill" style="cursor:pointer"><input type="checkbox" data-act="sec-toggle" ${state.secrets ? "checked" : ""} style="margin-right:6px">include secrets</label>
-      <a class="btn sm primary" href="/api/report.md?include_secrets=${state.secrets ? "1" : "0"}&token=${encodeURIComponent(TOKEN)}">Download .md</a></div>
+      <label class="pill" style="cursor:pointer" title="Secrets show by default on this local console; tick to redact passwords/hashes/tickets"><input type="checkbox" data-act="sec-toggle" ${state.redact ? "checked" : ""} style="margin-right:6px">redact secrets</label>
+      <a class="btn sm primary" href="/api/report.md?include_secrets=${state.redact ? "0" : "1"}&token=${encodeURIComponent(TOKEN)}">Download .md</a></div>
       <div class="muted" style="margin-top:6px">Generated ${esc(m.generated_at)} · ${m.include_secrets ? "secrets shown" : "secrets redacted"} · every finding is only as strong as its cited evidence.</div>
       <div class="stat-grid" style="margin-top:16px">${statRow}</div></div>
     <div class="card"><div class="panel-h"><h2>Engagement map</h2></div><div class="flow-scroll">${engagementSVG(r.engagement_graph)}</div></div>

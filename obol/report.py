@@ -2,9 +2,11 @@
 
 The report is a read-only projection of the same workspace state used by the
 terminal board and local web view: run ledger, facts, and evidence lineage. It
-never turns project metadata into engagement proof, and it redacts secrets by
-default so operators can safely review or share a draft before intentionally
-including credentials.
+never turns project metadata into engagement proof. These helpers take an explicit
+`include_secrets` flag; the library default is conservative (redact), which the
+shareable debug package relies on, but the operator-facing surfaces pass it True —
+`obol report` and the localhost web console SHOW secrets by default (a lab/exam
+product call), with redaction opt-in (`obol report --redact`, the web toggle).
 """
 from __future__ import annotations
 

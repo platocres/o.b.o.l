@@ -82,6 +82,27 @@ engagement" rather than one target at a time:
 This is the organization/aesthetic layer the roadmap called for — the job engine
 was already engagement-bound; nothing about the runner, parsers, or store changed.
 
+## Shipped: sessions layer §6a (one-click login) + secrets shown by default
+
+The first brick of the pivoting feature (`docs/ROADMAP.md §6`). `obol/sessions.py`
+offers a one-click login (winrm/ssh/rdp) when a validated password credential + a
+reachable service exist. Interactive tools don't fit the capture-and-parse runner,
+so each login is PAIRED WITH A NON-INTERACTIVE PROOF run through the shared
+`service.run_action`; only once the captured output establishes the access fact
+(`foothold.windows`/`foothold.linux`/`rdp.authenticated`) is a LIVE SESSION recorded
+(`Workspace.sessions`, a new SQLite table with an active/dead/closed status) and the
+interactive command handed off. `probe_session` re-runs the proof to refresh status.
+Two narrow proof parsers landed (ssh `uid=`, `nxc rdp [+]`), reusing evil-winrm/exec
+for WinRM. Terminal `obol login/sessions/session`; web Access & sessions card +
+`/api/run/login` etc. Facts stay the source of truth — the module produces none of
+its own. See ROADMAP §6(a) for what's still open (pass-the-hash, penelope listeners,
+auto-spawn, the automatic probe loop).
+
+Alongside it, a product decision: **secrets are shown by default across the live
+surfaces** (report, findings roll-up, ledger, sessions, run outputs) — redaction is
+opt-in (report "redact secrets" toggle, `obol report --redact`, `WEB_SHOW_SECRETS`).
+The shareable debug package stays redacted by default.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
@@ -89,22 +110,21 @@ Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 - **Parser coverage (ROADMAP item 1, TOP PRIORITY).** The main gap: `run` only
   produces facts where a parser exists. Widen to SMB shares/sessions, WinRM
   validation, HTTP enum, FTP/SSH/SNMP banners, and common NSE findings — each mapped
-  to the narrowest fact with anti-overfit tests. This is what makes more of the
-  Orange pack actually executable on a box.
-- **Pivoting, sessions & tunnels (ROADMAP §6).** One-click login (paired with a
-  non-interactive proof) → unlocks the privesc pack → post-foothold host enum
-  (`host.multihomed`) → one-click ligolo/chisel/sshuttle/ssh tunnels with a
-  route-aware runner (auto-proxychains for SOCKS, transparent for ligolo) →
-  auto-extend scope → through-tunnel sweep (recursion + health proof) → topology
-  map. Sessions/tunnels are live state (probed periodically); discoveries are facts.
-  Mines the operator's Charon (`docs/SOURCES.md §3`).
-- **Engagement profile & flag awareness (ROADMAP §7).** Pick the platform/exam type
-  (HTB / OffSec / TryHackMe / custom) so obol knows which flags to hunt and how to
-  score/report; per-target `machine_type`; captured flags are proof-bound objective
-  facts. Mines Pentest Companion (`docs/SOURCES.md §5`).
-- **Three small found-items** now in ROADMAP "Known smaller issues": an
-  engagement-wide secrets toggle for findings, the engagement-map credential fix,
-  and terminal parity for the 0e findings roll-up.
+  to the narrowest fact with anti-overfit tests.
+- **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
+  interlock note is **item 3 privesc packs** (unlocked by the access fact), then
+  post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware
+  runner (auto-proxychains for SOCKS, transparent for ligolo) → auto-extend scope →
+  through-tunnel sweep (recursion + health proof) → topology map.
+- **Engagement profile & flag awareness (ROADMAP §7).** Platform/exam type + per-
+  target `machine_type` + proof-bound flag capture. Interlocks with §6 and item 3
+  (see the ROADMAP §6 interlock note). Mines Pentest Companion (`docs/SOURCES.md §5`).
+- **Payload staging & tool provisioning (ROADMAP §8) — needs deeper discussion.**
+  One-click upload/staging to a foothold, a Kali material cache (locate/cache/upload),
+  and one-click download of missing items. Deferred pending a design conversation.
+- **Remaining found-items** in ROADMAP "Known smaller issues": the engagement-map
+  credential fix, terminal parity for the 0e findings roll-up, and an engagement-wide
+  redact switch for the findings/ledger surfaces.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

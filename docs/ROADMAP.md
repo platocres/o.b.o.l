@@ -224,6 +224,19 @@ host, prove a shell, enumerate it, pivot, and re-run discovery *through* the piv
 and the one store, and stays proof-bound: a shell, a second NIC, and a reachable
 subnet are each their own narrow fact.
 
+**How §6, §7, and item 3 interlock (read this — build them aware of each other):**
+these three are one milestone seen from three angles, joined by the access fact.
+§6(a)'s login produces an `access.*`/`foothold.*` fact; that same fact (1) **gates
+item 3**, the privesc packs, which only go live once you have a shell to escalate
+from, and (2) is the precondition for §7's **flag capture**, which needs a shell to
+read `proof.txt`/`root.txt`. §7's **engagement profile** (platform/exam type) in
+turn colors §6 and item 3 — the machine_type nudges which login/privesc moves rank
+first, and the platform says which flag a post-foothold enum should hunt. So the
+natural build order is **§6(a) sessions → item 3 privesc → §7 flags**, and none of
+them should invent its own notion of "you're on the box": they all read the one
+access fact. Later §6 (host enum → multi-homed → tunnels → through-tunnel sweep)
+then recurses the whole loop onto the next segment.
+
 Two model decisions fixed up front:
 
 - **Sessions and tunnels are LIVE STATE, not facts.** A tunnel can go down; a Fact
@@ -240,15 +253,29 @@ Two model decisions fixed up front:
 
 The build sequence (each a reviewable PR):
 
-- **(a) Sessions layer + one-click login.** When facts prove access is possible
-  (`credential.available` + a service-reachable fact → evil-winrm / xfreerdp / ssh;
-  or a penelope listener catching a reverse shell), the target view offers a
-  single-click login. Interactive tools do not fit the capture-and-parse runner, so
-  each login is **paired with a non-interactive proof** (`nxc winrm … -x whoami`,
-  `ssh host id`) that captures output → records the access fact; the interactive
-  session is then handed off (guided-launch v1: obol builds the exact command and
-  tracks the session as live state; tmux/new-terminal auto-spawn later; penelope
-  listeners obol can start and watch itself).
+- **(a) Sessions layer + one-click login — DONE.** `obol/sessions.py`: a login
+  registry (winrm/ssh/rdp) with, per kind, a non-interactive **proof** command and
+  the interactive **login** command. `eligible_sessions` offers a login when a
+  validated password credential + a reachable service exist; `open_session` runs the
+  proof through the shared `service.run_action` (same runner/parser/scope gate/
+  ledger), and only once the captured output establishes the access fact
+  (`foothold.windows` via `nxc winrm -x whoami`, `foothold.linux` via `sshpass … ssh
+  … id`, `rdp.authenticated`+`foothold.windows` via `nxc rdp`) does it record a
+  **live session** (`Workspace.sessions`, a new SQLite table; status active/dead/
+  closed) and hand back the ready-to-paste interactive command. `probe_session`
+  re-runs the proof to refresh status (the manual form of the periodic probe). Two
+  narrow proof parsers were added (ssh `uid=` → linux shell, `uid=0` → admin; `nxc
+  rdp [+]` → rdp auth, `(Pwn3d!)` → admin), reusing the existing evil-winrm/exec
+  parsers for WinRM. Terminal: `obol login [host] [--kind]`, `obol sessions`, `obol
+  session probe|close|rm`. Web: the target Overview has an **Access & sessions**
+  card (offer buttons + live sessions with the interactive command), `POST
+  /api/run/login`, `/api/session/probe|close`, `DELETE /api/session`. The proof
+  keeps facts the source of truth — the shell is proven by a captured command, never
+  by the unparseable interactive handoff, and this module produces no facts of its
+  own. **Still open in (a):** hash-only pass-the-hash logins (needs `-H`), penelope
+  reverse-shell **listeners** (an async start-and-watch flow, not a credentialed
+  login), tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic
+  periodic probe loop (the manual `probe` exists).
 - **(b) Unlocks the privesc pack.** The `access.*`/`foothold.*` fact from (a) gates
   the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
   login and privesc are two halves of one milestone.
@@ -310,6 +337,28 @@ For obol:
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).
 
+## 8. Payload staging & tool provisioning (one-click move-material) — NEEDS DEEPER DISCUSSION
+
+An operator constantly needs to move material onto a foothold (privesc binaries,
+enum scripts, tunnel clients) and, less often, pull material back. This is the
+Charon `tool_provider` idea (`docs/SOURCES.md §3`) applied to *staging*:
+
+- **One-click upload/staging.** From a session/foothold (§6), push a chosen item to
+  the target over whatever channel that host affords (smb / scp / a throwaway
+  http-server / winrm copy), with the command built and the transfer tracked.
+- **A Kali material cache.** obol locates and caches specific known items and their
+  paths on the local Kali box (winPEAS/linPEAS, chisel/ligolo binaries, static
+  binaries, common wordlists, …) so it can stage them on demand without the operator
+  hunting for paths each engagement.
+- **One-click download when missing.** If a cached item is not found locally, offer a
+  one-click fetch from its known source, then cache it.
+
+Interlocks with §6 (you stage *through* a session/tunnel) and item 3 (privesc
+tooling is the most-staged material). A staged file on a host is engagement state,
+not a fact. **Design intentionally deferred — the operator wants to discuss the
+cache format, the trusted item list and sources, channel selection, and the
+proof/scope posture in depth before this is built.**
+
 ## UX guardrails (product decision — keep these)
 
 This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:
@@ -320,11 +369,14 @@ blocked/proof panels in `board.py` or `web.py`.
 
 ## Known smaller issues
 
-- **Secrets are always redacted in the findings roll-up and per-target Findings
-  tab.** The Report view already has a full `include_secrets` path (query param +
-  toggle); wire it through `/api/engagement/activity` and the target bundle as one
-  engagement-wide "show secrets" toggle the whole SPA respects (localhost-only +
-  token-gated, so this is a display choice, not new exposure).
+- **Secrets show by default across the live surfaces now** (report, findings
+  roll-up, command ledger, sessions, run outputs) — redaction is opt-in: the report
+  view's "redact secrets" toggle and CLI `obol report --redact`. This is a
+  deliberate product call for a single-operator localhost lab/exam console (see
+  `webapp/server.py WEB_SHOW_SECRETS`). The shareable **debug package stays redacted
+  by default** — it is an artifact meant to leave the box; `--include-secrets` opts
+  in. Remaining: an engagement-wide redact switch the whole SPA respects (the
+  findings roll-up and command ledger have no per-view toggle yet).
 - **The engagement-map credential model is thin** (from ChatGPT's map PR #24): it
   creates only one credential node, attaches it to *every* foothold+ host, and
   falls back to an arbitrary domain when the credential has none. Fix: one node per

@@ -11,13 +11,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, quickstart, service
+from . import __version__, board, discovery, library, quickstart, service, sessions
 from .facts import Fact
 from .pack import load_packs, next_actions
 from .runner import RunnerError
 from .scope import extract_ip_scope_entries, normalize_scope_entry, target_in_scope
 from .seed import seed_forest
 from .service import ActionError
+from .sessions import SessionError
 from .workspace import Workspace, find_workspace
 
 
@@ -606,10 +607,15 @@ def cmd_report(args) -> None:
     from .report import write_report
     ws = _load_or_exit()
     out = Path(args.out) if args.out else None
-    path = write_report(ws, out=out, include_secrets=args.include_secrets, max_next=args.max_next)
+    # Show secrets by default (lab/exam notes); `--redact` opts into redaction for a
+    # draft you intend to share. `--include-secrets` is kept as a harmless no-op.
+    include_secrets = not args.redact
+    path = write_report(ws, out=out, include_secrets=include_secrets, max_next=args.max_next)
     print(f"wrote {path}")
-    if not args.include_secrets:
-        print("secrets redacted — use --include-secrets only for private exam notes")
+    if include_secrets:
+        print("secrets shown — this report contains passwords/hashes; use --redact for a shareable draft")
+    else:
+        print("secrets redacted")
 
 
 def cmd_debug(args) -> None:
@@ -632,6 +638,93 @@ def cmd_debug(args) -> None:
     print(f"wrote {zip_path}")
     if not args.include_secrets:
         print("secrets redacted in report.md — raw run output under runs/ is verbatim; treat the package as sensitive")
+
+
+def _pick_login_kind(ws: Workspace, host: str, requested: str) -> str:
+    """Resolve which login kind to open: the one requested, or the single ready
+    offer, else print the choices and exit."""
+    offers = sessions.eligible_sessions(ws, host)
+    if requested:
+        return requested
+    ready = [o for o in offers if o["ready"]]
+    if len(ready) == 1:
+        return ready[0]["kind"]
+    if not offers:
+        print(f"no login is available for {host} yet — need a validated credential "
+              f"and a reachable service (winrm/ssh/rdp).", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"pick a login kind for {host} with --kind:")
+    for o in offers:
+        state = "ready" if o["ready"] else f"not ready ({o['reason']})"
+        print(f"  {o['kind']:<6} {o['label']}  — {state}")
+    raise SystemExit(1)
+
+
+def cmd_login(args) -> None:
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    kind = _pick_login_kind(ws, host, args.kind)
+    print(f"\n$ validating {kind} access on {host} …")
+    try:
+        res = sessions.open_session(ws, host, kind, dry_run=args.dry_run, surface="cli")
+    except (SessionError, ActionError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except RunnerError as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if args.dry_run:
+        print(f"\ndry run — would validate with:\n   $ {res['outcome'].command}")
+        print(f"then hand off the interactive login:\n   $ {res['login_command']}")
+        return
+    if not res["ok"]:
+        print(f"\n✗ {res['reason']}")
+        raise SystemExit(1)
+    s = res["session"]
+    print(f"\n{board.SYM_OK} access proven ({s['proof_fact']}) — session {s['id']} recorded (status: {s['status']}).")
+    print("\nlaunch the interactive session in your terminal:")
+    print(f"   $ {res['login_command']}")
+    print("\nprivesc moves for this host are now unlocked — `obol next`.")
+
+
+def cmd_sessions(args) -> None:
+    ws = _load_or_exit()
+    if not ws.sessions:
+        print("no sessions yet. establish one with `obol login <host>`.")
+        return
+    print(f"{'ID':<20} {'HOST':<16} {'KIND':<6} {'USER':<18} STATUS")
+    for s in ws.sessions:
+        print(f"{s['id']:<20} {s['host']:<16} {s['kind']:<6} {(s.get('user') or '-'):<18} {s['status']}")
+
+
+def cmd_session(args) -> None:
+    ws = _load_or_exit()
+    cmd = getattr(args, "session_cmd", "list")
+    if cmd == "close":
+        if not ws.close_session(args.id):
+            print(f"no session {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"closed {args.id}")
+    elif cmd == "rm":
+        if not ws.remove_session(args.id):
+            print(f"no session {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"removed {args.id}")
+    elif cmd == "probe":
+        print(f"$ re-validating session {args.id} …")
+        try:
+            res = sessions.probe_session(ws, args.id)
+        except (SessionError, ActionError, RunnerError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"session {args.id}: {'active' if res['alive'] else 'dead'}")
+    else:
+        cmd_sessions(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -722,6 +815,25 @@ try:
     psweep.add_argument("--allow-shell", action="store_true", help="allow shell metacharacters in guided handoff commands")
     psweep.set_defaults(func=cmd_sweep)
 
+    plogin = sub.add_parser("login", help="validate access and open an interactive session (winrm/ssh/rdp)")
+    plogin.add_argument("target", nargs="?", default="", help="host to log into (default: active target)")
+    plogin.add_argument("--kind", default="", choices=[k.key for k in sessions.SESSION_KINDS],
+                        help="login kind; inferred when only one is ready")
+    plogin.add_argument("--dry-run", action="store_true", help="show the proof + login commands without running")
+    plogin.set_defaults(func=cmd_login)
+
+    sub.add_parser("sessions", help="list interactive sessions (live login/pivot state)").set_defaults(func=cmd_sessions)
+    psession = sub.add_parser("session", help="inspect or manage one session (probe/close/rm)")
+    session_sub = psession.add_subparsers(dest="session_cmd")
+    session_sub.add_parser("list", help="list sessions").set_defaults(func=cmd_session, session_cmd="list")
+    for name, helptext in (("probe", "re-validate a session and refresh its status"),
+                           ("close", "mark a session closed"),
+                           ("rm", "remove a session record")):
+        sp = session_sub.add_parser(name, help=helptext)
+        sp.add_argument("id", help="session id (see `obol sessions`)")
+        sp.set_defaults(func=cmd_session, session_cmd=name)
+    psession.set_defaults(func=cmd_session, session_cmd="list")
+
     pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")
     scope_sub.add_parser("list", help="list scope").set_defaults(func=cmd_scope, scope_cmd="list")
@@ -775,7 +887,8 @@ try:
 
     prep = sub.add_parser("report", help="write an OSCP-style markdown report from the workspace ledger and facts")
     prep.add_argument("--out", help="output path (default report.md in the workspace root)")
-    prep.add_argument("--include-secrets", action="store_true", help="include passwords, hashes, tickets, and secrets in the report")
+    prep.add_argument("--redact", action="store_true", help="redact passwords/hashes/tickets (for a shareable draft; secrets are shown by default)")
+    prep.add_argument("--include-secrets", action="store_true", help="deprecated no-op — secrets are already shown by default")
     prep.add_argument("--max-next", type=int, default=8, help="maximum recommended next actions to include")
     prep.set_defaults(func=cmd_report)
 

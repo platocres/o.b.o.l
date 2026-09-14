@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS bloodhound (
     k    INTEGER PRIMARY KEY CHECK (k = 0),
     data TEXT
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    updated_at REAL,
+    data       TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts     REAL,
@@ -184,6 +189,8 @@ class Store:
                 checklist.setdefault(r["host"], {})[r["item"]] = bool(r["checked"])
             bh_row = conn.execute("SELECT data FROM bloodhound WHERE k=0").fetchone()
             bloodhound = json.loads(bh_row["data"]) if bh_row and bh_row["data"] else {}
+            sessions = [json.loads(r["data"]) for r in
+                        conn.execute("SELECT data FROM sessions ORDER BY updated_at, rowid")]
         finally:
             conn.close()
         return {
@@ -198,6 +205,7 @@ class Store:
             "evidence": evidence,
             "checklist": checklist,
             "bloodhound": bloodhound,
+            "sessions": sessions,
         }
 
     def data_version(self, conn: sqlite3.Connection | None = None) -> int:
@@ -241,7 +249,7 @@ class Store:
     # ---- writes --------------------------------------------------------------
     def reconcile(self, payload: dict, *, persisted_fact_hashes: set[str],
                   persisted_run_ids: set[str], deleted_targets: set[str],
-                  deleted_evidence: set[str]) -> list[dict]:
+                  deleted_evidence: set[str], deleted_sessions: set[str] = frozenset()) -> list[dict]:
         """Persist the in-memory engagement state in a single transaction, writing
         only what changed and never clobbering another process's concurrent rows.
 
@@ -386,6 +394,29 @@ class Store:
                 "ON CONFLICT(k) DO UPDATE SET data=excluded.data",
                 (json.dumps(bh, default=str),),
             )
+
+            # sessions (live pivot/login state: upsert by id, emit only on change) --
+            for sid in deleted_sessions:
+                conn.execute("DELETE FROM sessions WHERE id=?", (sid,))
+                events.append({"type": "session_removed", "target": "", "detail": {"id": sid}})
+            for s in payload.get("sessions", []):
+                sid = s.get("id")
+                if not sid:
+                    continue
+                new_data = json.dumps(s, default=str)
+                row = conn.execute("SELECT data FROM sessions WHERE id=?", (sid,)).fetchone()
+                if row is not None and row["data"] == new_data:
+                    continue  # unchanged — no write, no event
+                conn.execute(
+                    "INSERT INTO sessions(id, updated_at, data) VALUES(?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data",
+                    (sid, s.get("updated_at", time.time()), new_data),
+                )
+                events.append({
+                    "type": "session_added" if row is None else "session_updated",
+                    "target": s.get("host", ""),
+                    "detail": {"id": sid, "kind": s.get("kind", ""), "status": s.get("status", "")},
+                })
 
             # change feed ------------------------------------------------------
             now = time.time()

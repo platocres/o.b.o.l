@@ -401,6 +401,50 @@ def test_engagement_activity_rolls_up_findings_by_category_and_host(cx):
     assert counts["10.10.10.161"] >= 2 and counts["10.10.10.5"] >= 1
 
 
+def test_login_flow_opens_session_and_bundle_surfaces_it(cx, monkeypatch):
+    """§6a over the web: a login validates access through the shared runner, records
+    a live session, and the target bundle surfaces sessions + eligible logins. The
+    full login command (with the password) is shown — this is the operator's box."""
+    from obol import library, service
+    from obol.runner import RunResult
+
+    ws = library.resolve_active()
+    ws.facts.add(Fact("winrm.reachable", "host:10.10.10.161", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("credential.available", "host:10.10.10.161",
+                      {"user": "svc-alfresco", "password": "s3rvice"}, source="crack"))
+    ws.save()
+
+    def fake_run_command(ws, command, tool, **kw):
+        return RunResult(command, command.split(), 0,
+                         "WINRM 10.10.10.161 5985 FOREST [+] htb\\svc-alfresco\nhtb\\svc-alfresco\n",
+                         "", ws.runs_dir / "o.txt", ws.runs_dir / "e.txt", 5.0, 1)
+    monkeypatch.setattr(service, "run_command", fake_run_command)
+
+    # eligible logins appear in the bundle before we log in
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert any(o["kind"] == "winrm" and o["ready"] for o in b["logins"])
+
+    r = cx.post("/api/run/login", json={"target": "10.10.10.161", "kind": "winrm"}, headers=H).json()
+    assert r["ok"] and r["session"]["kind"] == "winrm" and r["session"]["status"] == "active"
+    assert "evil-winrm" in r["session"]["login_command"] and "s3rvice" in r["session"]["login_command"]
+
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert [s["kind"] for s in b["sessions"]] == ["winrm"]
+    # the login unlocked the Windows foothold on this host
+    assert any(f["kind"] == "foothold.windows" for f in b["findings"])
+
+    # close it
+    sid = b["sessions"][0]["id"]
+    assert cx.post("/api/session/close", json={"id": sid}, headers=H).status_code == 200
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert b["sessions"][0]["status"] == "closed"
+
+
+def test_login_requires_target_and_kind(cx):
+    assert cx.post("/api/run/login", json={"target": "10.10.10.161"}, headers=H).status_code == 422
+    assert cx.post("/api/run/login", json={"kind": "winrm"}, headers=H).status_code == 422
+
+
 def test_engagement_activity_surfaces_running_jobs_and_ledger(cx, monkeypatch):
     """0e: an in-flight Quick Start job shows up in the engagement run feed, and its
     committed command appears in the cross-host ledger once it finishes."""

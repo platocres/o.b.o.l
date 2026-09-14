@@ -65,8 +65,14 @@ and an OSCP report is narrated from the same fact/run ledger.
 3. **Terminal and web are both actors over one shared state.** Either surface may
    launch a run through the same shared service (`service.run_action`) — one runner,
    one parser, one `.obol` store. Run-from-site has landed: the web triggers a run by
-   action id, the server fills the command from workspace facts (secrets never go to
-   the browser), and the same scope gate applies. The store is **SQLite**
+   action id, the server fills the command from workspace facts, and the same scope
+   gate applies. **Secrets are shown by default** on this surface — it is a
+   single-operator localhost lab/exam console, so passwords/hashes/tickets appear in
+   commands, fact values, and login commands unless the operator opts into redaction
+   (the report's "redact secrets" toggle, `obol report --redact`); the one artifact
+   that stays redacted-by-default is the shareable **debug package**, because it is
+   meant to leave the box. Do **not** reintroduce redact-by-default on the live
+   surfaces (`webapp/server.py WEB_SHOW_SECRETS`). The store is **SQLite**
    (`.obol/state.db`, `obol/store.py`) precisely because both surfaces are separate
    processes writing the same engagement — WAL + idempotent, targeted writes let a
    terminal `obol run` and a run-from-site both land instead of clobbering each other
@@ -103,12 +109,14 @@ obol/
   library.py     engagement library: many engagements under an app-managed base dir
                  ($OBOL_HOME); create/list/active-select (the web + `obol engagement`)
   store.py       SQLite persistence for one engagement (.obol/state.db): WAL,
-                 idempotent/targeted writes (facts by content hash, runs by id) so
-                 terminal + web can both write without clobbering, and an `events`
-                 change feed the web SSE loop tails. See docs/ARCHITECTURE.md.
+                 idempotent/targeted writes (facts by content hash, runs by id,
+                 sessions by id) so terminal + web can both write without clobbering,
+                 and an `events` change feed the web SSE loop tails (session_added/
+                 updated/removed included). See docs/ARCHITECTURE.md.
   workspace.py   an engagement's in-memory model over store.py: targets, per-target
                  fact view, scope, inputs, run ledger, evidence attachments, checklist
-                 ticks, BloodHound summary. ws.facts.add()/record_run() mutate memory;
+                 ticks, BloodHound summary, and live sessions (add_session/close/probe
+                 — pivot/login state with a status, NOT facts). ws.facts.add()/record_run() mutate memory;
                  save() reconciles to SQLite. to_payload()/apply_payload() are the
                  JSON interchange (report/snapshot/debug/migration). find_workspace()
                  walks up like git; has_state() detects state.db or a legacy state.json
@@ -137,6 +145,12 @@ obol/
                  new host. Scaffolding, not Orange methodology; stays proof-bound
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
                  (target=... pins a run to a host); eligible_actions = tool palette
+  sessions.py    sessions layer (§6a): one-click login (winrm/ssh/rdp) PAIRED with a
+                 non-interactive proof run through service.run_action — the captured
+                 output establishes the access fact (facts stay the source of truth),
+                 then a live SESSION is recorded (Workspace.sessions, status flips) and
+                 the interactive command handed off. A login registry (like tools.py);
+                 produces no facts of its own. eligible_sessions/open_session/probe
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
   graph.py       facts+actions -> per-target graph model + mermaid (one projection);
                  build_engagement_graph stitches scope, targets, domains, services,
@@ -162,8 +176,9 @@ obol/
                    chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
   seed.py        Forest demo fixture (post-nmap facts)
   cli.py         subcommands: init / engagement / target / scope / scan / overview /
-                 next / explain / run / playbook(s) / sweep / facts / report /
-                 serve / web / debug, plus help/manual/version/info
+                 next / explain / run / playbook(s) / sweep / login / sessions /
+                 session / facts / report / serve / web / debug, plus
+                 help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used
                  to keep CLI scan behavior aligned with the web Quick Start flow
 scripts/
@@ -184,8 +199,10 @@ plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
 (admin, system, desktop, shell), `foothold.windows`, `foothold.linux`,
 `loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), `host.*`
 (up, hostname, fqdn, domain — host identity from discovery/enum, host-scoped;
-they enrich a target's label + domain grouping and the engagement map), and
-`port:NNN`.
+they enrich a target's label + domain grouping and the engagement map),
+`winrm.authenticated` / `rdp.authenticated` (a validated interactive login — the
+proof behind a §6a session; the shell itself is `foothold.windows`/`foothold.linux`/
+`access.shell`), and `port:NNN`.
 (`access.shell` is an OS-agnostic interactive shell — e.g. a reverse shell
 caught by penelope; `foothold.linux` is its Linux counterpart to
 `foothold.windows`, forward-looking for the privesc packs.)
