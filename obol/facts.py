@@ -73,13 +73,18 @@ class FactSet:
         return {f.kind for f in self.facts if f.state is ProofState.SUPPORTED}
 
     def add(self, fact: Fact) -> bool:
-        """Add a fact unless an identical (kind, value) one is already present.
+        """Add a fact unless an identical (kind, scope, value) one is present.
 
         Returns True if it was actually new. Conservative de-dup keeps re-running
-        the same action from inflating the picture.
+        the same action against the same target from inflating the picture — but
+        the same (kind, value) on a *different* scope (another host, the domain)
+        is a distinct fact and is kept. This matches the store's persistence key
+        (`fact_hash(kind, scope, value)`); deduping without scope would silently
+        drop one host's fact when two targets produce the same baseline finding.
         """
         for existing in self.facts:
-            if existing.kind == fact.kind and existing.value == fact.value:
+            if (existing.kind == fact.kind and existing.scope == fact.scope
+                    and existing.value == fact.value):
                 return False
         self.facts.append(fact)
         return True

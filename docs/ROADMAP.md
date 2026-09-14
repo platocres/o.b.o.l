@@ -74,11 +74,16 @@ The build sequence (each a reviewable PR):
   each CIDR scope entry runs it as a background job (`POST /api/run/sweep`,
   `GET /api/sweep/jobs/{id}`); new targets stream into the page live over the
   existing `target_added` SSE feed. Terminal parity: `obol sweep <range>`.
-- **(c) Per-host enumeration fan-out.** After discovery, run the existing
-  service-aware Quick Start baseline against each new host — nmap service scan,
-  then nxc SMB/LDAP and the safe baseline the packs already gate. Reuse the
-  per-target Quick Start orchestrator per discovered host. PC's `DEFAULT_RULES`
-  service→tool table is the reference for coverage (SMB/LDAP/WinRM/DNS/HTTP/…).
+- **(c) Per-host enumeration fan-out — DONE.** After discovery, the sweep runs
+  the service-aware Quick Start baseline against each newly created host, one at a
+  time, through the existing Quick Start engine (same runner/parser/store) — nmap
+  service scan, then the nxc SMB/LDAP + safe baseline the packs gate. Each host's
+  run is a normal Quick Start job, so its steps and facts stream to the page live;
+  a re-sweep never re-enumerates existing targets. `POST /api/run/sweep` takes
+  `enumerate` (default true; `false` = discovery only). This surfaced and fixed a
+  real multi-target bug: `FactSet.add` deduped by `(kind, value)` and dropped one
+  host's fact when two targets produced an identical baseline finding (e.g.
+  `port:445`) — it now dedups by `(kind, scope, value)`, matching the store's key.
 - **(d) Target enrichment — hostname + domain.** A parser maps nmap/nxc/LDAP
   hostname and FQDN output to the discovered host; `ws` renames the target's
   label from IP to hostname when found. Add a `domain` field to the target

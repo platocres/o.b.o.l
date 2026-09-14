@@ -5,8 +5,20 @@ from pathlib import Path
 import pytest
 
 from obol import bloodhound, graph, library, service
+from obol.facts import Fact, FactSet
 from obol.seed import seed_forest
 from obol.workspace import Workspace
+
+
+def test_identical_facts_on_different_hosts_are_both_kept():
+    # the same (kind, value) on two hosts is two distinct facts — deduping without
+    # scope would silently drop one host's finding (regression: multi-host sweep)
+    fs = FactSet()
+    assert fs.add(Fact("port:445", "host:10.10.10.5", {"port": 445})) is True
+    assert fs.add(Fact("port:445", "host:10.10.10.7", {"port": 445})) is True
+    # but re-adding the exact same (kind, scope, value) is still a no-op
+    assert fs.add(Fact("port:445", "host:10.10.10.5", {"port": 445})) is False
+    assert {f.scope for f in fs.facts} == {"host:10.10.10.5", "host:10.10.10.7"}
 
 FIXTURES = Path("/home/user/kaldox/pentos/tests/fixtures/sharphound")
 

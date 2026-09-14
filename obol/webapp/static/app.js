@@ -456,7 +456,7 @@ async function buildEngagement() {
     || `<div class="empty">No activity yet.</div>`;
 
   const scopeChips = (s.scope || []).length
-    ? s.scope.map((v) => `<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${esc(v)}${v.includes("/") ? `<button class="btn xs" data-act="sweep" data-range="${esc(v)}" title="Discover live hosts in ${esc(v)} and add them as targets" style="padding:1px 6px">Sweep</button>` : ""}<button data-act="scope-del" data-scope="${esc(v)}" title="Remove ${esc(v)} from scope" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button></span>`).join("")
+    ? s.scope.map((v) => `<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${esc(v)}${v.includes("/") ? `<button class="btn xs" data-act="sweep" data-range="${esc(v)}" title="Discover live hosts in ${esc(v)}, add them as targets, and run the baseline enumeration on each" style="padding:1px 6px">Sweep</button>` : ""}<button data-act="scope-del" data-scope="${esc(v)}" title="Remove ${esc(v)} from scope" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button></span>`).join("")
     : `<span class="muted">No scope yet — add a host or CIDR the runner is allowed to touch.</span>`;
 
   // catChart data is stashed for syncDonut after paint (charts are created, not morphed).
