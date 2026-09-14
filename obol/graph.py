@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 
 from .facts import FactSet
-from .pack import Action, load_pack, next_actions, friendly as _friendly
+from .pack import Action, load_packs, next_actions, friendly as _friendly
 
 
 def _nid(text: str) -> str:
@@ -24,7 +24,7 @@ def _nid(text: str) -> str:
 
 
 def build_mermaid(facts: FactSet, pack: list[Action] | None = None) -> str:
-    pack = pack if pack is not None else load_pack()
+    pack = pack if pack is not None else load_packs()
     live = {a.id for a in next_actions(facts, pack)}
     lines = ["flowchart TD"]
     seen_facts: set[str] = set()

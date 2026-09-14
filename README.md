@@ -64,12 +64,18 @@ and anonymous LDAP enumeration. Most Orange actions still need dedicated parsers
 before they can be considered fully executable; until then, `obol explain` is the
 command reference and `obol run` will save raw evidence without inventing facts.
 
-**Playbooks** bundle that flow into one deliberate move: a playbook is a named,
-ordered list of pack actions stored as data. `obol playbook ad-recon` renders the
-exact command plan; `obol playbook ad-recon --step N` runs one step through the
-*same* scope-enforced runner, parser, and `.obol` store as `obol run` (no second
-engine). Noisy steps are marked `require_approval` and refuse to run without
-`--approve`.
+Beyond AD, a **web pack** (Orange 2025.03 web lane, 23 actions) loads as a sibling
+pack: an HTTP port from the nmap spine unlocks content discovery, nikto, and
+virtual-host recon, with parsers that record discovered surface as candidate
+context — never a confirmed vuln or foothold. Packs share one fact-kind namespace,
+so cross-domain gating works.
+
+**Playbooks** bundle a flow into one deliberate move: a playbook is a named,
+ordered list of pack actions stored as data. `obol playbook ad-recon` (or
+`web-recon`) renders the exact command plan; `obol playbook <name> --step N` runs
+one step through the *same* scope-enforced runner, parser, and `.obol` store as
+`obol run` (no second engine). Noisy steps are marked `require_approval` and refuse
+to run without `--approve`.
 
 ## Install
 

@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .pack import Action, load_pack
+from .pack import Action, load_packs
 
 PLAYBOOKS_DIR = Path(__file__).parent / "playbooks"
 
@@ -78,8 +78,8 @@ def load_playbook(name: str) -> Playbook:
 
 
 def resolve_step(step: PlaybookStep, pack: list[Action] | None = None) -> Action:
-    """Map a step to its pack Action. Raises KeyError if the pack no longer has it."""
-    pack = pack if pack is not None else load_pack()
+    """Map a step to its pack Action. Raises KeyError if no pack has it."""
+    pack = pack if pack is not None else load_packs()
     for a in pack:
         if a.id == step.action_id:
             return a
@@ -88,5 +88,5 @@ def resolve_step(step: PlaybookStep, pack: list[Action] | None = None) -> Action
 
 def resolve_steps(pb: Playbook, pack: list[Action] | None = None) -> list[tuple[PlaybookStep, Action]]:
     """Resolve every step to its Action, preserving order. Raises KeyError on drift."""
-    pack = pack if pack is not None else load_pack()
+    pack = pack if pack is not None else load_packs()
     return [(s, resolve_step(s, pack)) for s in pb.steps]

@@ -44,19 +44,34 @@ Rules:
 - No bypass around scope validation.
 - Web should be a second surface over the same operator loop, not SaaS.
 
-## 3. HTTP pack export
+## 3. HTTP pack export — DONE
 
-Export the old-obol web lane into a sibling pack so HTTP ports unlock real web
-recon actions after the nmap spine.
+Exported the old-obol web lane into a sibling pack (`obol/packs/orange_web_2025_03.json`,
+23 actions) via `scripts/import_orange_web.js`. The planner now merges packs
+(`pack.load_packs`), so an HTTP port from the nmap spine unlocks the web recon
+actions.
 
-Minimum useful slice:
+Shipped slice:
 
-- HTTP/HTTPS reachability already exists from nmap parsing.
-- Add gobuster/ffuf/nikto/whatweb/curl actions as data.
-- Add parsers for titles, status-code discoveries, interesting files, vhosts, and
-  directory hits.
-- Keep findings as candidate/context until exploitation or authenticated access is
-  actually proven.
+- HTTP/HTTPS reachability already came from nmap parsing (`http.reachable`); the
+  web pack consumes it.
+- Fact kinds remapped onto the shared namespace (`web.reachable → http.reachable`,
+  `shell.reverse → access.shell`) with narrowest-claim fixes (WordPress user enum
+  is `web.users`, not `ad.user_list`).
+- Parsers for content discovery (gobuster/feroxbuster/ffuf/dirb), virtual hosts,
+  and nikto findings — each mapping to `web.content_map` / `web.vhost` /
+  `exploit.candidate`, with anti-overfit tests and 404s excluded.
+- Findings stay candidate/context; no parser claims a confirmed vuln, foothold, or
+  access from recon output.
+- A `web-recon` playbook (content discovery → nikto → vhost) demonstrates
+  cross-pack playbook resolution.
+
+Follow-ups worth doing next on web:
+
+- Parsers for the exploitation cards' success signals (sqlmap `--dbs`/`--os-shell`,
+  git-dumper source, whatweb/curl tech + titles) so those cards become executable.
+- A phase/flow model (item 4 / roadmap item 2) so web recon and AD recon interleave
+  sensibly when both surfaces are open.
 
 ## 4. Path-map phase redesign
 

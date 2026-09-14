@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from obol.board import render_step_command
-from obol.pack import load_pack
+from obol.pack import load_pack, load_packs
 from obol.playbook import list_playbooks, load_playbook, resolve_step, resolve_steps
 from obol.workspace import Workspace
 
@@ -22,8 +22,11 @@ def test_ad_recon_playbook_is_available():
 
 
 def test_every_step_resolves_to_a_real_pack_action():
-    """The key regression guard: a step id typo or a pack rename fails loudly."""
-    pack = load_pack()
+    """The key regression guard: a step id typo or a pack rename fails loudly.
+
+    Resolves against ALL packs, since a playbook may reference a sibling pack's
+    action (web-recon steps live in the web pack)."""
+    pack = load_packs()
     playbooks = list_playbooks()
     assert playbooks, "no playbooks shipped"
     for pb in playbooks:
