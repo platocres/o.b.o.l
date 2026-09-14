@@ -41,7 +41,7 @@ admin, or foothold fact is created from basic enumeration output.
 
 This queue exists so agents do not drift after each build lands.
 
-## Current build: scan-populated engagement map + target enrichment v1
+## Shipped: scan-populated engagement map + target enrichment v1
 
 The overview map now fills from the same evidence as the terminal workflow:
 nmap discovery keeps rDNS identity, nmap/nxc/LDAP parsers emit host-scoped
@@ -50,6 +50,17 @@ groups hosts by domain. The engagement graph now renders authorized scope ranges
 discovered targets, evidence-backed domain links, open service nodes, and the
 BloodHound overlay without inventing host-to-host relationships from shared
 domain facts alone.
+
+## Current build: terminal parity for scope, scan, help, and overview
+
+The terminal now matches the web's engagement-control surface more closely:
+`obol --help` and `obol manual` teach the real operator flow; `obol info` and
+`obol version` provide normal app diagnostics; `obol scope add` handles multiple
+entries; `obol scope paste` extracts only valid IPs/CIDRs from messy pasted text
+or stdin; `obol scan` sweeps every authorized scope entry and then runs the same
+nmap-first Quick Start baseline against scoped targets; and `obol overview`
+summarizes scope, target identity, domains, ports, access/phase, and top moves in
+terminal scrollback.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

@@ -11,10 +11,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import board, discovery, library, service
+from . import __version__, board, discovery, library, quickstart, service
 from .facts import Fact
 from .pack import load_packs, next_actions
 from .runner import RunnerError
+from .scope import extract_ip_scope_entries, normalize_scope_entry, target_in_scope
 from .seed import seed_forest
 from .service import ActionError
 from .workspace import Workspace, find_workspace
@@ -32,7 +33,8 @@ def _load_or_exit() -> Workspace:
 
 
 def _pick(ws: Workspace, n: int):
-    actions = next_actions(ws.facts)
+    facts = ws.facts_for_target(ws.target) if ws.target else ws.facts
+    actions = next_actions(facts)
     if not 1 <= n <= len(actions):
         print(f"no next action #{n}. `obol next` lists {len(actions)}.", file=sys.stderr)
         raise SystemExit(1)
@@ -50,6 +52,130 @@ def _apply_input_overrides(ws: Workspace, values: list[str]) -> None:
             print("--set key cannot be empty", file=sys.stderr)
             raise SystemExit(1)
         ws.set_input(key, value.strip())
+
+
+def _version_text() -> str:
+    return f"obol {__version__}"
+
+
+def _workspace_or_none() -> Workspace | None:
+    return find_workspace() or library.resolve_active()
+
+
+def _print_info() -> None:
+    ws = _workspace_or_none()
+    print(_version_text())
+    if ws is None:
+        print("workspace: none")
+        print("start:     obol engagement new <name>")
+        return
+    print(f"workspace: {ws.root}")
+    print(f"name:      {ws.name}")
+    print(f"target:    {ws.target or '-'}")
+    print(f"scope:     {len(ws.scope)} entr{'y' if len(ws.scope) == 1 else 'ies'}")
+    print(f"targets:   {len(ws.targets)}")
+    print(f"facts:     {len(ws.facts.facts)}")
+    print(f"runs:      {len(ws.runs)}")
+    print("web:       obol serve")
+
+
+def _manual_text() -> str:
+    return """obol manual
+
+Core loop
+  obol engagement new "HTB Lab"      create an engagement
+  obol scope add 10.10.10.0/24       authorize a lab range
+  obol scan                          sweep every scope entry, then Quick Start hosts
+  obol overview                      show scope, hosts, ports, and next moves
+  obol target use 10.10.10.5         switch active target
+  obol next                          show next moves for the active target
+  obol explain 1                     show the exact command choices
+  obol run 1                         run, parse, store facts, and update next moves
+  obol serve                         open the localhost web console over the same store
+  obol report                        write the OSCP-style report
+
+Scope
+  obol scope list
+  obol scope add 10.10.10.5 10.10.10.7 10.10.10.0/24
+  obol scope paste "hosts: 10.10.10.5, bad text, 10.10.10.0/24"
+  cat notes.txt | obol scope paste
+  obol scope rm 10.10.10.5
+
+Scanning
+  obol scan                          scan every current scope entry
+  obol scan 10.10.10.0/24            authorize and scan that range
+  obol scan --extract "10.10.10.5 junk 10.10.10.0/24"
+  obol scan --no-enumerate           discovery only
+  obol scan --new-only               Quick Start only newly discovered targets
+  obol sweep 10.10.10.0/24           sweep one range and Quick Start new hosts
+
+Help and diagnostics
+  obol --help
+  obol help <command>
+  obol --version
+  obol info
+"""
+
+
+def cmd_help(args) -> None:
+    parser = build_parser()
+    topic = getattr(args, "topic", "")
+    if topic:
+        parser.parse_args([topic, "--help"])
+    parser.print_help()
+
+
+def cmd_manual(args) -> None:
+    print(_manual_text().rstrip())
+
+
+def cmd_version(args) -> None:
+    print(_version_text())
+
+
+def cmd_info(args) -> None:
+    _print_info()
+
+
+def _add_scope_values(ws: Workspace, values: list[str], *, extract_only: bool = False) -> tuple[list[str], list[str], list[str]]:
+    added: list[str] = []
+    existing: list[str] = []
+    rejected: list[str] = []
+    candidates = extract_ip_scope_entries(" ".join(values)) if extract_only else values
+    for value in candidates:
+        norm = normalize_scope_entry(value)
+        if not norm:
+            rejected.append(value)
+            continue
+        before = set(ws.scope)
+        stored = ws.add_scope(norm)
+        if stored in before:
+            existing.append(stored)
+        else:
+            added.append(stored)
+    return added, existing, rejected
+
+
+def _read_scope_paste(args) -> str:
+    chunks: list[str] = []
+    if getattr(args, "file", None):
+        chunks.append(Path(args.file).read_text())
+    if getattr(args, "text", None):
+        chunks.append(" ".join(args.text))
+    if not chunks and not sys.stdin.isatty():
+        chunks.append(sys.stdin.read())
+    return "\n".join(chunks)
+
+
+def _print_scope_result(added: list[str], existing: list[str], rejected: list[str]) -> None:
+    for value in added:
+        print(f"added scope: {value}")
+    for value in existing:
+        print(f"already scoped: {value}")
+    for value in rejected:
+        print(f"ignored: {value}")
+    if not (added or existing or rejected):
+        print("no valid scope entries found")
 
 
 def cmd_init(args) -> None:
@@ -86,7 +212,15 @@ def cmd_init(args) -> None:
 
 
 def cmd_next(args) -> None:
-    board.render_board(_load_or_exit())
+    ws = _load_or_exit()
+    if getattr(args, "all", False):
+        board.render_overview(ws)
+    else:
+        board.render_board(ws)
+
+
+def cmd_overview(args) -> None:
+    board.render_overview(_load_or_exit())
 
 
 def cmd_explain(args) -> None:
@@ -229,7 +363,7 @@ def cmd_sweep(args) -> None:
         ws.save()
         print(f"authorized scope: {range_}")
     try:
-        summary = discovery.run_sweep(ws, range_, dry_run=args.dry_run)
+        summary = discovery.run_sweep(ws, range_, dry_run=args.dry_run, timeout=args.timeout)
     except RunnerError as exc:
         print(f"sweep refused: {exc}")
         return
@@ -242,21 +376,146 @@ def cmd_sweep(args) -> None:
         print(f"  + {host}")
     for host in summary["existing"]:
         print(f"    {host} (already a target)")
+    if not args.no_enumerate and created:
+        _quickstart_targets(ws, created, timeout=args.quick_timeout,
+                            dry_run=False, allow_shell=args.allow_shell)
+
+
+def _targets_in_entries(ws: Workspace, entries: list[str]) -> list[str]:
+    hosts: list[str] = []
+    for rec in ws.targets:
+        if any(target_in_scope(rec["host"], [entry])[0] for entry in entries):
+            hosts.append(rec["host"])
+    return hosts
+
+
+def _quickstart_targets(
+    ws: Workspace,
+    hosts: list[str],
+    *,
+    timeout: int,
+    dry_run: bool,
+    allow_shell: bool,
+) -> list[quickstart.QuickStartResult]:
+    results: list[quickstart.QuickStartResult] = []
+    seen: set[str] = set()
+    for host in hosts:
+        if host in seen:
+            continue
+        seen.add(host)
+        label = (ws.get_target(host) or {}).get("label") or host
+        print(f"\n== Quick Start - {label} ({host}) ==")
+
+        def on_step(step: quickstart.QuickStartStep) -> None:
+            if step.status == "running":
+                print(f"$ {step.command}")
+            elif step.status in {"success", "failed", "timeout", "dry-run"}:
+                facts = f" +{len(step.added)} fact(s)" if step.added else ""
+                print(f"  {step.status}: {step.title}{facts}")
+            elif step.status not in {"waiting"}:
+                reason = f" ({step.reason})" if step.reason else ""
+                print(f"  {step.status}: {step.title}{reason}")
+
+        result = quickstart.run_quickstart(
+            ws, host, timeout=timeout, dry_run=dry_run,
+            allow_shell=allow_shell, on_step=on_step,
+        )
+        results.append(result)
+        print(f"stored {len(result.facts)} new fact(s); skipped {len(result.skipped)} step(s)")
+    return results
+
+
+def cmd_scan(args) -> None:
+    ws = _load_or_exit()
+    if args.entries:
+        added, existing, rejected = _add_scope_values(ws, args.entries, extract_only=args.extract)
+        if added or existing:
+            ws.save()
+        _print_scope_result(added, existing, rejected)
+        entries = list(dict.fromkeys(added + existing))
+    else:
+        entries = list(ws.scope)
+    if not entries:
+        print("scope is empty. add scope first: obol scope add <ip-or-cidr>")
+        return
+
+    all_created: list[str] = []
+    print(f"\nscanning {len(entries)} scope entr{'y' if len(entries) == 1 else 'ies'}")
+    for entry in entries:
+        try:
+            summary = discovery.run_sweep(ws, entry, dry_run=args.dry_run, timeout=args.timeout)
+        except RunnerError as exc:
+            print(f"  refused {entry}: {exc}")
+            continue
+        if args.dry_run:
+            print(f"  {entry}: {summary['command']}")
+            continue
+        all_created.extend(summary["created"])
+        print(
+            f"  {entry}: {len(summary['hosts'])} live, "
+            f"{len(summary['created'])} new, {len(summary['existing'])} existing"
+        )
+
+    if args.dry_run or args.no_enumerate:
+        return
+
+    hosts = all_created if args.new_only else _targets_in_entries(ws, entries)
+    if not hosts:
+        print("\nno targets to enumerate yet")
+        return
+    _quickstart_targets(ws, hosts, timeout=args.quick_timeout,
+                        dry_run=False, allow_shell=args.allow_shell)
+    print("\nnext: obol overview")
 
 
 def cmd_scope(args) -> None:
     ws = _load_or_exit()
     if args.scope_cmd == "add":
-        added = ws.add_scope(args.value)
-        if not added:
-            print(f"not a valid host, IP, or CIDR: {args.value!r}")
-            return
-        ws.save()
-        print(f"added scope: {added}")
+        added, existing, rejected = _add_scope_values(ws, args.values)
+        if added or existing:
+            ws.save()
+        _print_scope_result(added, existing, rejected)
+        return
+    if args.scope_cmd == "paste":
+        text = _read_scope_paste(args)
+        added, existing, rejected = _add_scope_values(ws, [text], extract_only=True)
+        if added or existing:
+            ws.save()
+        _print_scope_result(added, existing, rejected)
+        return
+    if args.scope_cmd in {"rm", "remove"}:
+        removed = []
+        missing = []
+        for value in args.values:
+            if any(t.get("host") == normalize_scope_entry(value) for t in ws.targets):
+                print(f"refused: {value} is a target; remove the target before removing its scope")
+                continue
+            if ws.remove_scope(value):
+                removed.append(value)
+            else:
+                missing.append(value)
+        if removed:
+            ws.save()
+        for value in removed:
+            print(f"removed scope: {value}")
+        for value in missing:
+            print(f"not in scope: {value}")
+        return
+    if args.scope_cmd == "clear":
+        blocked = {t.get("host") for t in ws.targets}
+        removable = [entry for entry in ws.scope if normalize_scope_entry(entry) not in blocked]
+        for entry in removable:
+            ws.remove_scope(entry)
+        if removable:
+            ws.save()
+        print(f"removed {len(removable)} non-target scope entr{'y' if len(removable) == 1 else 'ies'}")
+        if blocked:
+            print("kept target scope entries; remove targets first to clear those")
         return
     if ws.scope:
         for entry in ws.scope:
-            print(entry)
+            marker = "target" if any(t.get("host") == entry for t in ws.targets) else "scope"
+            print(f"{entry}  [{marker}]")
     else:
         print("scope is empty")
 
@@ -300,9 +559,17 @@ def cmd_target(args) -> None:
     ws = _load_or_exit()
     sub = getattr(args, "target_cmd", "list")
     if sub == "add":
-        rec = ws.add_target(args.host, args.label or "")
+        if args.label and len(args.hosts) != 1:
+            print("--label can only be used when adding one target", file=sys.stderr)
+            raise SystemExit(1)
+        for host in args.hosts:
+            norm = normalize_scope_entry(host)
+            if not norm:
+                print(f"ignored invalid target: {host}")
+                continue
+            rec = ws.add_target(norm, args.label or "")
+            print(f"added target {rec['label']} ({rec['host']})" + ("  [active]" if ws.target == rec["host"] else ""))
         ws.save()
-        print(f"added target {rec['label']} ({rec['host']})" + ("  [active]" if ws.target == rec["host"] else ""))
         return
     if sub == "use":
         if not ws.set_active_target(args.host):
@@ -368,15 +635,45 @@ def cmd_debug(args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="obol", description="Evidence-driven OSCP operator companion.")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(
+        prog="obol",
+        description="Evidence-driven OSCP operator companion.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""common flow:
+  obol engagement new "HTB Lab"
+  obol scope add 10.10.10.0/24
+  obol scan
+  obol overview
+  obol next
+  obol run 1
+
+try:
+  obol manual          full operator workflow
+  obol help <command>  help for one command
+""",
+    )
+    p.add_argument("-V", "-v", "--version", action="store_true", help="show the obol version and exit")
+    p.add_argument("--info", action="store_true", help="show version and current workspace summary")
+    sub = p.add_subparsers(dest="cmd")
+
+    ph = sub.add_parser("help", help="show help for obol or a specific command")
+    ph.add_argument("topic", nargs="?", help="command to explain")
+    ph.set_defaults(func=cmd_help)
+
+    sub.add_parser("manual", help="show the practical operator manual").set_defaults(func=cmd_manual)
+    sub.add_parser("version", help="show the obol version").set_defaults(func=cmd_version)
+    sub.add_parser("info", help="show version and current workspace summary").set_defaults(func=cmd_info)
 
     pi = sub.add_parser("init", help="initialize a workspace in the current directory")
     pi.add_argument("--target", help="target host/IP")
     pi.add_argument("--demo", action="store_true", help="seed the HTB Forest demo facts")
     pi.set_defaults(func=cmd_init)
 
-    sub.add_parser("next", help="show proven facts and the ranked next actions that matter").set_defaults(func=cmd_next)
+    pn = sub.add_parser("next", help="show proven facts and ranked next actions for the active target")
+    pn.add_argument("--all", action="store_true", help="show an engagement-wide next-move overview")
+    pn.set_defaults(func=cmd_next)
+
+    sub.add_parser("overview", help="show scope, targets, services, and top next moves").set_defaults(func=cmd_overview)
 
     pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)
@@ -405,17 +702,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("facts", help="list all proven facts").set_defaults(func=cmd_facts)
 
-    psweep = sub.add_parser("sweep", help="discover live hosts in a range and add them as targets")
+    pscan = sub.add_parser("scan", help="scan every scoped entry, then Quick Start scoped targets")
+    pscan.add_argument("entries", nargs="*", help="optional IP/CIDR entries to authorize and scan now")
+    pscan.add_argument("--extract", action="store_true", help="extract only IPs/CIDRs from pasted entries")
+    pscan.add_argument("--no-enumerate", action="store_true", help="discovery only; do not run Quick Start")
+    pscan.add_argument("--new-only", action="store_true", help="Quick Start only targets created by this scan")
+    pscan.add_argument("--timeout", type=int, default=600, help="discovery sweep timeout in seconds")
+    pscan.add_argument("--quick-timeout", type=int, default=300, help="per-command Quick Start timeout in seconds")
+    pscan.add_argument("--dry-run", action="store_true", help="print discovery commands without running them")
+    pscan.add_argument("--allow-shell", action="store_true", help="allow shell metacharacters in guided handoff commands")
+    pscan.set_defaults(func=cmd_scan)
+
+    psweep = sub.add_parser("sweep", help="discover live hosts in one range and add them as targets")
     psweep.add_argument("range", help="an authorized CIDR or host (added to scope if new)")
+    psweep.add_argument("--no-enumerate", action="store_true", help="discovery only; do not Quick Start new hosts")
+    psweep.add_argument("--timeout", type=int, default=600, help="discovery sweep timeout in seconds")
+    psweep.add_argument("--quick-timeout", type=int, default=300, help="per-command Quick Start timeout in seconds")
     psweep.add_argument("--dry-run", action="store_true", help="print the discovery command without running it")
+    psweep.add_argument("--allow-shell", action="store_true", help="allow shell metacharacters in guided handoff commands")
     psweep.set_defaults(func=cmd_sweep)
 
-    pscope = sub.add_parser("scope", help="list or add authorized scope entries")
+    pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")
     scope_sub.add_parser("list", help="list scope").set_defaults(func=cmd_scope, scope_cmd="list")
-    padd = scope_sub.add_parser("add", help="add an IP, hostname, or CIDR to scope")
-    padd.add_argument("value")
+    padd = scope_sub.add_parser("add", help="add IPs, hostnames, URLs, or CIDRs to scope")
+    padd.add_argument("values", nargs="+")
     padd.set_defaults(func=cmd_scope, scope_cmd="add")
+    ppaste = scope_sub.add_parser("paste", help="extract only valid IPs/CIDRs from pasted text")
+    ppaste.add_argument("text", nargs="*", help="pasted text; stdin is used when omitted")
+    ppaste.add_argument("--file", help="read pasted text from a file")
+    ppaste.set_defaults(func=cmd_scope, scope_cmd="paste")
+    prm = scope_sub.add_parser("rm", aliases=["remove"], help="remove scope entries")
+    prm.add_argument("values", nargs="+")
+    prm.set_defaults(func=cmd_scope, scope_cmd="rm")
+    scope_sub.add_parser("clear", help="remove non-target scope entries").set_defaults(func=cmd_scope, scope_cmd="clear")
     pscope.set_defaults(func=cmd_scope, scope_cmd="list")
 
     peng = sub.add_parser("engagement", help="manage engagements in the app-managed library")
@@ -432,8 +752,8 @@ def build_parser() -> argparse.ArgumentParser:
     ptgt = sub.add_parser("target", help="manage targets in the current/active engagement")
     tgt_sub = ptgt.add_subparsers(dest="target_cmd")
     tgt_sub.add_parser("list", help="list targets").set_defaults(func=cmd_target, target_cmd="list")
-    t_add = tgt_sub.add_parser("add", help="add a target host (unlocks the nmap prelude)")
-    t_add.add_argument("host")
+    t_add = tgt_sub.add_parser("add", help="add one or more target hosts (unlocks the nmap prelude)")
+    t_add.add_argument("hosts", nargs="+")
     t_add.add_argument("--label", help="friendly label for the target")
     t_add.set_defaults(func=cmd_target, target_cmd="add")
     t_use = tgt_sub.add_parser("use", help="set the active target")
@@ -481,7 +801,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if getattr(args, "version", False):
+        print(_version_text())
+        return
+    if getattr(args, "info", False):
+        _print_info()
+        return
+    if not getattr(args, "cmd", None):
+        parser.print_help()
+        return
     args.func(args)
 
 

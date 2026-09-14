@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from .facts import FactSet
+from .graph import target_access_level, target_phase
 from .pack import Action, friendly, next_actions
 from .workspace import Workspace
 
@@ -117,6 +118,26 @@ def _open_ports(facts: FactSet) -> list[int]:
     return sorted(ports)
 
 
+def _target_label(ws: Workspace, host: str) -> str:
+    rec = ws.get_target(host)
+    return (rec or {}).get("label") or host or "<no target>"
+
+
+def _target_facts(ws: Workspace, host: str = "") -> FactSet:
+    target = host or ws.target
+    return ws.facts_for_target(target) if target else ws.facts
+
+
+def _services_line(facts: FactSet, limit: int = 10) -> str:
+    ports = _open_ports(facts)
+    if not ports:
+        return "-"
+    shown = ", ".join(str(p) for p in ports[:limit])
+    if len(ports) > limit:
+        shown += f", +{len(ports) - limit}"
+    return shown
+
+
 def _proven_lines(facts: FactSet) -> list[str]:
     lines: list[str] = []
     for kind, label in _NOTABLE:
@@ -142,12 +163,13 @@ def _proven_lines(facts: FactSet) -> list[str]:
 
 def render_board(ws: Workspace) -> None:
     """Proven so far + the live actions that matter. No blocked list, no proof talk."""
-    facts = ws.facts
+    facts = _target_facts(ws)
     nxt = next_actions(facts)
+    active = _target_label(ws, ws.target)
 
     if _RICH:
         _console.print(Panel("\n".join(_proven_lines(facts)),
-                             title=f"obol · {ws.name} · {ws.target}", border_style="green"))
+                             title=f"obol · {ws.name} · {active}", border_style="green"))
         t = Table(show_edge=False, expand=True)
         t.add_column("#", justify="right", style="bold cyan", width=3)
         t.add_column("do this")
@@ -157,7 +179,7 @@ def render_board(ws: Workspace) -> None:
         _console.print(Panel(t, title=f"{SYM_NEXT} NEXT", border_style="cyan"))
         _console.print("[dim]run:[/dim] obol run <#>   [dim]see the command:[/dim] obol explain <#>")
     else:
-        print(f"\n== obol · {ws.name} · {ws.target} ==")
+        print(f"\n== obol · {ws.name} · {active} ==")
         print(f"\n{SYM_OK} PROVEN")
         for ln in _proven_lines(facts):
             print(f"   {ln}")
@@ -168,6 +190,62 @@ def render_board(ws: Workspace) -> None:
             if desc:
                 print(f"       {desc}")
         print("\nrun: obol run <#>   ·   see the command: obol explain <#>\n")
+
+
+def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
+    """Compact engagement-wide terminal view: scope, hosts, services, next moves."""
+    if _RICH:
+        scope_body = "\n".join(ws.scope) if ws.scope else "empty"
+        _console.print(Panel(scope_body, title=f"scope · {ws.name}", border_style="green"))
+
+        t = Table(show_edge=False, expand=True)
+        t.add_column("", width=1)
+        t.add_column("target", style="bold")
+        t.add_column("identity")
+        t.add_column("domain")
+        t.add_column("state")
+        t.add_column("ports", style="cyan")
+        t.add_column("next")
+        for rec in ws.targets:
+            host = rec["host"]
+            facts = _target_facts(ws, host)
+            moves = " | ".join(a.title for a in next_actions(facts)[:max_moves]) or "-"
+            identity = rec.get("fqdn") or rec.get("hostname") or rec.get("label") or "-"
+            state = f"{target_access_level(facts)} / {target_phase(facts)}"
+            t.add_row(
+                "*" if host == ws.target else "",
+                host,
+                identity,
+                rec.get("domain") or "-",
+                state,
+                _services_line(facts),
+                moves,
+            )
+        _console.print(Panel(t, title=f"{SYM_NEXT} engagement overview", border_style="cyan"))
+        _console.print("[dim]scan scope:[/dim] obol scan   [dim]active target:[/dim] obol target use <host>   [dim]next:[/dim] obol next")
+        return
+
+    print(f"\n== obol overview - {ws.name} ==")
+    print("\nSCOPE")
+    if ws.scope:
+        for entry in ws.scope:
+            print(f"  {entry}")
+    else:
+        print("  empty")
+    print("\nTARGETS")
+    if not ws.targets:
+        print("  none yet")
+    for rec in ws.targets:
+        host = rec["host"]
+        facts = _target_facts(ws, host)
+        moves = "; ".join(a.title for a in next_actions(facts)[:max_moves]) or "-"
+        identity = rec.get("fqdn") or rec.get("hostname") or rec.get("label") or "-"
+        mark = "*" if host == ws.target else " "
+        print(f" {mark} {host:16} {identity}")
+        print(f"    domain: {rec.get('domain') or '-'}   state: {target_access_level(facts)} / {target_phase(facts)}")
+        print(f"    ports:  {_services_line(facts)}")
+        print(f"    next:   {moves}")
+    print("\nscan scope: obol scan   |   active target: obol target use <host>   |   next: obol next\n")
 
 
 def render_step_command(step, action: Action, ws: Workspace) -> str:

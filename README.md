@@ -24,8 +24,11 @@ dashboard — the transcript is your evidence log):
 
 ```
 obol engagement new "HTB Lab"   # create an engagement in the app-managed library
-obol target add 10.10.10.161 --label DC01   # add a target (unlocks the nmap prelude)
-obol target add 10.10.10.175 --label SAUNA  # …as many as the engagement needs
+obol scope add 10.10.10.0/24    # authorize a lab range
+obol scope paste "10.10.10.161 junk 10.10.10.175 10.10.10.0/24"  # keep only IPs/CIDRs
+obol scan                       # sweep every scope entry, then Quick Start targets
+obol scan --extract "10.10.10.161 junk 10.10.10.0/24"  # authorize + scan pasted IP/CIDR text
+obol overview                   # scope, targets, services, domains, and top moves
 obol target use 10.10.10.161    # pick the active target
 obol next                       # proven facts · ranked next moves for the active target
 obol explain 1                  # first real target move is nmap open-port discovery
@@ -41,6 +44,11 @@ obol debug package              # bundle a review .zip (state, evidence, screens
 obol init --demo                # seed a workspace here (HTB Forest, post-nmap)
 obol init --target IP           # or start a real scoped target workspace here
 ```
+
+`obol --help`, `obol help <command>`, `obol manual`, `obol --version`, and
+`obol info` are available for normal CLI discovery. You can still hand-add targets
+with `obol target add 10.10.10.161 10.10.10.175`, but the preferred engagement
+start is scope first, then `obol scan`.
 
 ## The web surface
 
@@ -117,6 +125,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **Terminal and web are both actors over one state**, localhost-only; either can
   launch a run, and both go through the single scope-enforced runner and `.obol`
   store, so they stay in lockstep in real time.
+- **Terminal parity matters.** The terminal can authorize scope, paste-filter IPs
+  and CIDRs, scan the full scope, run the same Quick Start baseline, and show a
+  compact engagement overview even when the web graph is not open.
 
 ## Status
 

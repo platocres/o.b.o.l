@@ -159,8 +159,11 @@ obol/
                    Findings/Evidence/Commands), attack path, report; vendored
                    chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
   seed.py        Forest demo fixture (post-nmap facts)
-  cli.py         subcommands: init / engagement / target / next / explain / run /
-                 playbook(s) / sweep / scope / facts / report / serve / web / debug
+  cli.py         subcommands: init / engagement / target / scope / scan / overview /
+                 next / explain / run / playbook(s) / sweep / facts / report /
+                 serve / web / debug, plus help/manual/version/info
+  quickstart.py  shared nmap-first Quick Start action order + terminal runner used
+                 to keep CLI scan behavior aligned with the web Quick Start flow
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
   import_orange_web.js  converter: old-obol lanes.js web lane -> pack JSON
