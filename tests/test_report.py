@@ -85,3 +85,7 @@ def test_redact_command_is_tool_aware():
         redact_command("nxc smb 10.10.10.10 -u bob -p 'Secret123!'")
         == "nxc smb 10.10.10.10 -u bob -p <redacted>"
     )
+    assert (
+        redact_command("impacket-secretsdump 'corp.local/bob:Secret123!'@10.10.10.10")
+        == "impacket-secretsdump 'corp.local/bob:<redacted>'@10.10.10.10"
+    )
