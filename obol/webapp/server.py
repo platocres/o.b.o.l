@@ -35,7 +35,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import board, bloodhound, discovery, library, tools as tool_inventory
+from .. import board, bloodhound, discovery, library, sessions as session_layer, tools as tool_inventory
+from ..sessions import SessionError
 from ..graph import (
     build_engagement_graph,
     build_graph_model,
@@ -54,10 +55,12 @@ from ..report import (
     build_report,
     build_report_context,
     redact_command,
+    _CATEGORY_ORDER,
     _evidence_view,
     _fact_category,
     _redact_value,
     _run_status,
+    _stamp,
     _target_open_ports,
 )
 from ..runner import RunnerError
@@ -90,6 +93,12 @@ except ModuleNotFoundError:  # pragma: no cover
     _HAVE_FASTAPI = False
 
 STATIC_DIR = Path(__file__).parent / "static"
+# The live web surface is a single-operator localhost lab/exam console, so it SHOWS
+# secrets by default (passwords, hashes, tickets in commands and fact values).
+# Redaction is opt-in — the report view's toggle, and the roadmapped engagement-wide
+# redact switch. This is deliberately the opposite of a shareable artifact like the
+# debug package, which stays redacted-by-default. See docs/ROADMAP.md.
+WEB_SHOW_SECRETS = True
 PHASES = ["recon", "enum", "creds", "access", "escalate", "loot"]
 PHASE_LABEL = {"recon": "Recon", "enum": "Enumerate", "creds": "Credentials",
                "access": "Access", "escalate": "Escalate", "loot": "Loot / domain"}
@@ -271,7 +280,7 @@ def _command_preflight(action, ws: Workspace, *, target: str = "", command_index
     return {
         "action_id": action.id,
         "command_index": command_index + 1,
-        "command": redact_command(command, include_secrets=False),
+        "command": redact_command(command, include_secrets=WEB_SHOW_SECRETS),
         "tool": tool_state,
         "parser": _parser_status(action, command),
         "missing_inputs": missing,
@@ -398,10 +407,138 @@ def _fact_view(f) -> dict:
     return {
         "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
         "scope": f.scope, "state": f.state.value,
-        "value": _redact_value(f.value, include_secrets=False),
-        "evidence": redact_command(f.source or "", include_secrets=False),
+        "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
+        "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
         "created_at": f.created_at,
     }
+
+
+# Human titles for the engagement-wide findings roll-up (0e). Keys are the
+# categories `_fact_category` emits; order comes from report._CATEGORY_ORDER so the
+# web roll-up and the markdown report agree.
+CATEGORY_TITLE = {
+    "target": "Target & network",
+    "scan": "Scans",
+    "service": "Services",
+    "ad": "Directory / AD",
+    "credential": "Credentials & hashes",
+    "access": "Access",
+    "loot": "Loot",
+    "config": "Config / vuln",
+    "web": "Web",
+    "other": "Other",
+}
+
+
+def _job_feed(job: dict) -> dict:
+    """A slim view of one background job for the engagement activity feed.
+
+    The full per-target job payload carries preflight blobs and raw output; the
+    engagement feed only needs each job's identity, live status, and step
+    progress, so this trims it to keep the (all-jobs) endpoint cheap.
+    """
+    kind = job.get("kind") or ("sweep" if job.get("range") else "quickstart")
+    steps = [{
+        "action_id": s.get("action_id", ""),
+        "title": s.get("title", ""),
+        "phase": s.get("phase", ""),
+        "status": s.get("status", ""),
+        "success": s.get("success"),
+        "added_count": s.get("added_count", 0),
+        "summary": s.get("summary") or s.get("reason", ""),
+    } for s in job.get("steps", [])]
+    view = {
+        "id": job.get("id"),
+        "kind": kind,
+        "status": job.get("status", ""),
+        "pending": job.get("status") in {"queued", "running"},
+        "success": job.get("success"),
+        "target": job.get("target", ""),
+        "range": job.get("range", ""),
+        "message": job.get("message", ""),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "started_at": job.get("started_at"),
+        "ended_at": job.get("ended_at"),
+        "added_count": len(job.get("facts") or []),
+        "steps": steps,
+    }
+    if kind == "sweep":
+        view["found"] = job.get("found", 0)
+        view["created"] = list(job.get("created", []))
+        view["existing"] = list(job.get("existing", []))
+        view["enumerated"] = list(job.get("enumerated", []))
+    return view
+
+
+def _engagement_findings(ws: Workspace) -> dict:
+    """Every proven fact across all targets, grouped by category and tagged with the
+    host (or domain) that produced it — the engagement-level findings roll-up (0e).
+
+    Proof-bound like everywhere else: only `supported` facts appear, each still
+    carrying the command that established it. Secrets are redacted (the report view
+    owns the secrets toggle)."""
+    host_labels = {t["host"]: (t.get("label") or t["host"]) for t in ws.targets}
+    host_domain = {t["host"]: t.get("domain", "") for t in ws.targets}
+    buckets: dict[str, list[dict]] = {}
+    host_counts: dict[str, int] = {}
+    total = 0
+    for f in ws.facts.facts:
+        if f.state.value != "supported":
+            continue
+        cat = _fact_category(f.kind)
+        scope = f.scope or ""
+        host = ""
+        if scope.startswith("host:"):
+            host = scope[5:]
+            origin, origin_kind = host_labels.get(host, host), "host"
+        elif scope.startswith("domain:"):
+            origin, origin_kind = scope[7:], "domain"
+        else:
+            origin, origin_kind = "engagement", "engagement"
+        buckets.setdefault(cat, []).append({
+            "kind": f.kind, "label": friendly(f.kind), "category": cat,
+            "host": host, "origin": origin, "origin_kind": origin_kind,
+            "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
+            "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
+            "at": f.created_at,
+        })
+        total += 1
+        if host:
+            host_counts[host] = host_counts.get(host, 0) + 1
+
+    categories = []
+    for cat in sorted(buckets, key=lambda c: _CATEGORY_ORDER.get(c, 99)):
+        items = sorted(buckets[cat], key=lambda x: (x["origin"], x["kind"], x["at"] or 0))
+        categories.append({"id": cat, "title": CATEGORY_TITLE.get(cat, cat.title()),
+                           "count": len(items), "findings": items})
+    hosts = [{"host": t["host"], "label": host_labels[t["host"]],
+              "domain": host_domain.get(t["host"], ""),
+              "count": host_counts.get(t["host"], 0)} for t in ws.targets]
+    return {"categories": categories, "total": total, "hosts": hosts}
+
+
+def _engagement_timeline(ws: Workspace, limit: int = 40) -> list[dict]:
+    """Recent command runs across every target, newest first — the engagement run
+    ledger (as opposed to the per-target Commands tab)."""
+    host_labels = {t["host"]: (t.get("label") or t["host"]) for t in ws.targets}
+    out: list[dict] = []
+    for row in ws.runs[::-1][:limit]:
+        tgt = row.get("target", "") or ""
+        out.append({
+            "tool": row.get("tool", "tool"),
+            "command": redact_command(row.get("command", ""), include_secrets=WEB_SHOW_SECRETS),
+            "status": _run_status(row),
+            "produced": list(row.get("produced") or []),
+            "at": row.get("at"),
+            "at_display": _stamp(row.get("at")),
+            "target": tgt,
+            "target_label": host_labels.get(tgt, tgt),
+            "playbook": row.get("playbook"),
+            "sweep": bool(row.get("sweep")),
+            "range": row.get("range", ""),
+        })
+    return out
 
 
 def _target_fact_summary(tf) -> list[dict]:
@@ -468,7 +605,7 @@ def _outcome_view(outcome) -> dict:
     added = [_fact_view(f) for f in outcome.added]
     return {
         "action_id": outcome.action_id,
-        "command": redact_command(outcome.command, include_secrets=False),
+        "command": redact_command(outcome.command, include_secrets=WEB_SHOW_SECRETS),
         "tool": outcome.tool,
         "dry_run": outcome.dry_run,
         "success": success,
@@ -558,7 +695,7 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
             except ActionError:
                 cmd = a.command
             items.append({"id": a.id, "title": a.title,
-                          "command": redact_command(cmd, include_secrets=False),
+                          "command": redact_command(cmd, include_secrets=WEB_SHOW_SECRETS),
                           "tools": a.tools or ([a.tool] if a.tool else []),
                           "checked": bool(ticks.get(a.id))})
         if items:
@@ -566,11 +703,11 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
 
     host_facts = [f for f in tf.facts if f.scope == f"host:{host}"]
     findings = [{"kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
-                 "value": _redact_value(f.value, include_secrets=False),
-                 "evidence": redact_command(f.source or "", include_secrets=False),
+                 "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
+                 "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
                  "state": f.state.value} for f in host_facts]
 
-    commands = [{"tool": r.get("tool"), "command": redact_command(r.get("command", ""), include_secrets=False),
+    commands = [{"tool": r.get("tool"), "command": redact_command(r.get("command", ""), include_secrets=WEB_SHOW_SECRETS),
                  "status": _run_status(r), "produced": r.get("produced") or [],
                  "at": r.get("at"), "playbook": r.get("playbook")}
                 for r in ws.runs if r.get("target") == host or (not r.get("target") and host == ws.target)][::-1][:60]
@@ -591,6 +728,10 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
         "commands": commands,
         "evidence": [_evidence_view(e) for e in ws.evidence_for(host)],
         "graph": build_graph_model(tf),
+        # sessions layer (§6a): live interactive sessions for this host + which
+        # logins are offerable now. Stored login_command is already redacted.
+        "sessions": list(ws.sessions_for(host)),
+        "logins": session_layer.eligible_sessions(ws, host),
     }
 
 
@@ -947,7 +1088,7 @@ def create_app(base, *, token: Optional[str] = None):
     @app.get("/api/overview")
     def api_overview():
         ws = active()
-        ctx = build_report_context(ws)
+        ctx = build_report_context(ws, include_secrets=WEB_SHOW_SECRETS)
         activity = [{"tool": r["tool"], "command": r["command"], "status": r["status"],
                      "produced": r["produced"], "at_display": r["at_display"],
                      "playbook": r.get("playbook")} for r in ctx["timeline"][-14:][::-1]]
@@ -961,12 +1102,36 @@ def create_app(base, *, token: Optional[str] = None):
     def api_engagement_graph():
         return build_engagement_graph(active())
 
+    @app.get("/api/engagement/activity")
+    def api_engagement_activity():
+        """Engagement-level operations console (0e): the live run feed (sweeps and
+        per-host Quick Start jobs, in-flight and recent) plus a category-organized
+        findings roll-up across every discovered host and the cross-host run
+        ledger. Reads are fresh; the page repaints on the same SSE change feed."""
+        ws = active()
+        with quickstart_jobs_lock:
+            jobs = [_job_feed(job) for job in quickstart_jobs.values()]
+        jobs.sort(key=lambda j: j.get("updated_at") or 0, reverse=True)
+        active_jobs = [j for j in jobs if j["pending"]]
+        # Keep every in-flight job, then a bounded slice of recent finished ones so a
+        # big sweep (one job per host) does not grow this response without bound.
+        recent = active_jobs + [j for j in jobs if not j["pending"]][:16]
+        findings = _engagement_findings(ws)
+        return {
+            "jobs": recent,
+            "active_count": len(active_jobs),
+            "timeline": _engagement_timeline(ws),
+            "findings": findings["categories"],
+            "findings_total": findings["total"],
+            "hosts": findings["hosts"],
+        }
+
     @app.get("/api/report")
-    def api_report(include_secrets: bool = Query(False)):
+    def api_report(include_secrets: bool = Query(True)):
         return build_report_context(active(), include_secrets=include_secrets)
 
     @app.get("/api/report.md")
-    def api_report_md(include_secrets: bool = Query(False)):
+    def api_report_md(include_secrets: bool = Query(True)):
         md = build_report(active(), include_secrets=include_secrets)
         return PlainTextResponse(md, headers={"Content-Disposition": 'attachment; filename="obol-report.md"'})
 
@@ -1188,6 +1353,80 @@ def create_app(base, *, token: Optional[str] = None):
             except RunnerError as exc:
                 raise HTTPException(400, str(exc))
         return _outcome_view(outcome)
+
+    # ── sessions layer (one-click login + live session state) ────────────────
+    @app.post("/api/run/login")
+    def api_run_login(payload: dict = Body(...)):
+        """Validate access with the non-interactive proof and, on success, record a
+        live session. Returns the proof outcome + the recorded session, whose
+        login_command is the full ready-to-paste command (secrets shown by default —
+        this is the operator's localhost lab/exam box)."""
+        target = (payload or {}).get("target", "")
+        kind = (payload or {}).get("kind", "")
+        if not target or not kind:
+            raise HTTPException(422, "target and kind are required")
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, target)
+            try:
+                res = session_layer.open_session(ws, target, kind, surface="web")
+            except SessionError as exc:
+                raise HTTPException(400, str(exc))
+            except ActionError as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return {
+            "ok": res["ok"], "kind": res["kind"],
+            "reason": res.get("reason", ""),
+            "session": res.get("session"),
+            "outcome": _outcome_view(res["outcome"]),
+        }
+
+    @app.get("/api/session/login_command")
+    def api_session_login_command(target: str = Query(...), kind: str = Query(...)):
+        """The full interactive login command, rebuilt from facts — used to copy an
+        existing session's command without re-running the proof."""
+        ws = active()
+        target_or_404(ws, target)
+        try:
+            return {"command": session_layer.build_login_command(ws, target, kind)}
+        except SessionError as exc:
+            raise HTTPException(404, str(exc))
+
+    @app.post("/api/session/probe")
+    def api_session_probe(payload: dict = Body(...)):
+        sid = (payload or {}).get("id", "")
+        with _RUN_LOCK:
+            ws = active()
+            if not ws.get_session(sid):
+                raise HTTPException(404, f"no session {sid!r}")
+            try:
+                res = session_layer.probe_session(ws, sid)
+            except (SessionError, ActionError) as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return {"ok": True, "alive": res["alive"], "session": res["session"]}
+
+    @app.post("/api/session/close")
+    def api_session_close(payload: dict = Body(...)):
+        sid = (payload or {}).get("id", "")
+        with _RUN_LOCK:
+            ws = active()
+            if not ws.close_session(sid):
+                raise HTTPException(404, f"no session {sid!r}")
+            ws.save()
+        return {"ok": True}
+
+    @app.delete("/api/session")
+    def api_session_remove(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            if not ws.remove_session(id):
+                raise HTTPException(404, f"no session {id!r}")
+            ws.save()
+        return {"ok": True}
 
     @app.post("/api/run/quickstart")
     def api_run_quickstart(payload: dict = Body(...)):

@@ -44,7 +44,7 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
   per-step `require_approval` gating. First playbook: `ad-recon`. Web
   run-from-site and the playbook path-map view are still pending under item 5.
 
-## 0. Engagement-level discovery sweep + scope UI + host grouping (IN PROGRESS)
+## 0. Engagement-level discovery sweep + scope UI + host grouping (DONE)
 
 An operator should be able to point obol at a network, sweep it, and watch
 targets populate — names, services, and domain grouping filling in as
@@ -93,11 +93,17 @@ The build sequence (each a reviewable PR):
   map now populates from scans: authorized scope ranges link to matching targets,
   targets link to domains only when host-scoped evidence supports it, and open
   ports/services render as service nodes.
-- **(e) Engagement-level run & findings view.** Surface sweep runs and the
-  facts/findings they produce at the *engagement* level (not just per-target):
-  a live activity feed of the sweep's steps and a clean, category-organized
-  findings roll-up across all discovered hosts. The Quick Start job engine is
-  already engagement-bound; this is the aesthetic/organization layer.
+- **(e) Engagement-level run & findings view — DONE.** A dedicated **Activity**
+  view (`GET /api/engagement/activity`) surfaces work at the *engagement* level,
+  not just per-target: a **live run feed** of every sweep and per-host Quick Start
+  job (in-flight and recent, with step progress), a **findings roll-up** that
+  groups every proven fact across all hosts by category and tags each with the
+  host (or domain) that produced it and its cited evidence, and a cross-host
+  **command ledger**. It repaints on the same SSE change feed as the rest of the
+  page, and starting a sweep drops the operator here to watch it run. Proof-bound
+  like everywhere else (only `supported` facts, secrets redacted); the host filter
+  chips read from per-host fact counts. The Quick Start job engine was already
+  engagement-bound — this is the organization/aesthetic layer over it.
 - **(f) Terminal parity for scope + scan — DONE.** `obol --help` now exposes the
   practical flow, with `obol help <command>`, `obol manual`, `obol --version`, and
   `obol info` for normal CLI discovery. `obol scope add` accepts multiple entries,
@@ -208,6 +214,212 @@ parsers + `.obol` store as the terminal, via the shared `obol/service.py`.
   add-path override, and runs any available tool against a chosen target. The runner
   resolves found/added tools so a "found" tool is guaranteed to launch.
 
+## 6. Pivoting, sessions & tunnels (recursive segment mapping)
+
+The lab-speed feature set, borrowed from the operator's Charon (`docs/SOURCES.md
+§3` — learn from it, reimplement; do not copy code). Turns obol from a
+single-segment enumerator into a **recursive network-segment mapper**: reach a
+host, prove a shell, enumerate it, pivot, and re-run discovery *through* the pivot
+— each tunnel a hop. Every step still runs through the one scope-enforced runner
+and the one store, and stays proof-bound: a shell, a second NIC, and a reachable
+subnet are each their own narrow fact.
+
+**How §6, §7, and item 3 interlock (read this — build them aware of each other):**
+these three are one milestone seen from three angles, joined by the access fact.
+§6(a)'s login produces an `access.*`/`foothold.*` fact; that same fact (1) **gates
+item 3**, the privesc packs, which only go live once you have a shell to escalate
+from, and (2) is the precondition for §7's **flag capture**, which needs a shell to
+read `proof.txt`/`root.txt`. §7's **engagement profile** (platform/exam type) in
+turn colors §6 and item 3 — the machine_type nudges which login/privesc moves rank
+first, and the platform says which flag a post-foothold enum should hunt. So the
+natural build order is **§6(a) sessions → item 3 privesc → §7 flags**, and none of
+them should invent its own notion of "you're on the box": they all read the one
+access fact. Later §6 (host enum → multi-homed → tunnels → through-tunnel sweep)
+then recurses the whole loop onto the next segment.
+
+Two model decisions fixed up front:
+
+- **Sessions and tunnels are LIVE STATE, not facts.** A tunnel can go down; a Fact
+  is immutable proven evidence and must never flip. So an active session/tunnel is
+  engagement runtime state carrying a status (connecting/up/down), **probed
+  periodically** so the UI reflects reality; only the *discoveries* it leads to
+  (`host.multihomed`, a reachable subnet) are facts. Never store a tunnel as a Fact.
+- **A proven pivot AUTO-EXTENDS scope.** When a tunnel comes up exposing subnet X,
+  obol auto-adds X to scope, **tagged** as pivot-authorized-via-tunnel-T (visibly
+  distinct from operator-typed scope), then auto-sweeps it. The runner's hard scope
+  gate is unchanged — it is auto-populated from a proven foothold, not bypassed.
+  Exam-first default; a future "engagement mode" can propose-instead-of-commit for
+  real client work where reachable ≠ authorized.
+
+The build sequence (each a reviewable PR):
+
+- **(a) Sessions layer + one-click login — DONE.** `obol/sessions.py`: a login
+  registry (winrm/ssh/rdp) with, per kind, a non-interactive **proof** command and
+  the interactive **login** command. `eligible_sessions` offers a login when a
+  validated password credential + a reachable service exist; `open_session` runs the
+  proof through the shared `service.run_action` (same runner/parser/scope gate/
+  ledger), and only once the captured output establishes the access fact
+  (`foothold.windows` via `nxc winrm -x whoami`, `foothold.linux` via `sshpass … ssh
+  … id`, `rdp.authenticated`+`foothold.windows` via `nxc rdp`) does it record a
+  **live session** (`Workspace.sessions`, a new SQLite table; status active/dead/
+  closed) and hand back the ready-to-paste interactive command. `probe_session`
+  re-runs the proof to refresh status (the manual form of the periodic probe). Two
+  narrow proof parsers were added (ssh `uid=` → linux shell, `uid=0` → admin; `nxc
+  rdp [+]` → rdp auth, `(Pwn3d!)` → admin), reusing the existing evil-winrm/exec
+  parsers for WinRM. Terminal: `obol login [host] [--kind]`, `obol sessions`, `obol
+  session probe|close|rm`. Web: the target Overview has an **Access & sessions**
+  card (offer buttons + live sessions with the interactive command), `POST
+  /api/run/login`, `/api/session/probe|close`, `DELETE /api/session`. The proof
+  keeps facts the source of truth — the shell is proven by a captured command, never
+  by the unparseable interactive handoff, and this module produces no facts of its
+  own. **Still open in (a):** hash-only pass-the-hash logins (needs `-H`), penelope
+  reverse-shell **listeners** (an async start-and-watch flow, not a credentialed
+  login), tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic
+  periodic probe loop (the manual `probe` exists).
+- **(b) Unlocks the privesc pack.** The `access.*`/`foothold.*` fact from (a) gates
+  the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
+  login and privesc are two halves of one milestone.
+- **(c) Post-foothold host enum.** Once on the box, enumerate it (NICs, routes, ARP)
+  through a non-interactive exec channel where creds allow, else guided-paste. A
+  second interface records `host.multihomed` + the reachable subnet as a lead,
+  shown on the target/engagement screen.
+- **(d) Tunnels + route-aware runner.** ligolo-ng (preferred), chisel, sshuttle, and
+  ssh `-L`/`-D` as pack actions, plus a **tunnel registry** (modeled on `tools.py`)
+  carrying each tool's transport (transparent vs SOCKS), its discovery technique, and
+  its **feasibility preconditions** (privilege needed, egress direction, on-target
+  tooling, OS). The runner becomes reachability-aware: a target reachable only via a
+  SOCKS tunnel gets `proxychains -q` auto-prefixed; via ligolo/sshuttle (transparent
+  L3) it does not. obol decides proxychains-or-not from the tunnel type — the operator
+  never manages it.
+
+  - **Auto-tunnel (the cascade + the guarantee).** Working name "auto-tunnel" (could
+    also be "tunnel autopilot" / "best-effort pivot" — settle when built). Beyond
+    picking a tunnel by hand, an auto mode walks the registry in preference order
+    (ligolo → chisel → sshuttle → ssh `-L`/`-D` → …) and, for each, tries the variant
+    feasible **here**, falling back on failure until one stands up AND passes a
+    connectivity/health probe (the §6(e) through-tunnel discovery is that probe — a
+    tunnel that maps no host is not "working"). It is **privilege-, tooling-, and
+    egress-aware**: it reads the host's access fact (a plain `foothold.*` vs
+    `access.admin`/`access.system`) and what is reachable/stageable to skip methods
+    that cannot work here — e.g. an admin-only native route vs a userland SOCKS proxy,
+    or a method whose binary isn't on the box and can't be staged. It retries other
+    **ports** when a listener/port is refused, and if every standard route fails it
+    drops to a **native last resort** built from whatever the shell has (powershell/
+    cmd: `netsh interface portproxy` where admin, else a userland single-port relay).
+    The contract: the operator gets *a* working path out, and obol reports the
+    resulting tunnel's state (type, listener, exposed subnet/route, status) and
+    **whether proxychains is needed**, with the exact usage spelled out. Honest
+    caveat to keep in the UX: the worst-case native fallback may be a **single-port
+    forward, not a full subnet route** — obol must say so, never imply a full pivot it
+    didn't get. Interlocks with §8 (stage the chisel/ligolo binary when it isn't
+    already on the target) and §6(e)/(f) (the health probe, and the tunnel display).
+- **(e) Through-tunnel sweep (the recursion + health proof).** Once (d) is up and
+  scope auto-extended, re-run the discovery sweep (0b/0c) **through** the tunnel. The
+  scan technique is picked from the transport: SOCKS → `nmap -sT -Pn` (SOCKS carries
+  only TCP connect; ICMP/UDP/SYN find nothing), ligolo → `-Pn` connect. This doubles
+  as the tunnel health check — hosts returned prove it is up, an empty/timeout flags
+  it down — and it recurses: new targets → login → pivot → sweep.
+- **(f) Topology map + tunnel/session display.** The engagement map becomes a
+  **topology of segments joined by tunnels** (scope range → its hosts → the
+  multi-homed host → its tunnel → the next segment, recursively), and the live
+  tunnel(s) show on the target/engagement screen: type, local listener, exposed
+  subnet/route, status, and the proxychains flag. (This subsumes the engagement-map
+  credential cleanup in "Known smaller issues" — representing hops is the real map
+  upgrade.)
+
+Non-negotiables this must respect: one runner, one store; scope stays a hard gate
+(auto-populated, never bypassed); sessions/tunnels are live state, discoveries are
+facts; login/tunnel behavior lives as pack data + the tunnel registry, never as
+planner branching.
+
+## 7. Engagement profile & flag awareness (platform-aware objectives)
+
+Pick, on the engagement, **what kind** of box/lab/exam this is, so obol knows what
+to hunt for, how to track progress, and how to frame the report. Modeled on Pentest
+Companion (`docs/SOURCES.md §5`): its engagement carries an `exam_type` from a
+preset table (OSCP/OSEP/OSED/CRTP/PNPT/CPTS/custom) with duration + passing score;
+targets carry `machine_type` (standalone / AD DC / member / workstation) and
+`local_flag`/`proof_flag`; and `EXAM_SLOTS` (initial access → privesc → local flag →
+root/proof flag) track per-target progress.
+
+For obol:
+
+- **Engagement profile.** A platform/exam type on the engagement (HTB, OffSec/OSCP,
+  TryHackMe, custom, …) that sets the flag names/formats to look for
+  (`local.txt`/`proof.txt` vs `user.txt`/`root.txt` vs `THM{…}`), an optional
+  scoring/points model, and an optional exam timer.
+- **Target category.** A `machine_type` per target (standalone / AD DC / member /
+  workstation / lab) that can also nudge exam-flow ranking (item 2).
+- **Flag capture stays proof-bound.** When obol has a shell (from §6), it hunts the
+  platform's flag file and, on **actually reading it**, records an objective fact
+  (e.g. `objective.local_flag` / `objective.root_flag`, host-scoped, with the
+  command that read it) — a captured flag is proof, not a checkbox. Per-target
+  objective progress (initial access → privesc → local → root) then displays and
+  feeds the report.
+
+Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
+teams/auth/SaaS direction (`docs/SOURCES.md §5`).
+
+## 8. Payload staging & tool provisioning (one-click move-material) — NEEDS DEEPER DISCUSSION
+
+An operator constantly needs to move material onto a foothold (privesc binaries,
+enum scripts, tunnel clients) and, less often, pull material back. This is the
+Charon `tool_provider` idea (`docs/SOURCES.md §3`) applied to *staging*:
+
+- **One-click upload/staging.** From a session/foothold (§6), push a chosen item to
+  the target over whatever channel that host affords (smb / scp / a throwaway
+  http-server / winrm copy), with the command built and the transfer tracked.
+- **A Kali material cache.** obol locates and caches specific known items and their
+  paths on the local Kali box (winPEAS/linPEAS, chisel/ligolo binaries, static
+  binaries, common wordlists, …) so it can stage them on demand without the operator
+  hunting for paths each engagement.
+- **One-click download when missing.** If a cached item is not found locally, offer a
+  one-click fetch from its known source, then cache it.
+
+Interlocks with §6 (you stage *through* a session/tunnel) and item 3 (privesc
+tooling is the most-staged material). A staged file on a host is engagement state,
+not a fact. **Design intentionally deferred — the operator wants to discuss the
+cache format, the trusted item list and sources, channel selection, and the
+proof/scope posture in depth before this is built.**
+
+## 9. Concurrency — bounded workers for independent scans & playbook branches
+
+Today every run is serialized: the web server holds one in-process `_RUN_LOCK`
+around each run, and a sweep enumerates its hosts **one at a time** (the per-host
+Quick Start jobs run sequentially). Deliberately simple and safe, but slow when the
+work is independent — a /24 sweep enumerating 20 live hosts, or a playbook whose
+branches don't depend on each other, has no reason to run strictly serially. Certain
+automatic scans and playbooks will want **additional workers/threads**.
+
+The enhancement: a **bounded worker pool** for independent work, every non-negotiable
+intact.
+
+- **Only parallelize independent work.** Different targets are independent, and the
+  store (SQLite WAL + idempotent, targeted, per-`(kind,scope,value)` writes) already
+  lets concurrent writers to different hosts land without clobbering (`test_store`
+  locks this). Within one playbook, ordered/dependent steps stay sequential —
+  fact-gating already expresses the dependency (an action isn't eligible until its
+  `requires` facts exist), so a scheduler can run all *currently-eligible,
+  independent* actions at once and no more.
+- **Bounded + configurable.** A max-workers cap (per engagement, sensible default) so
+  obol doesn't hammer the network, the operator's box, or trip IDS on an exam. The
+  cap is the knob; unbounded fan-out is never the default.
+- **Finer-grained than one global lock.** The single `_RUN_LOCK` is the current
+  serialization point; a pool replaces it with per-target (or per-resource) mutual
+  exclusion so two runs against the *same* host still can't interleave, while runs
+  against *different* hosts proceed in parallel. The scope gate still applies per run,
+  unchanged.
+- **The live feed already supports it.** The Activity view (0e) and the background-job
+  map already render many concurrent jobs; today the sweep just doesn't create them
+  concurrently. A pool makes several genuinely in-flight at once.
+
+Interlocks: the discovery sweep (§0b/c) and the **through-tunnel sweep** (§6e) are the
+biggest beneficiaries (many independent hosts); playbooks (item 5) gain parallel
+independent branches with per-step approval preserved; and the auto-tunnel cascade
+(§6d) can probe candidate methods/ports with bounded concurrency instead of strictly
+in series. Parallelism changes *scheduling* only — never what counts as proven, never
+what may be touched.
+
 ## UX guardrails (product decision — keep these)
 
 This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:
@@ -216,8 +428,40 @@ user sees. The fact-gating engine (`requires`/`produces`, `blocked_actions()`)
 stays internal — it decides what's live; it is not surfaced. Do not reintroduce
 blocked/proof panels in `board.py` or `web.py`.
 
+**Progressive disclosure — keep the main screens lean (product decision).** As the
+feature set grows (Activity, sessions, tunnels, staging, engagement profile), the
+main **engagement Overview** must stay a fast, uncluttered summary — the most
+important, most relevant state only (scope, targets, where-we-are, a compact map) —
+with detail pushed into dedicated tabs/views. Precedents already set this shape: the
+engagement-level run feed + findings roll-up + command ledger live in the **Activity
+view**, not on Overview; and the per-target console is **tabbed**
+(Overview/Tools/Playbooks/Checklist/Findings/Evidence/Commands). Prefer adding a new
+tab/view over making an existing screen taller, and neither the engagement Overview
+nor a target's Overview tab should require long scrolling to reach the primary
+actions. Concrete application for §6: as sessions grow into tunnels + the auto-tunnel
+cascade + staging, they belong in a dedicated per-target **Access / Pivot tab**
+(with the live tunnel/session state and proxychains guidance), not piled onto the
+target Overview — the Overview keeps only a compact "you're in / here's the pivot"
+summary that links into it.
+
 ## Known smaller issues
 
+- **Secrets show by default across the live surfaces now** (report, findings
+  roll-up, command ledger, sessions, run outputs) — redaction is opt-in: the report
+  view's "redact secrets" toggle and CLI `obol report --redact`. This is a
+  deliberate product call for a single-operator localhost lab/exam console (see
+  `webapp/server.py WEB_SHOW_SECRETS`). The shareable **debug package stays redacted
+  by default** — it is an artifact meant to leave the box; `--include-secrets` opts
+  in. Remaining: an engagement-wide redact switch the whole SPA respects (the
+  findings roll-up and command ledger have no per-view toggle yet).
+- **The engagement-map credential model is thin** (from ChatGPT's map PR #24): it
+  creates only one credential node, attaches it to *every* foothold+ host, and
+  falls back to an arbitrary domain when the credential has none. Fix: one node per
+  distinct credential, and a cred→host edge only where a fact ties that credential
+  to that host. Largely subsumed by §6(f) (the topology-map redesign).
+- **Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
+  overview`) so the CLI operator gets the same cross-host, category-organized
+  findings view the web Activity view added.
 - `run`'s "new facts" detail line is still sparse for port/service facts.
 - Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
   ahead of roasting).

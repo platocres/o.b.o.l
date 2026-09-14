@@ -83,6 +83,9 @@ class Workspace:
         self.evidence: list[dict] = []   # attachments: [{id, target, phase, caption, filename, path, added_at}]
         self.checklist: dict[str, dict] = {}  # {host: {item_id: bool}} — manual per-target checklist ticks
         self.bloodhound: dict = {}       # last BloodHound ingest summary (engagement-wide)
+        # Live pivot/login state (NOT facts — a session/tunnel has a status that can
+        # flip; only the discoveries it leads to are facts). See docs/ROADMAP.md §6.
+        self.sessions: list[dict] = []   # [{id, host, kind, status, user, login_command, ...}]
         # persistence bookkeeping: what is already on disk, and what this session
         # has explicitly removed (so save() writes only diffs and never resurrects
         # or clobbers rows another process wrote).
@@ -90,6 +93,7 @@ class Workspace:
         self._persisted_run_ids: set[str] = set()
         self._deleted_targets: set[str] = set()
         self._deleted_evidence: set[str] = set()
+        self._deleted_sessions: set[str] = set()
 
     # ---- persistence ---------------------------------------------------------
     @property
@@ -134,9 +138,11 @@ class Workspace:
             persisted_run_ids=self._persisted_run_ids,
             deleted_targets=self._deleted_targets,
             deleted_evidence=self._deleted_evidence,
+            deleted_sessions=self._deleted_sessions,
         )
         self._deleted_targets.clear()
         self._deleted_evidence.clear()
+        self._deleted_sessions.clear()
 
     # ---- JSON interchange (export / import / migration) ----------------------
     def to_payload(self) -> dict:
@@ -155,6 +161,7 @@ class Workspace:
             "evidence": self.evidence,
             "checklist": self.checklist,
             "bloodhound": self.bloodhound,
+            "sessions": self.sessions,
         }
 
     def apply_payload(self, data: dict) -> "Workspace":
@@ -175,6 +182,7 @@ class Workspace:
         self.evidence = list(data.get("evidence", []))
         self.checklist = dict(data.get("checklist", {}))
         self.bloodhound = dict(data.get("bloodhound", {}))
+        self.sessions = list(data.get("sessions", []))
         self._persisted_fact_hashes = {
             fact_hash(f.kind, f.scope, f.value) for f in self.facts.facts
         }
@@ -390,6 +398,55 @@ class Workspace:
     def evidence_for(self, target: str) -> list[dict]:
         norm = normalize_target(target) if target else ""
         return [e for e in self.evidence if e.get("target") == norm]
+
+    # ---- sessions (live pivot/login state, not facts) ------------------------
+    # A session is an interactive foothold (winrm/ssh/rdp/reverse shell) obol has
+    # handed the operator. It carries a mutable status (active/dead/closed) that a
+    # periodic probe updates — unlike a Fact, which is immutable proven evidence.
+    def get_session(self, sid: str) -> dict | None:
+        for s in self.sessions:
+            if s.get("id") == sid:
+                return s
+        return None
+
+    def sessions_for(self, host: str) -> list[dict]:
+        norm = normalize_target(host) if host else ""
+        return [s for s in self.sessions if s.get("host") == norm]
+
+    def add_session(self, *, host: str, kind: str, user: str = "", os: str = "",
+                    login_command: str = "", proof_run: str = "", proof_fact: str = "",
+                    label: str = "", status: str = "active") -> dict:
+        norm = normalize_target(host)
+        now = time.time()
+        sid = f"sess{int(now * 1000)}_{len(self.sessions)}"
+        rec = {
+            "id": sid, "host": norm, "kind": kind, "status": status,
+            "user": user, "os": os, "label": label or kind,
+            "login_command": login_command, "proof_run": proof_run, "proof_fact": proof_fact,
+            "created_at": now, "updated_at": now,
+        }
+        self.sessions.append(rec)
+        self._deleted_sessions.discard(sid)
+        return rec
+
+    def update_session(self, sid: str, **fields) -> dict | None:
+        rec = self.get_session(sid)
+        if not rec:
+            return None
+        rec.update(fields)
+        rec["updated_at"] = time.time()
+        return rec
+
+    def close_session(self, sid: str) -> bool:
+        return self.update_session(sid, status="closed") is not None
+
+    def remove_session(self, sid: str) -> bool:
+        rec = self.get_session(sid)
+        if not rec:
+            return False
+        self.sessions.remove(rec)
+        self._deleted_sessions.add(sid)
+        return True
 
     # ---- activity ledger -----------------------------------------------------
     def record_run(self, tool: str, command: str, produced: list[str], **extra) -> None:

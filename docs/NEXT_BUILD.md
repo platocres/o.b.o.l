@@ -51,7 +51,7 @@ discovered targets, evidence-backed domain links, open service nodes, and the
 BloodHound overlay without inventing host-to-host relationships from shared
 domain facts alone.
 
-## Current build: terminal parity for scope, scan, help, and overview
+## Shipped: terminal parity for scope, scan, help, and overview
 
 The terminal now matches the web's engagement-control surface more closely:
 `obol --help` and `obol manual` teach the real operator flow; `obol info` and
@@ -61,6 +61,70 @@ or stdin; `obol scan` sweeps every authorized scope entry and then runs the same
 nmap-first Quick Start baseline against scoped targets; and `obol overview`
 summarizes scope, target identity, domains, ports, access/phase, and top moves in
 terminal scrollback.
+
+## Shipped: engagement-level Activity view (run feed + findings roll-up)
+
+Closed out the last piece of item 0 (0e): a dedicated **Activity** view over
+`GET /api/engagement/activity`. It answers "what is happening across the whole
+engagement" rather than one target at a time:
+
+- **Live run feed** — every sweep and per-host Quick Start job, in-flight and
+  recent, with per-step progress. It reuses the existing background-job map and the
+  same SSE change feed, so it repaints as commands complete; starting a sweep now
+  drops the operator on this view to watch discovery + enumeration stream in.
+- **Findings roll-up** — every `supported` fact across all hosts, grouped by
+  category (target/service/AD/credential/…), each tagged with the host (or domain)
+  that produced it and its cited evidence, with per-host filter chips. Proof-bound
+  and secret-redacted like the report; no new fact kinds, no second store.
+- **Command ledger** — the cross-host run history (the per-target Commands tab, but
+  engagement-wide), each entry tagged with its host or sweep range.
+
+This is the organization/aesthetic layer the roadmap called for — the job engine
+was already engagement-bound; nothing about the runner, parsers, or store changed.
+
+## Shipped: sessions layer §6a (one-click login) + secrets shown by default
+
+The first brick of the pivoting feature (`docs/ROADMAP.md §6`). `obol/sessions.py`
+offers a one-click login (winrm/ssh/rdp) when a validated password credential + a
+reachable service exist. Interactive tools don't fit the capture-and-parse runner,
+so each login is PAIRED WITH A NON-INTERACTIVE PROOF run through the shared
+`service.run_action`; only once the captured output establishes the access fact
+(`foothold.windows`/`foothold.linux`/`rdp.authenticated`) is a LIVE SESSION recorded
+(`Workspace.sessions`, a new SQLite table with an active/dead/closed status) and the
+interactive command handed off. `probe_session` re-runs the proof to refresh status.
+Two narrow proof parsers landed (ssh `uid=`, `nxc rdp [+]`), reusing evil-winrm/exec
+for WinRM. Terminal `obol login/sessions/session`; web Access & sessions card +
+`/api/run/login` etc. Facts stay the source of truth — the module produces none of
+its own. See ROADMAP §6(a) for what's still open (pass-the-hash, penelope listeners,
+auto-spawn, the automatic probe loop).
+
+Alongside it, a product decision: **secrets are shown by default across the live
+surfaces** (report, findings roll-up, ledger, sessions, run outputs) — redaction is
+opt-in (report "redact secrets" toggle, `obol report --redact`, `WEB_SHOW_SECRETS`).
+The shareable debug package stays redacted by default.
+
+## Queued next (designed, not yet built)
+
+Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
+
+- **Parser coverage (ROADMAP item 1, TOP PRIORITY).** The main gap: `run` only
+  produces facts where a parser exists. Widen to SMB shares/sessions, WinRM
+  validation, HTTP enum, FTP/SSH/SNMP banners, and common NSE findings — each mapped
+  to the narrowest fact with anti-overfit tests.
+- **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
+  interlock note is **item 3 privesc packs** (unlocked by the access fact), then
+  post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware
+  runner (auto-proxychains for SOCKS, transparent for ligolo) → auto-extend scope →
+  through-tunnel sweep (recursion + health proof) → topology map.
+- **Engagement profile & flag awareness (ROADMAP §7).** Platform/exam type + per-
+  target `machine_type` + proof-bound flag capture. Interlocks with §6 and item 3
+  (see the ROADMAP §6 interlock note). Mines Pentest Companion (`docs/SOURCES.md §5`).
+- **Payload staging & tool provisioning (ROADMAP §8) — needs deeper discussion.**
+  One-click upload/staging to a foothold, a Kali material cache (locate/cache/upload),
+  and one-click download of missing items. Deferred pending a design conversation.
+- **Remaining found-items** in ROADMAP "Known smaller issues": the engagement-map
+  credential fix, terminal parity for the 0e findings roll-up, and an engagement-wide
+  redact switch for the findings/ledger surfaces.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

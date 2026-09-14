@@ -56,6 +56,8 @@ _EXEC_SUCCESS_RE = re.compile(
     r"\bexecuted command\b|\[\+\]\s+executed|Microsoft Windows \[Version|^[A-Za-z]:\\.*>",
     re.IGNORECASE | re.MULTILINE,
 )
+# Linux `id` output — proof of an interactive shell as a specific uid over ssh.
+_LINUX_ID_RE = re.compile(r"\buid=(?P<uid>\d+)\((?P<user>[^)]+)\)\s+gid=\d+", re.IGNORECASE)
 # penelope (brightio) reverse-shell handler session signals.
 _PENELOPE_GOT_RE = re.compile(r"got reverse shell from\s+(?P<info>.+)", re.IGNORECASE)
 _PENELOPE_UPGRADE_RE = re.compile(r"shell upgraded|spawned a pty|upgrading shell to pty", re.IGNORECASE)
@@ -281,6 +283,16 @@ def _is_cracking_command(command: str) -> bool:
     return " hashcat " in lowered or re.search(r"(^|[\s/])john(\s|$)", lowered) is not None
 
 
+def _is_ssh_command(command: str) -> bool:
+    """An ssh login/exec command (ssh, sshpass-wrapped ssh, or `nxc ssh`). Used to
+    route to the Linux-shell proof parser and to keep the Windows exec parser from
+    misfiring on a Linux target."""
+    lowered = f" {command.lower()} "
+    if "sshuttle" in lowered:   # a tunnel, not a login — never a shell proof
+        return False
+    return "sshpass" in lowered or " ssh " in lowered or " nxc ssh " in lowered
+
+
 def _is_exec_command(command: str) -> bool:
     lowered = command.lower()
     is_nxc = "nxc " in lowered or lowered.startswith("nxc ")
@@ -409,10 +421,19 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
     if " winrm " in f" {lowered_command} " or "evil-winrm" in lowered_command:
         _parse_evil_winrm(text, ws, command, source, facts)
 
+    is_ssh = _is_ssh_command(command)
+    if is_ssh:
+        _parse_ssh_exec(text, ws, command, source, facts)
+
+    if is_nxc and " rdp " in f" {lowered_command} ":
+        _parse_nxc_rdp(text, ws, command, source, facts)
+
     if _is_cracking_command(command):
         _parse_cracked_credentials(text, ws, command, source, facts)
 
-    if _is_exec_command(command):
+    # A Linux ssh login is handled above; the Windows exec parser must not claim a
+    # Windows foothold from `nxc ssh -x id` output.
+    if _is_exec_command(command) and not is_ssh:
         _parse_command_execution(text, ws, command, source, facts)
 
     if "penelope" in lowered_command:
@@ -1112,6 +1133,49 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
     # the operator can run on-host enumeration from -> access.desktop.
     if interactive and tool in _INTERACTIVE_WIN_TOOLS:
         _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": tool}, ProofState.SUPPORTED, source))
+
+
+def _parse_ssh_exec(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Prove a Linux shell from `id`/`uid=` output over ssh.
+
+    `uid=1000(bob) gid=…` proves an interactive shell as that user
+    (`access.shell` + `foothold.linux`); `uid=0(root)` is privileged
+    (`access.admin`). Nothing is claimed without a real `uid=` line — a failed
+    login prints none.
+    """
+    m = _LINUX_ID_RE.search(text)
+    if not m:
+        return
+    user = m.group("user").strip()
+    _add(facts, Fact("access.shell", f"host:{ws.target}", {"service": "ssh"}, ProofState.SUPPORTED, source))
+    _add(facts, Fact("foothold.linux", f"host:{ws.target}",
+                     {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
+    if m.group("uid") == "0" or user.lower() == "root":
+        _add(facts, Fact("access.admin", f"host:{ws.target}",
+                         {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
+
+
+def _parse_nxc_rdp(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Prove RDP access from a `nxc rdp` success line.
+
+    A `[+] domain\\user:pass` line proves the credential authenticates over RDP — an
+    interactive Windows foothold (a desktop the operator can log into). `(Pwn3d!)`
+    additionally proves administrative access. A failed auth prints no `[+]`.
+    """
+    if "[+]" not in text:
+        return
+    user = _command_arg(command, "-u", "--user", "--username")
+    value = {"service": "rdp"}
+    if user:
+        value["user"] = _clean_username(user)
+    _add(facts, Fact("rdp.authenticated", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    foothold = {"method": "rdp"}
+    if user:
+        foothold["identity"] = _clean_username(user)
+    _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold, ProofState.SUPPORTED, source))
+    if "pwn3d" in text.lower():
+        _add(facts, Fact("access.admin", f"host:{ws.target}",
+                         {"service": "rdp"}, ProofState.SUPPORTED, source))
 
 
 def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
