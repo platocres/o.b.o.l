@@ -37,6 +37,25 @@ def normalize_target(value: str) -> str:
     return ""
 
 
+def normalize_scope_entry(value: str) -> str:
+    """Normalize one scope entry to how it is stored and matched.
+
+    A genuine CIDR network is kept verbatim (``10.10.10.0/24``); anything else —
+    a host, IP, URL, or ``host:port`` — is reduced to a bare host via
+    :func:`normalize_target`. Returns ``""`` if the value is neither a valid
+    network nor a valid host, so callers can reject it.
+    """
+    raw = str(value or "").strip()
+    if "/" in raw:
+        try:
+            return str(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            # Not a network — fall through to host normalization, which also
+            # handles URLs like http://host/path by extracting the host.
+            return normalize_target(raw)
+    return normalize_target(raw)
+
+
 def target_in_scope(target: str, scope: list[str]) -> tuple[bool, str]:
     """Return whether target is allowed, plus the matching scope entry/reason."""
     normalized = normalize_target(target)

@@ -219,6 +219,9 @@ def cmd_scope(args) -> None:
     ws = _load_or_exit()
     if args.scope_cmd == "add":
         added = ws.add_scope(args.value)
+        if not added:
+            print(f"not a valid host, IP, or CIDR: {args.value!r}")
+            return
         ws.save()
         print(f"added scope: {added}")
         return
