@@ -285,11 +285,34 @@ The build sequence (each a reviewable PR):
   shown on the target/engagement screen.
 - **(d) Tunnels + route-aware runner.** ligolo-ng (preferred), chisel, sshuttle, and
   ssh `-L`/`-D` as pack actions, plus a **tunnel registry** (modeled on `tools.py`)
-  carrying each tool's transport (transparent vs SOCKS) and its discovery technique.
-  The runner becomes reachability-aware: a target reachable only via a SOCKS tunnel
-  gets `proxychains -q` auto-prefixed; via ligolo/sshuttle (transparent L3) it does
-  not. obol decides proxychains-or-not from the tunnel type — the operator never
-  manages it.
+  carrying each tool's transport (transparent vs SOCKS), its discovery technique, and
+  its **feasibility preconditions** (privilege needed, egress direction, on-target
+  tooling, OS). The runner becomes reachability-aware: a target reachable only via a
+  SOCKS tunnel gets `proxychains -q` auto-prefixed; via ligolo/sshuttle (transparent
+  L3) it does not. obol decides proxychains-or-not from the tunnel type — the operator
+  never manages it.
+
+  - **Auto-tunnel (the cascade + the guarantee).** Working name "auto-tunnel" (could
+    also be "tunnel autopilot" / "best-effort pivot" — settle when built). Beyond
+    picking a tunnel by hand, an auto mode walks the registry in preference order
+    (ligolo → chisel → sshuttle → ssh `-L`/`-D` → …) and, for each, tries the variant
+    feasible **here**, falling back on failure until one stands up AND passes a
+    connectivity/health probe (the §6(e) through-tunnel discovery is that probe — a
+    tunnel that maps no host is not "working"). It is **privilege-, tooling-, and
+    egress-aware**: it reads the host's access fact (a plain `foothold.*` vs
+    `access.admin`/`access.system`) and what is reachable/stageable to skip methods
+    that cannot work here — e.g. an admin-only native route vs a userland SOCKS proxy,
+    or a method whose binary isn't on the box and can't be staged. It retries other
+    **ports** when a listener/port is refused, and if every standard route fails it
+    drops to a **native last resort** built from whatever the shell has (powershell/
+    cmd: `netsh interface portproxy` where admin, else a userland single-port relay).
+    The contract: the operator gets *a* working path out, and obol reports the
+    resulting tunnel's state (type, listener, exposed subnet/route, status) and
+    **whether proxychains is needed**, with the exact usage spelled out. Honest
+    caveat to keep in the UX: the worst-case native fallback may be a **single-port
+    forward, not a full subnet route** — obol must say so, never imply a full pivot it
+    didn't get. Interlocks with §8 (stage the chisel/ligolo binary when it isn't
+    already on the target) and §6(e)/(f) (the health probe, and the tunnel display).
 - **(e) Through-tunnel sweep (the recursion + health proof).** Once (d) is up and
   scope auto-extended, re-run the discovery sweep (0b/0c) **through** the tunnel. The
   scan technique is picked from the transport: SOCKS → `nmap -sT -Pn` (SOCKS carries
@@ -366,6 +389,22 @@ no "blocked until X" list and no "proves / does not prove" language anywhere the
 user sees. The fact-gating engine (`requires`/`produces`, `blocked_actions()`)
 stays internal — it decides what's live; it is not surfaced. Do not reintroduce
 blocked/proof panels in `board.py` or `web.py`.
+
+**Progressive disclosure — keep the main screens lean (product decision).** As the
+feature set grows (Activity, sessions, tunnels, staging, engagement profile), the
+main **engagement Overview** must stay a fast, uncluttered summary — the most
+important, most relevant state only (scope, targets, where-we-are, a compact map) —
+with detail pushed into dedicated tabs/views. Precedents already set this shape: the
+engagement-level run feed + findings roll-up + command ledger live in the **Activity
+view**, not on Overview; and the per-target console is **tabbed**
+(Overview/Tools/Playbooks/Checklist/Findings/Evidence/Commands). Prefer adding a new
+tab/view over making an existing screen taller, and neither the engagement Overview
+nor a target's Overview tab should require long scrolling to reach the primary
+actions. Concrete application for §6: as sessions grow into tunnels + the auto-tunnel
+cascade + staging, they belong in a dedicated per-target **Access / Pivot tab**
+(with the live tunnel/session state and proxychains guidance), not piled onto the
+target Overview — the Overview keeps only a compact "you're in / here's the pivot"
+summary that links into it.
 
 ## Known smaller issues
 
