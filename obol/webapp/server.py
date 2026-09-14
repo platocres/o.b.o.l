@@ -19,12 +19,15 @@ Localhost-only, token-gated (`X-Obol-Token` header or `?token=`).
 from __future__ import annotations
 
 import asyncio
+import copy
 import mimetypes
 import re
 import shlex
 import shutil
 import secrets
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -508,6 +511,37 @@ def _outcome_view(outcome) -> dict:
         "added_count": len(added),
     }
 
+
+def _quickstart_aggregate(target: str, ran: list[dict], skipped: list[dict],
+                          facts: list[dict], *, duration_ms: int = 0) -> dict:
+    failures = [step for step in ran if not step.get("success")]
+    status = "success" if ran and not failures else ("partial" if ran else "blocked")
+    message = f"Quick Start ran {len(ran)} command(s), stored {len(facts)} fact(s), skipped {len(skipped)} step(s)."
+    return {
+        "quickstart": True,
+        "target": target,
+        "tool": "quick-start",
+        "command": "quick-start baseline: " + " -> ".join(step.get("action_id", "") for step in ran),
+        "success": status == "success",
+        "pending": False,
+        "status": status,
+        "message": message,
+        "dry_run": False,
+        "returncode": None,
+        "timed_out": any(step.get("timed_out") for step in ran),
+        "duration_ms": duration_ms or sum(int(step.get("duration_ms") or 0) for step in ran),
+        "stdout_path": "",
+        "stderr_path": "",
+        "stdout_preview": "",
+        "stderr_preview": "",
+        "ran": ran,
+        "skipped": skipped,
+        "facts": facts,
+        "added": facts,
+        "added_count": len(facts),
+    }
+
+
 def _target_bundle(ws: Workspace, host: str) -> dict:
     """Everything a target's tabbed view needs, in one payload."""
     t = ws.get_target(host)
@@ -592,6 +626,203 @@ def create_app(base, *, token: Optional[str] = None):
     app = FastAPI(title="O.B.O.L", docs_url=None, redoc_url=None, openapi_url=None)
     token = token if token is not None else secrets.token_urlsafe(24)
     app.state.obol_token = token
+    quickstart_jobs: dict[str, dict] = {}
+    quickstart_jobs_lock = threading.Lock()
+    quickstart_signal = {"version": 0}
+
+    def _job_view(job: dict) -> dict:
+        view = copy.deepcopy(job)
+        view["pending"] = view.get("status") in {"queued", "running"}
+        view["steps"] = view.get("steps", [])
+        view["skipped"] = [
+            step for step in view["steps"]
+            if step.get("status") in {"done", "waiting", "blocked", "refused", "missing", "skipped"}
+        ]
+        view["added"] = view.get("facts", [])
+        view["added_count"] = len(view.get("facts", []))
+        return view
+
+    def _job_update(job_id: str, mutator=None, **updates) -> dict:
+        with quickstart_jobs_lock:
+            job = quickstart_jobs[job_id]
+            if mutator is not None:
+                mutator(job)
+            job.update(updates)
+            job["updated_at"] = time.time()
+            quickstart_signal["version"] += 1
+            return _job_view(job)
+
+    def _step_update(job_id: str, action_id: str, **updates) -> dict:
+        def mutate(job: dict) -> None:
+            for step in job.get("steps", []):
+                if step.get("action_id") == action_id:
+                    step.update(updates)
+                    break
+        return _job_update(job_id, mutate)
+
+    def _active_quickstart_job(slug: str, target: str) -> dict | None:
+        with quickstart_jobs_lock:
+            for job in quickstart_jobs.values():
+                if (job.get("slug") == slug and job.get("target") == target
+                        and job.get("status") in {"queued", "running"}):
+                    return _job_view(job)
+        return None
+
+    def _new_quickstart_job(slug: str, ws: Workspace, target: str) -> dict:
+        now = time.time()
+        plan = _quickstart_plan(ws, target)
+        steps = []
+        for step in plan.get("steps", []):
+            step_status = step.get("status") or "waiting"
+            if step.get("applicable") and not step.get("done") and step_status == "ready":
+                step_status = "queued"
+            steps.append({
+                "action_id": step.get("action_id", ""),
+                "title": step.get("title", ""),
+                "phase": step.get("phase", ""),
+                "status": step_status,
+                "success": None,
+                "summary": step.get("summary", ""),
+                "preflight": step.get("preflight"),
+                "facts": [],
+                "added_count": 0,
+            })
+        job_id = uuid.uuid4().hex[:12]
+        job = {
+            "id": job_id,
+            "job_id": job_id,
+            "quickstart": True,
+            "slug": slug,
+            "target": target,
+            "tool": "quick-start",
+            "command": "quick-start baseline",
+            "status": "queued",
+            "success": False,
+            "pending": True,
+            "message": "Quick Start queued.",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "ended_at": None,
+            "duration_ms": 0,
+            "returncode": None,
+            "timed_out": False,
+            "dry_run": False,
+            "stdout_path": "",
+            "stderr_path": "",
+            "stdout_preview": "",
+            "stderr_preview": "",
+            "steps": steps,
+            "facts": [],
+            "added": [],
+            "added_count": 0,
+        }
+        with quickstart_jobs_lock:
+            quickstart_jobs[job_id] = job
+            quickstart_signal["version"] += 1
+            return _job_view(job)
+
+    def _run_quickstart_job(job_id: str) -> None:
+        started = time.time()
+        current = _job_update(
+            job_id,
+            status="running",
+            started_at=started,
+            message="Quick Start running nmap first, then service-aware baseline enumeration.",
+        )
+        slug = current["slug"]
+        host = current["target"]
+        ran: list[dict] = []
+        facts: list[dict] = []
+
+        for action_id in QUICKSTART_ACTION_IDS:
+            try:
+                with _RUN_LOCK:
+                    ws = library.get_engagement(slug)
+                    if ws is None:
+                        raise ActionError(f"engagement {slug!r} no longer exists")
+                    if not ws.get_target(host):
+                        raise ActionError(f"unknown target {host!r} in this engagement")
+
+                    try:
+                        action = find_action(action_id)
+                    except ActionError as exc:
+                        _step_update(job_id, action_id, status="missing", success=False,
+                                     reason=str(exc), summary=str(exc))
+                        continue
+
+                    tf = ws.facts_for_target(host)
+                    if _action_done(ws, host, action):
+                        _step_update(job_id, action.id, status="done", success=True,
+                                     reason="already has facts or a prior run",
+                                     summary="Already has facts or a prior run for this target.")
+                        continue
+                    if not action.eligible(tf):
+                        _step_update(job_id, action.id, status="waiting", success=None,
+                                     reason="waiting for service facts from earlier quick-start steps",
+                                     summary="Waiting for service facts from earlier quick-start steps.")
+                        continue
+
+                    cmd_index, preflight = _first_runnable_variant(action, ws, host)
+                    if cmd_index is None:
+                        reason = (preflight or {}).get("summary", "no runnable command variant")
+                        _step_update(job_id, action.id, status="blocked", success=False,
+                                     reason=reason, summary=reason, preflight=preflight)
+                        continue
+
+                    _step_update(job_id, action.id, status="running", success=None,
+                                 summary="Running command.", preflight=preflight,
+                                 command=(preflight or {}).get("command", ""))
+                    try:
+                        outcome = run_action(
+                            ws, action, command_index=cmd_index, target=host,
+                            ledger_extra={"surface": "web", "quickstart": True,
+                                          "quickstart_job": job_id, "target": host},
+                        )
+                    except RunnerError as exc:
+                        _step_update(job_id, action.id, status="refused", success=False,
+                                     reason=str(exc), summary=str(exc), preflight=preflight)
+                        continue
+
+                view = _outcome_view(outcome)
+                view["title"] = action.title
+                ran.append(view)
+                facts.extend(view.get("facts", []))
+                _step_update(
+                    job_id,
+                    action.id,
+                    status=view.get("status", "success"),
+                    success=bool(view.get("success")),
+                    summary=view.get("message", ""),
+                    added_count=view.get("added_count", 0),
+                    facts=view.get("facts", []),
+                    command=view.get("command", ""),
+                    duration_ms=view.get("duration_ms", 0),
+                    returncode=view.get("returncode"),
+                )
+            except Exception as exc:  # keep the job visible instead of losing the thread
+                _step_update(job_id, action_id, status="failed", success=False,
+                             reason=str(exc), summary=str(exc))
+
+        with quickstart_jobs_lock:
+            job = quickstart_jobs[job_id]
+            skipped = [
+                step for step in job.get("steps", [])
+                if step.get("status") in {"done", "waiting", "blocked", "refused", "missing", "skipped"}
+            ]
+        aggregate = _quickstart_aggregate(host, ran, skipped, facts,
+                                          duration_ms=int((time.time() - started) * 1000))
+
+        def finish(job: dict) -> None:
+            job.update(aggregate)
+            job["steps"] = job.get("steps", [])
+            job["status"] = aggregate["status"]
+            job["success"] = aggregate["success"]
+            job["pending"] = False
+            job["message"] = aggregate["message"]
+            job["ended_at"] = time.time()
+
+        _job_update(job_id, finish)
 
     def active() -> Workspace:
         ws = library.resolve_active()
@@ -856,71 +1087,34 @@ def create_app(base, *, token: Optional[str] = None):
         target = (payload or {}).get("target", "")
         if not target:
             raise HTTPException(422, "target is required")
-        ran = []
-        skipped = []
-        facts = []
         with _RUN_LOCK:
             ws = active()
+            slug = library.active_slug() or ws.root.name
             host = target_or_404(ws, target)
-            for action_id in QUICKSTART_ACTION_IDS:
-                try:
-                    action = find_action(action_id)
-                except ActionError as exc:
-                    skipped.append({"action_id": action_id, "status": "missing", "reason": str(exc)})
-                    continue
-                tf = ws.facts_for_target(host)
-                if _action_done(ws, host, action):
-                    skipped.append({"action_id": action.id, "title": action.title, "status": "done",
-                                    "reason": "already has facts or a prior run"})
-                    continue
-                if not action.eligible(tf):
-                    skipped.append({"action_id": action.id, "title": action.title, "status": "waiting",
-                                    "reason": "waiting for service facts from earlier quick-start steps"})
-                    continue
-                cmd_index, preflight = _first_runnable_variant(action, ws, host)
-                if cmd_index is None:
-                    skipped.append({"action_id": action.id, "title": action.title, "status": "blocked",
-                                    "reason": (preflight or {}).get("summary", "no runnable command variant"),
-                                    "preflight": preflight})
-                    continue
-                try:
-                    outcome = run_action(
-                        ws, action, command_index=cmd_index, target=host,
-                        ledger_extra={"surface": "web", "quickstart": True, "target": host},
-                    )
-                except RunnerError as exc:
-                    skipped.append({"action_id": action.id, "title": action.title, "status": "refused",
-                                    "reason": str(exc), "preflight": preflight})
-                    continue
-                view = _outcome_view(outcome)
-                view["title"] = action.title
-                ran.append(view)
-                facts.extend(view.get("facts", []))
-        failures = [step for step in ran if not step.get("success")]
-        status = "success" if ran and not failures else ("partial" if ran else "blocked")
-        message = f"Quick Start ran {len(ran)} command(s), stored {len(facts)} fact(s), skipped {len(skipped)} step(s)."
-        return {
-            "quickstart": True,
-            "target": target,
-            "tool": "quick-start",
-            "command": "quick-start baseline: " + " -> ".join(step.get("action_id", "") for step in ran),
-            "success": status == "success",
-            "status": status,
-            "message": message,
-            "dry_run": False,
-            "returncode": None,
-            "timed_out": any(step.get("timed_out") for step in ran),
-            "duration_ms": sum(int(step.get("duration_ms") or 0) for step in ran),
-            "stdout_path": "",
-            "stderr_path": "",
-            "stdout_preview": "",
-            "stderr_preview": "",
-            "steps": ran,
-            "skipped": skipped,
-            "facts": facts,
-            "added": facts,
-            "added_count": len(facts),
-        }
+            existing = _active_quickstart_job(slug, host)
+            if existing:
+                return existing
+            job = _new_quickstart_job(slug, ws, host)
+
+        threading.Thread(target=_run_quickstart_job, args=(job["id"],), daemon=True).start()
+        return job
+
+    @app.get("/api/quickstart/jobs")
+    def api_quickstart_jobs(target: str = Query("")):
+        with quickstart_jobs_lock:
+            jobs = [_job_view(job) for job in quickstart_jobs.values()]
+        if target:
+            jobs = [job for job in jobs if job.get("target") == target]
+        jobs.sort(key=lambda job: job.get("updated_at") or 0, reverse=True)
+        return {"jobs": jobs}
+
+    @app.get("/api/quickstart/jobs/{job_id}")
+    def api_quickstart_job(job_id: str):
+        with quickstart_jobs_lock:
+            job = quickstart_jobs.get(job_id)
+            if not job:
+                raise HTTPException(404, "no such Quick Start job")
+            return _job_view(job)
 
 
     @app.post("/api/run/playbook")
@@ -1021,10 +1215,10 @@ def create_app(base, *, token: Optional[str] = None):
                         mtime = sf.stat().st_mtime_ns
                     except OSError:
                         mtime = None
-                sig = (slug, mtime)
+                sig = (slug, mtime, quickstart_signal["version"])
                 if sig != last:
                     last = sig
-                    yield f"event: state\ndata: {slug}:{mtime}\n\n"
+                    yield f"event: state\ndata: {slug}:{mtime}:{quickstart_signal['version']}\n\n"
                 else:
                     yield ": keep-alive\n\n"
                 await asyncio.sleep(1.0)
