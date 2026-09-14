@@ -54,20 +54,25 @@ same fact/run ledger.
 obol/
   facts.py       Fact + ProofState + FactSet (the source of truth)
   workspace.py   .obol/state.json load/save; find_workspace() walks up like git
+                 target/scope/input persistence; raw run ledger paths
   pack.py        Action model + planner (next_actions / blocked_actions /
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)
-    orange_ad_2025_03.json   30 AD actions (the first real pack)
+    orange_ad_2025_03.json   nmap prelude + 30 Orange AD actions
   board.py       terminal render (rich + plain fallback); {{token}} templating;
                  explain view shows the full card (hypothesis, commands, refs)
+  scope.py       target normalization + exact/CIDR scope checks
+  runner.py      fixed-argv runner; timeout, dry-run, raw output capture
+  parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
   graph.py       facts+actions -> mermaid path graph (the single projection)
   web.py         read-only localhost web view (findings + path graph)
   seed.py        Forest demo fixture (post-nmap facts)
-  cli.py         subcommands: init / next / explain / run / facts / serve / web
+  cli.py         subcommands: init / next / explain / run / scope / facts / serve / web
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
 tests/
-  test_pack.py   pack loads, proof boundaries, gating, seed unlocks chain
+  test_pack.py      pack loads, proof boundaries, gating, seed unlocks chain
+  test_parsers.py   parser proof boundaries; no walkthrough-name hardcoding
 ```
 
 **Fact-kind namespace** (adopted from the prior obol, used across packs & seed):
@@ -83,14 +88,26 @@ plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
 **Built & working:** the fact model; the planner (fact-gating, priority ranking,
 blocked-with-reason); the Orange AD pack (30 actions); the terminal board;
 `explain` (full Orange card — genuinely useful as a live command reference);
-the read-only web view with the mermaid path graph; 7 passing tests.
+the read-only web view with key findings + the mermaid path graph; target/scope
+persistence; a fixed-argv runner with timeout, dry-run, raw output capture under
+`.obol/runs/`; and the first generic parsers for nmap port/service output,
+NetExec LDAP/SMB, ldapsearch naming contexts, LDAP user output, and AS-REP hashes.
+The first live path is intentionally nmap-first: `obol init --target <ip>` unlocks
+fast TCP open-port discovery, parsed ports unlock targeted `-Pn -sC -sV`, and AD
+ports/services then unlock the preferred `nxc ldap {{target}} -u '' -p ''` path.
 
-**STUBBED — this is the main gap:** *execution*. `obol run N` calls
-`pack.apply_action`, which just records the action's declared `produces` as facts.
-It does **NOT** execute the command, does **NOT** parse real output, and there is
-**no target/IP configuration** beyond the Forest fixture, **no scope enforcement**,
-and **no report generation**. The findings show empty `{}` values because they are
-simulated, not ingested. Making `run` real is the top roadmap item.
+**PARTIAL — this is still the main gap:** execution exists, but parser coverage is
+only a narrow first slice. `obol run N` now executes the selected command variant,
+saves raw stdout/stderr, parses supported facts, and refuses to invent facts when
+no parser matches. Most Orange actions still need parsers before they are fully
+real. Do **not** restore the old simulated behavior where `run` blindly records an
+action's declared `produces`; that was only a scaffold. A port fact is not a win:
+`389/tcp open` may unlock LDAP actions, but it does not prove anonymous bind,
+users, credentials, access, or privilege.
+
+**Still missing:** report generation, richer target/input management, parser
+coverage across the rest of the Orange AD pack, sibling packs (web/privesc/etc.),
+and Charon-style tool-provider/degradation behavior.
 
 ## Run / test / regenerate
 
@@ -99,6 +116,9 @@ pip install -e ".[rich]"          # rich optional; obol degrades without it
 # work in an ENGAGEMENT directory, not the source checkout:
 mkdir -p ~/labs/box && cd ~/labs/box && obol init --demo && obol next
 python3 -m pytest tests/ -q       # from the repo root
+# target slice:
+mkdir -p ~/labs/box && cd ~/labs/box && obol init --target 10.10.10.10
+obol run 1 --dry-run              # preferred first command: nmap -Pn -p- --open
 # regenerate the AD pack from the prior obol's data (needs that repo cloned):
 node scripts/import_orange_ad.js /path/to/platocres-obol/data/lanes.js \
   > obol/packs/orange_ad_2025_03.json

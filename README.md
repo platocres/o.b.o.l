@@ -16,9 +16,11 @@ dashboard — the transcript is your evidence log):
 
 ```
 obol init --demo          # seed a workspace (HTB Forest, post-nmap)
+obol init --target IP     # or start a real scoped target workspace
 obol next                 # proven facts · ranked next actions · blocked paths
-obol explain 1            # the command + what it proves / does NOT prove
-obol run 1                # run it, ingest the result, record new facts
+obol explain 1            # first real target move is nmap open-port discovery
+obol run 1                # run it, ingest ports/services, record new facts
+obol run 1 --cmd 2        # choose a different command variant from the card
 obol next                 # recompute from the new facts
 obol serve                # read-only web view (findings + path graph) on localhost
 ```
@@ -46,12 +48,18 @@ obol serve                # read-only web view (findings + path graph) on localh
 
 ## Status
 
-First vertical slice. The methodology pack in `pack.py` is a small hardcoded HTB
-Forest chain — a **placeholder** for the real foundation: the Orange-Cyberdefense
-2025.03 AD atomic units and the OSCP web/privesc branches to be exported from the
-prior obol data layer into fact-gated action packs (kept a distinct, attributed
-component). Execution is stubbed — `run` applies each action's declared `produces`
-in place of a real runner + parser, so the loop advances against the Forest fixture.
+First executable slice. The Orange-Cyberdefense 2025.03 AD pack is loaded as a
+fact-gated methodology pack, and `obol run` now has a scoped, fixed-argv runner
+with dry-run, raw output capture, and the first generic evidence parsers for
+`nmap`, `nxc`, LDAP, and AS-REP output.
+
+The current live path is intentionally narrow but real: configure a target, run a
+quick all-port nmap scan, let obol parse open ports, run a targeted `-Pn -sC -sV`
+scan against those ports, then let the resulting facts unlock service-specific
+moves. For AD, finding `389`/LDAP leads into the NetExec-first DC/LDAP smoke test
+and anonymous LDAP enumeration. Most Orange actions still need dedicated parsers
+before they can be considered fully executable; until then, `obol explain` is the
+command reference and `obol run` will save raw evidence without inventing facts.
 
 ## Install
 
@@ -85,6 +93,25 @@ obol next            # proven facts · ranked next actions · blocked paths
 obol run 1           # run the top action, ingest it, update facts
 obol next            # recompute — repeat until rooted
 obol serve           # read-only web view at http://127.0.0.1:8765
+```
+
+For a real scoped target:
+
+```bash
+mkdir -p ~/labs/box && cd ~/labs/box
+obol init --target 10.10.10.10
+obol next
+obol explain 1       # first command is the fast all-port nmap scan
+obol run 1 --dry-run # inspect the command without touching the target
+obol run 1           # execute, save raw output, parse open ports
+obol next            # now the targeted -sC -sV scan should be next
+```
+
+If a later command needs operator-provided paths or values, persist them with
+`--set`:
+
+```bash
+obol run 3 --set userlist=users.txt --set hashfile=asrep.hashes
 ```
 
 ### Run without installing

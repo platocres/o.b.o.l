@@ -41,6 +41,11 @@ Next Steps). This is the foundation Charon never had.
 | `database` | 6 | ⏳ |
 | `poisoning` / `cloud` / `objectives` | 3/2/2 | ⏳ |
 
+The executable AD pack also includes three local nmap prelude actions before the
+30 Orange-derived AD actions: fast TCP open-port discovery, targeted service
+fingerprinting, and focused UDP checking. Those are obol execution scaffolding,
+not Orange methodology claims.
+
 Each card's schema (this maps 1:1 onto obol's `Action`):
 `id, title, hypothesis, prereq{all,any}, produces[], commands[{tool,run,note}],
 expected[], onFailure, defender, report{finding,severity}, tools[], os[]`.

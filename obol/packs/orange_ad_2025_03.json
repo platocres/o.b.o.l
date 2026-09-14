@@ -6,6 +6,139 @@
  "license": "GPL-3.0 (methodology data); see obol/packs/NOTICE.md",
  "actions": [
   {
+   "id": "nmap-fast-open-ports",
+   "title": "Nmap Fast TCP Open-Port Discovery",
+   "hypothesis": "Start every run by finding the exposed TCP surface. A quick all-port scan gives obol real port evidence, keeps the first move cheap, and prevents service tools from firing just because a methodology card exists.",
+   "tool": "nmap",
+   "tools": [
+    "nmap"
+   ],
+   "os": [
+    "linux",
+    "windows"
+   ],
+   "requires_all": [
+    "target.configured"
+   ],
+   "requires_any": [],
+   "produces": [
+    "host.up",
+    "scan.nmap.quick",
+    "ports.open"
+   ],
+   "priority": 100,
+   "proves": "establishes a live host, quick nmap open-port scan, open ports",
+   "does_not_prove": "open ports only - not service identity, vulnerability, access, credential, or privilege",
+   "report": {
+    "finding": "Initial TCP Attack Surface Identified",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn -p- --min-rate 5000 --open -oN nmap-allports.txt {{target}}",
+     "note": "PREFERRED: fast all-TCP-port discovery. Use this first in labs so every later recommendation is grounded in actual open ports."
+    },
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn --top-ports 1000 --open -oN nmap-top1000.txt {{target}}",
+     "note": "Quieter and often enough for a first look, but it can miss services hiding outside the common ports."
+    },
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn -F --open -oN nmap-fast.txt {{target}}",
+     "note": "Very fast triage. Good when you need movement immediately, not a replacement for the all-port pass."
+    }
+   ]
+  },
+  {
+   "id": "nmap-version-scripts",
+   "title": "Nmap Targeted Service and Default Script Scan",
+   "hypothesis": "Once open ports are known, run a focused -sC -sV scan only against those ports. This turns port numbers into service evidence and unlocks the right follow-up tools: LDAP ports should lead to nxc ldap and ldapsearch, SMB to nxc smb, HTTP to web enumeration, and so on.",
+   "tool": "nmap",
+   "tools": [
+    "nmap"
+   ],
+   "os": [
+    "linux",
+    "windows"
+   ],
+   "requires_all": [
+    "scan.nmap.quick",
+    "ports.open"
+   ],
+   "requires_any": [],
+   "produces": [
+    "scan.nmap.version"
+   ],
+   "priority": 98,
+   "proves": "establishes nmap service/version evidence for the discovered open ports",
+   "does_not_prove": "service fingerprints only - not vulnerability, access, credential, or privilege",
+   "report": {
+    "finding": "Service Fingerprinting Completed",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn -sC -sV -p {{nmap_ports}} -oN nmap-version.txt {{target}}",
+     "note": "PREFERRED: default scripts plus service versions against only the ports already found open. This is the scan that should fan out into service-specific tool runs."
+    },
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn -sV --version-all -p {{nmap_ports}} -oN nmap-version-all.txt {{target}}",
+     "note": "Heavier service fingerprinting when the normal -sV answer is vague or wrong."
+    },
+    {
+     "tool": "nmap",
+     "run": "nmap -Pn -A -p {{nmap_ports}} -oN nmap-aggressive.txt {{target}}",
+     "note": "Aggressive follow-up. Useful in labs, but louder: OS detection, scripts, version detection, and traceroute."
+    }
+   ]
+  },
+  {
+   "id": "nmap-udp-top",
+   "title": "Nmap Focused UDP Check",
+   "hypothesis": "UDP is slow, noisy, and easy to overdo, but a focused pass can reveal DNS, SNMP, Kerberos, NTP, TFTP, and other services that change the path. Run it after the TCP spine is established or when TCP is sparse.",
+   "tool": "nmap",
+   "tools": [
+    "nmap"
+   ],
+   "os": [
+    "linux",
+    "windows"
+   ],
+   "requires_all": [
+    "host.up"
+   ],
+   "requires_any": [],
+   "produces": [
+    "scan.nmap.udp"
+   ],
+   "priority": 35,
+   "proves": "establishes focused UDP scan evidence",
+   "does_not_prove": "UDP exposure only - not service exploitability, access, credential, or privilege",
+   "report": {
+    "finding": "Focused UDP Surface Checked",
+    "severity": "informational"
+   },
+   "refs": [],
+   "commands": [
+    {
+     "tool": "nmap",
+     "run": "sudo nmap -Pn -sU --top-ports 20 --open -oN nmap-udp-top20.txt {{target}}",
+     "note": "Practical UDP starter. It needs privileges and may take a while, but it catches the UDP services most likely to matter."
+    },
+    {
+     "tool": "nmap",
+     "run": "sudo nmap -Pn -sU -p 53,67,68,69,88,123,137,138,161,162,500,514,520,1900,4500 --open -oN nmap-udp-common.txt {{target}}",
+     "note": "Targeted UDP list for DNS, DHCP, TFTP, Kerberos, NTP, NetBIOS, SNMP, VPN, syslog, routing, UPnP, and IPsec."
+    }
+   ]
+  },
+  {
    "id": "ad-dc-identify",
    "title": "Identify the Domain Controller and Domain",
    "hypothesis": "A domain controller has a recognizable service fingerprint: Kerberos (88), LDAP (389/636), SMB (445), often DNS (53) and global catalog (3268). Before any AD technique works you need three facts: which host is the DC, the domain name, and the base DN. SMB banners disclose the domain with zero authentication.",
@@ -27,12 +160,11 @@
    "produces": [
     "ad.dc_candidate",
     "ad.domain_known",
-    "kerberos.reachable",
-    "ldap.reachable",
-    "smb.reachable"
+    "ad.base_dn",
+    "ldap.reachable"
    ],
-   "priority": 50,
-   "proves": "establishes a domain-controller candidate, the domain, kerberos.reachable, ldap.reachable, smb.reachable",
+   "priority": 96,
+   "proves": "establishes a domain-controller candidate, the domain, the LDAP base DN, LDAP reachability",
    "does_not_prove": "enumeration/context only — no access, credential, or privilege",
    "report": {
     "finding": "Domain Controller Identified",
@@ -40,6 +172,11 @@
    },
    "refs": [],
    "commands": [
+    {
+     "tool": "nxc",
+     "run": "nxc ldap {{target}} -u '' -p ''",
+     "note": "PREFERRED: NetExec LDAP smoke test. Confirms LDAP reachability and usually discloses hostname/domain context without committing to deeper enumeration yet."
+    },
     {
      "tool": "nxc",
      "run": "nxc smb {{target}}",
@@ -80,7 +217,7 @@
     "ad.user_list",
     "ad.anonymous_bind"
    ],
-   "priority": 50,
+   "priority": 94,
    "proves": "establishes the LDAP base DN, a domain user list, anonymous LDAP bind",
    "does_not_prove": "enumeration/context only — no access, credential, or privilege",
    "report": {
@@ -152,7 +289,7 @@
    "produces": [
     "ad.user_list"
    ],
-   "priority": 50,
+   "priority": 92,
    "proves": "establishes a domain user list",
    "does_not_prove": "enumeration/context only — no access, credential, or privilege",
    "report": {
@@ -208,6 +345,7 @@
    ],
    "requires_any": [
     "kerberos.reachable",
+    "ad.dc_candidate",
     "port:88"
    ],
    "produces": [
@@ -1095,11 +1233,12 @@
    "os": [
     "windows"
    ],
-   "requires_all": [],
+   "requires_all": [
+    "credential.available"
+   ],
    "requires_any": [
     "smb.reachable",
-    "port:445",
-    "credential.available"
+    "port:445"
    ],
    "produces": [
     "enum.deep",
@@ -1173,7 +1312,9 @@
    "os": [
     "windows"
    ],
-   "requires_all": [],
+   "requires_all": [
+    "credential.available"
+   ],
    "requires_any": [
     "kerberos.reachable",
     "ad.dc_candidate"
