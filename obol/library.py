@@ -17,7 +17,7 @@ import re
 import time
 from pathlib import Path
 
-from .workspace import STATE_DIR, Workspace
+from .workspace import Workspace, has_state
 
 
 _BASE_OVERRIDE: Path | None = None
@@ -54,7 +54,7 @@ def _unique_slug(name: str) -> str:
     base = slugify(name)
     root = engagements_dir()
     slug, n = base, 2
-    while (root / slug / STATE_DIR / "state.json").exists():
+    while has_state(root / slug):
         slug = f"{base}-{n}"
         n += 1
     return slug
@@ -73,7 +73,7 @@ def list_engagements() -> list[dict]:
         return out
     active = active_slug()
     for child in sorted(root.iterdir(), key=lambda p: p.name):
-        if not (child / STATE_DIR / "state.json").exists():
+        if not has_state(child):
             continue
         ws = Workspace(child).load()
         out.append({
@@ -102,7 +102,7 @@ def create_engagement(name: str) -> Workspace:
 
 def get_engagement(slug: str) -> Workspace | None:
     root = engagement_path(slug)
-    if not (root / STATE_DIR / "state.json").exists():
+    if not has_state(root):
         return None
     return Workspace(root).load()
 
@@ -111,7 +111,7 @@ def active_slug() -> str | None:
     f = _active_file()
     if f.exists():
         slug = f.read_text().strip()
-        if slug and (engagement_path(slug) / STATE_DIR / "state.json").exists():
+        if slug and has_state(engagement_path(slug)):
             return slug
     return None
 

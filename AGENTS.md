@@ -2,8 +2,10 @@
 
 Read this first, then [`docs/SOURCES.md`](docs/SOURCES.md) (where the methodology
 and reference code live) and [`docs/ROADMAP.md`](docs/ROADMAP.md) (what to build
-next). The same contract applies to any coding agent (Claude, ChatGPT, etc.).
-`CLAUDE.md` points here.
+next). For the state/sync/render internals see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); for the review bundle see
+[`docs/DEBUG.md`](docs/DEBUG.md). The same contract applies to any coding agent
+(Claude, ChatGPT, etc.). `CLAUDE.md` points here.
 
 ## Naming — "obol local" vs "obol web" (canonical, use these terms)
 
@@ -64,9 +66,16 @@ and an OSCP report is narrated from the same fact/run ledger.
    launch a run through the same shared service (`service.run_action`) — one runner,
    one parser, one `.obol` store. Run-from-site has landed: the web triggers a run by
    action id, the server fills the command from workspace facts (secrets never go to
-   the browser), and the same scope gate applies. Both surfaces stay synced in real
-   time (the web watches the state file via SSE). The web is localhost-only and
-   token-gated. Never create a second state store or a second runner for the web.
+   the browser), and the same scope gate applies. The store is **SQLite**
+   (`.obol/state.db`, `obol/store.py`) precisely because both surfaces are separate
+   processes writing the same engagement — WAL + idempotent, targeted writes let a
+   terminal `obol run` and a run-from-site both land instead of clobbering each other
+   (a whole-file `state.json` rewrite could not). Both surfaces stay synced in real
+   time: the web SSE loop tails the store's `events` change feed and pushes *what
+   changed*. The web is localhost-only and token-gated. Never create a second state
+   store or a second runner for the web. `state.json` survives only as the
+   export/import/migration format (report, `obol web` snapshot, debug package). See
+   `docs/ARCHITECTURE.md`.
 4. **Scope enforcement is mandatory for the runner** (`obol/scope.py`,
    `obol/runner.py`). It may only touch an authorized target — a hard gate, not a
    noise tier — and it applies equally to terminal-, web-, and playbook-launched
@@ -93,9 +102,16 @@ obol/
   facts.py       Fact + ProofState + FactSet (the source of truth)
   library.py     engagement library: many engagements under an app-managed base dir
                  ($OBOL_HOME); create/list/active-select (the web + `obol engagement`)
-  workspace.py   an engagement's .obol/state.json: targets, per-target fact view,
-                 scope, inputs, run ledger, evidence attachments, checklist ticks,
-                 BloodHound summary; find_workspace() walks up like git
+  store.py       SQLite persistence for one engagement (.obol/state.db): WAL,
+                 idempotent/targeted writes (facts by content hash, runs by id) so
+                 terminal + web can both write without clobbering, and an `events`
+                 change feed the web SSE loop tails. See docs/ARCHITECTURE.md.
+  workspace.py   an engagement's in-memory model over store.py: targets, per-target
+                 fact view, scope, inputs, run ledger, evidence attachments, checklist
+                 ticks, BloodHound summary. ws.facts.add()/record_run() mutate memory;
+                 save() reconciles to SQLite. to_payload()/apply_payload() are the
+                 JSON interchange (report/snapshot/debug/migration). find_workspace()
+                 walks up like git; has_state() detects state.db or a legacy state.json
   bloodhound.py  tolerant SharpHound/BloodHound export parser -> domain overlay facts
   tools.py       tool inventory: curated registry of the packs' tools + detection
                  (which/default Kali paths/auto-locate), overrides in tools.json,
@@ -117,16 +133,23 @@ obol/
   report.py      OSCP markdown report + build_report_context (per-target rollup +
                  evidence + engagement graph, structured for the web)
   web.py         self-contained read-only static HTML snapshot (`obol web`)
+  debug.py       `obol debug package` / `obol debug capture`: bundles state, events,
+                 facts, ledger + raw run output, report, tools/env, terminal renders,
+                 site snapshot, and optional PNG screenshots into a review .zip
+  screenshots.py optional headless-browser (Playwright or system chromium) PNGs for
+                 the debug package; degrades to text-only. See docs/DEBUG.md
   webapp/        live localhost web surface (`obol serve`) — optional [web] extra
     server.py      FastAPI over the engagement library: engagements/targets CRUD,
                    per-target bundle, run-from-site, evidence + BloodHound upload,
-                   token gate, SSE real-time
-    static/        vanilla-JS SPA: engagement overview, targets, tabbed target view
-                   (Overview/Tools/Playbooks/Checklist/Findings/Evidence/Commands),
-                   engagement attack path, report; vendored chart.umd.min.js (no CDN)
+                   token gate, SSE change-feed real-time (payload deltas, not a tick)
+    static/        vanilla-JS SPA rendered with morphdom (DOM is patched, not torn
+                   down) and one delegated data-act handler: engagement overview,
+                   targets, tabbed target view (Overview/Tools/Playbooks/Checklist/
+                   Findings/Evidence/Commands), attack path, report; vendored
+                   chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
   seed.py        Forest demo fixture (post-nmap facts)
   cli.py         subcommands: init / engagement / target / next / explain / run /
-                 playbook(s) / scope / facts / report / serve / web
+                 playbook(s) / scope / facts / report / serve / web / debug
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
 tests/
@@ -184,6 +207,8 @@ mkdir -p ~/labs/box && cd ~/labs/box && obol init --demo && obol next
 obol serve                        # live web surface (needs the [web] extra)
 pip install -e ".[test]"          # pytest + FastAPI TestClient for the web tests
 python3 -m pytest tests/ -q       # from the repo root
+obol debug package                # bundle a review .zip (see docs/DEBUG.md)
+pip install -e ".[debug]"         # optional: Playwright for PNG screenshots
 # target slice:
 mkdir -p ~/labs/box && cd ~/labs/box && obol init --target 10.10.10.10
 obol run 1 --dry-run              # preferred first command: nmap -Pn -p- --open
