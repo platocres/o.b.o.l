@@ -11,8 +11,9 @@ from __future__ import annotations
 import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from .board import action_desc
 from .graph import build_mermaid
-from .pack import next_actions, blocked_actions
+from .pack import next_actions
 from .workspace import Workspace
 
 _TEMPLATE = """<!doctype html>
@@ -37,9 +38,8 @@ _TEMPLATE = """<!doctype html>
 <main>
   <section><h2>Key findings</h2><table>{finding_rows}</table></section>
   <section><h2>Path</h2><div class="graph"><pre class="mermaid">{mermaid}</pre></div></section>
-  <section><h2>Proven facts</h2><table>{facts_rows}</table></section>
-  <section><h2>Next actions</h2><table>{next_rows}</table></section>
-  <section><h2>Blocked</h2><table>{blocked_rows}</table></section>
+  <section><h2>Next</h2><table>{next_rows}</table></section>
+  <section><h2>Found so far</h2><table>{facts_rows}</table></section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
@@ -118,21 +118,15 @@ def build_page(ws: Workspace) -> str:
 
     next_rows = "".join(
         f"<tr><td>{i}</td><td>{html.escape(a.title)}</td>"
-        f"<td><span class='proves'>proves:</span> {html.escape(a.proves)}<br>"
-        f"<span class='not'>not:</span> {html.escape(a.does_not_prove)}</td></tr>"
+        f"<td class='blocked'>{html.escape(action_desc(a))}</td></tr>"
         for i, a in enumerate(next_actions(facts), 1)
-    ) or "<tr><td>none</td></tr>"
-
-    blocked_rows = "".join(
-        f"<tr><td class='kind'>{html.escape(a.title)}</td><td class='blocked'>{html.escape(a.unmet(facts))}</td></tr>"
-        for a in blocked_actions(facts)
-    ) or "<tr><td>none</td></tr>"
+    ) or "<tr><td>nothing queued</td></tr>"
 
     return _TEMPLATE.format(
         name=html.escape(ws.name), target=html.escape(ws.target),
         mermaid=html.escape(build_mermaid(facts)),
         finding_rows=_key_findings(ws),
-        facts_rows=fact_rows, next_rows=next_rows, blocked_rows=blocked_rows,
+        facts_rows=fact_rows, next_rows=next_rows,
     )
 
 

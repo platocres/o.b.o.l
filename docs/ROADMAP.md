@@ -66,15 +66,45 @@ path diagram. Output markdown first; the report must cite evidence (each claim �
 the command/output that produced it) and must never present project metadata as
 engagement proof.
 
-## 5. Web view refinements
+## 5. Robust web surface — run-from-site, playbooks, path-map redesign
 
-The mermaid graph gets busy at the full frontier. Options: rank-group by phase,
-collapse settled chains, or filter to the near frontier more aggressively. Add
-live refresh (poll or manual) if desired — keep it read-only and localhost-only.
+The web view should become a real second surface (still localhost-only), modeled
+on PentOS and Pentest Companion (`docs/SOURCES.md`). It reuses the *same*
+scope-enforced runner + parsers + `.obol` store as the terminal.
+
+- **Run from the site.** Let the user launch an action's command from the web
+  page; it goes through the same runner/parser and writes the same store, so both
+  surfaces reflect it. This needs the current stdlib `http.server` to grow small
+  POST endpoints (or move to a tiny FastAPI/Flask app like PentOS's) — keep it
+  localhost-bound; never expose execution off-box. Do not add a second runner or
+  a second state store.
+- **Playbooks (both surfaces).** A playbook is a named, ordered list of steps,
+  each `{label, action/tool, args_extra?, require_approval?}`, stored as data
+  alongside packs. Run live or dry-run; pause for approval before noisy/risky
+  steps; propagate creds from workspace facts. Pentest Companion's
+  `tools/playbook_engine.py` is the reference (learn, don't copy). Playbooks get
+  a useful batch of evidence back in one move and present it neatly.
+- **Path-map redesign.** Keep the map (users like it) but make it clearer. The
+  current `graph.py` is a light top-down declutter (path walked + live moves, no
+  blocked branches). The reference for "much more straightforward" is the prior
+  **platocres/obol** path view — study how it lays out the methodology path
+  (phase/lane progression rather than a dependency DAG) and match that feel; this
+  likely means adding a phase/stage to pack actions and grouping the map by it.
+- **Tool availability** (from Pentest Companion `kali_tools`/`tools_status`): show
+  which referenced tools are installed. Live refresh (poll or manual) — simple.
+
+## UX guardrails (product decision — keep these)
+
+This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:
+no "blocked until X" list and no "proves / does not prove" language anywhere the
+user sees. The fact-gating engine (`requires`/`produces`, `blocked_actions()`)
+stays internal — it decides what's live; it is not surfaced. Do not reintroduce
+blocked/proof panels in `board.py` or `web.py`.
 
 ## Known smaller issues
 
-- Graph layout is spaghetti-ish with many blocked-but-near actions shown.
 - `run`'s "new facts" detail line is still sparse for port/service facts.
-- The web view now has key findings, but it is still a simple mirror, not the final
-  OSCP-style evidence report.
+- The web view has key findings + a path map, but is not yet the final OSCP-style
+  evidence report.
+- Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
+  ahead of roasting).
