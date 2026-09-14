@@ -218,9 +218,9 @@ def _render_runs(ws: Workspace, *, include_secrets: bool) -> list[str]:
         else:
             lines.append("- Parsed facts: none")
         if row.get("stdout"):
-            lines.append(f"- Raw stdout: `{row['stdout']}`")
+            lines.append(f"- Raw stdout saved to: `{row['stdout']}`")
         if row.get("stderr"):
-            lines.append(f"- Raw stderr: `{row['stderr']}`")
+            lines.append(f"- Raw stderr saved to: `{row['stderr']}`")
         lines.append("")
     return lines
 
