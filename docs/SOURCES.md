@@ -31,7 +31,7 @@ Next Steps). This is the foundation Charon never had.
 | lane | cards | exported to an obol pack? |
 |---|---|---|
 | `ad` | 30 | ✅ `obol/packs/orange_ad_2025_03.json` |
-| `web` | 23 | ⏳ not yet |
+| `web` | 23 | ✅ `obol/packs/orange_web_2025_03.json` |
 | `pivoting` | 12 | ⏳ |
 | `linux-privesc` | 12 | ⏳ |
 | `recon` | 11 | ⏳ |
