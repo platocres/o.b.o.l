@@ -112,6 +112,7 @@ _FRIENDLY = {
     "smb.shares": "SMB shares", "winrm.authenticated": "authenticated WinRM access",
     "access.admin": "administrative access", "access.system": "SYSTEM access",
     "access.desktop": "an interactive desktop", "foothold.windows": "a Windows foothold",
+    "access.shell": "an interactive shell", "foothold.linux": "a Linux foothold",
     "loot.ntds": "NTDS secrets", "adcs.vulnerable": "a vulnerable ADCS template",
     "persistence.domain": "domain persistence", "enum.deep": "deep enumeration",
     "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",

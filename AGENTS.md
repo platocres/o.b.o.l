@@ -92,8 +92,11 @@ tests/
 graph.collected, attack_paths, control_paths, trusts, computer_added),
 `hash.*` (asrep, tgs, ntlm, krbtgt, tgt), `credential.*` (candidate, available,
 plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
-(admin, system, desktop), `foothold.windows`, `loot.ntds`, `*.reachable`
-(ldap/smb/kerberos/winrm/http…), and `port:NNN`.
+(admin, system, desktop, shell), `foothold.windows`, `foothold.linux`,
+`loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), and `port:NNN`.
+(`access.shell` is an OS-agnostic interactive shell — e.g. a reverse shell
+caught by penelope; `foothold.linux` is its Linux counterpart to
+`foothold.windows`, forward-looking for the privesc packs.)
 
 ## What is BUILT vs STUBBED (read before you build)
 

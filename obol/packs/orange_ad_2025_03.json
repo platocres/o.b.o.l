@@ -1539,7 +1539,7 @@
    ],
    "priority": 92,
    "proves": "establishes a plaintext password, administrative access",
-   "does_not_prove": "a usable credential — not access until it authenticates against a service",
+   "does_not_prove": "local administrator on this host via the LAPS password — not domain dominance, and not that the same password is reused on other hosts until tested",
    "report": {
     "finding": "LAPS Passwords Readable by Non-Admin",
     "severity": "high"

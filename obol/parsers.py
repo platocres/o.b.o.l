@@ -53,6 +53,16 @@ _EXEC_SUCCESS_RE = re.compile(
     r"\bexecuted command\b|\[\+\]\s+executed|Microsoft Windows \[Version|^[A-Za-z]:\\.*>",
     re.IGNORECASE | re.MULTILINE,
 )
+# penelope (brightio) reverse-shell handler session signals.
+_PENELOPE_GOT_RE = re.compile(r"got reverse shell from\s+(?P<info>.+)", re.IGNORECASE)
+_PENELOPE_UPGRADE_RE = re.compile(r"shell upgraded|spawned a pty|upgrading shell to pty", re.IGNORECASE)
+_PENELOPE_SID_RE = re.compile(r"session\s*id\s*[:=]?\s*(?P<sid>\w+)", re.IGNORECASE)
+_PENELOPE_HOST_RE = re.compile(r"(?P<host>[A-Za-z0-9][\w.-]*)~(?P<ip>\d{1,3}(?:\.\d{1,3}){3})")
+# ADCS: certipy find vulnerabilities + certipy/pywhisker certificate material.
+_ESC_RE = re.compile(r"\bESC(\d{1,2})\b")
+_CERTIPY_TEMPLATE_RE = re.compile(r"Template Name\s*:\s*(?P<name>\S[^\n]*)", re.IGNORECASE)
+_CERTIPY_UPN_RE = re.compile(r"certificate with UPN '(?P<upn>[^']+)'", re.IGNORECASE)
+_PFX_SAVED_RE = re.compile(r"saved[^\n]*?(?P<pfx>[A-Za-z0-9_./\\-]+\.pfx)", re.IGNORECASE)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
@@ -234,8 +244,18 @@ def _is_exec_command(command: str) -> bool:
         return True
     return any(
         tool in lowered
-        for tool in ("wmiexec", "psexec", "atexec", "smbexec", "evil-winrm", "enter-pssession")
+        for tool in ("wmiexec", "psexec", "atexec", "smbexec", "evil-winrm", "enter-pssession", "penelope")
     )
+
+
+# Interactive Windows sessions (a shell you can run on-host tooling from), as
+# opposed to a one-shot nxc -x command. Penelope is handled separately because
+# its shells are OS-classified from the handler banner.
+_INTERACTIVE_WIN_TOOLS = {"evil-winrm", "wmiexec", "psexec", "atexec", "smbexec", "winrs"}
+_INTERACTIVE_RE = re.compile(
+    r"\*Evil-WinRM\*\s+PS|semi-interactive shell|Launching semi-interactive|^\[[^\]]+\]:\s*PS[> ]",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
@@ -324,6 +344,12 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if _is_exec_command(command):
         _parse_command_execution(text, ws, command, source, facts)
+
+    if "penelope" in lowered_command:
+        _parse_penelope(text, ws, source, facts)
+
+    if "certipy" in lowered_command or "pywhisker" in lowered_command:
+        _parse_adcs(text, ws, command, source, facts)
 
     return facts
 
@@ -894,7 +920,8 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
     identities = [_normalize_identity(match.group("id")) for match in _WHOAMI_ID_RE.finditer(text)]
     identities = [ident for ident in identities if ident]
     is_system = bool(_SYSTEM_ID_RE.search(text))
-    executed = bool(identities) or bool(_EXEC_SUCCESS_RE.search(text))
+    interactive = bool(_INTERACTIVE_RE.search(text)) or "enter-pssession" in command.lower()
+    executed = bool(identities) or bool(_EXEC_SUCCESS_RE.search(text)) or interactive
     if not executed:
         return
 
@@ -916,6 +943,81 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
                 source,
             ),
         )
+
+    # An interactive Windows session (not a one-shot nxc -x command) is a shell
+    # the operator can run on-host enumeration from -> access.desktop.
+    if interactive and tool in _INTERACTIVE_WIN_TOOLS:
+        _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": tool}, ProofState.SUPPORTED, source))
+
+
+def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """Parse penelope (reverse-shell handler) output into an interactive shell.
+
+    A caught shell is a real interactive session (access.shell); when penelope
+    reports the OS it also lands the OS-specific foothold, and a Windows shell
+    is a session the operator can run on-host enumeration from (access.desktop).
+    SYSTEM is not claimed here — that comes from actual `whoami` output via the
+    command-execution parser.
+    """
+    got = _PENELOPE_GOT_RE.search(text)
+    upgraded = bool(_PENELOPE_UPGRADE_RE.search(text))
+    if not got and not upgraded:
+        return
+
+    info = got.group("info").strip() if got else ""
+    haystack = f"{info}\n{text}".lower()
+    os_name = "windows" if "windows" in haystack else ("linux" if "linux" in haystack else "")
+
+    value: dict = {"handler": "penelope"}
+    if os_name:
+        value["os"] = os_name
+    sid = _PENELOPE_SID_RE.search(text)
+    if sid:
+        value["session_id"] = sid.group("sid")
+    host = _PENELOPE_HOST_RE.search(info)
+    if host:
+        value["hostname"] = host.group("host")
+        value["source_ip"] = host.group("ip")
+
+    _add(facts, Fact("access.shell", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if os_name == "windows":
+        _add(facts, Fact("foothold.windows", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": "penelope"}, ProofState.SUPPORTED, source))
+    elif os_name == "linux":
+        _add(facts, Fact("foothold.linux", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
+
+
+def _parse_adcs(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Parse certipy/pywhisker output into ADCS findings and certificate material.
+
+    A `certipy find` ESC finding proves a vulnerable template exists
+    (enumeration/context). Obtaining a .pfx (certipy req, pywhisker) proves
+    certificate material for a principal — auth material that still has to be
+    used (PKINIT/UnPAC) to yield a ticket or hash. Neither proves access here.
+    """
+    lowered_command = command.lower()
+    escs = sorted({int(match.group(1)) for match in _ESC_RE.finditer(text)})
+    if escs and ("vulnerab" in text.lower() or "certipy" in lowered_command):
+        value: dict = {"esc": [f"ESC{n}" for n in escs]}
+        templates = sorted({match.group("name").strip() for match in _CERTIPY_TEMPLATE_RE.finditer(text)})
+        if templates:
+            value["templates"] = templates
+        _add(facts, Fact("adcs.vulnerable", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
+
+    pfxs = sorted({match.group("pfx") for match in _PFX_SAVED_RE.finditer(text)})
+    if pfxs:
+        value = {"files": pfxs}
+        upn = _CERTIPY_UPN_RE.search(text)
+        principal = ""
+        if upn:
+            principal = _clean_username(upn.group("upn"))
+        if not principal:
+            principal = _clean_username(_command_arg(command, "-upn", "--upn", "--target"))
+        if not principal:
+            principal = _clean_username(pfxs[0].replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0])
+        if principal and _valid_username(principal):
+            value["principal"] = principal
+        _add(facts, Fact("credential.certificate", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
 
 
 def _normalize_identity(identity: str) -> str:
