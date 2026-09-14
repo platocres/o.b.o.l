@@ -246,6 +246,79 @@ def test_smbclient_sysvol_gpp_cpassword_is_candidate_material_only():
     assert "access.admin" not in kinds
 
 
+def test_hashcat_asrep_show_produces_plaintext_credential_not_access():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:corp.local", {"name": "corp.local"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "asrep-roast")
+    out = "$krb5asrep$23$svc-audit@CORP.LOCAL:11223344556677889900:Spring2026!\n"
+    facts = parse_action_output(
+        action,
+        ws,
+        "hashcat -m 18200 asrep.hashes rockyou.txt --show",
+        out,
+        "",
+        "test",
+    )
+    plain = next(fact for fact in facts if fact.kind == "credential.plaintext")
+    assert plain.value["user"] == "svc-audit"
+    assert plain.value["password"] == "Spring2026!"
+    assert plain.value["hash_type"] == "asrep"
+    kinds = {fact.kind for fact in facts}
+    assert "credential.available" in kinds
+    assert "credential.admin" not in kinds
+    assert "access.admin" not in kinds
+    assert "foothold.windows" not in kinds
+
+
+def test_hashcat_status_without_recovered_plaintext_does_not_create_credential():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "asrep-roast")
+    out = """
+Session..........: hashcat
+Status...........: Exhausted
+Hash.Mode........: 18200 (Kerberos 5, etype 23, AS-REP)
+Recovered........: 0/1 (0.00%) Digests
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "hashcat -m 18200 asrep.hashes rockyou.txt",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert "credential.plaintext" not in kinds
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_john_show_produces_plaintext_credential_not_privilege():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:corp.local", {"name": "corp.local"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "asrep-roast")
+    out = """
+svc-backup:LaborDay2026!:0:0:svc-backup:/home/svc-backup:/bin/bash
+
+1 password hash cracked, 0 left
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "john asrep.hashes --show",
+        out,
+        "",
+        "test",
+    )
+    plain = next(fact for fact in facts if fact.kind == "credential.plaintext")
+    assert plain.value["user"] == "svc-backup"
+    assert plain.value["password"] == "LaborDay2026!"
+    kinds = {fact.kind for fact in facts}
+    assert "credential.available" in kinds
+    assert "credential.admin" not in kinds
+    assert "access.admin" not in kinds
+
+
 def test_ldapsearch_naming_contexts_parse_base_dn():
     ws = _workspace()
     action = next(action for action in load_pack() if action.id == "ad-anon-ldap-enum")
