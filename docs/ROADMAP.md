@@ -382,6 +382,44 @@ not a fact. **Design intentionally deferred — the operator wants to discuss th
 cache format, the trusted item list and sources, channel selection, and the
 proof/scope posture in depth before this is built.**
 
+## 9. Concurrency — bounded workers for independent scans & playbook branches
+
+Today every run is serialized: the web server holds one in-process `_RUN_LOCK`
+around each run, and a sweep enumerates its hosts **one at a time** (the per-host
+Quick Start jobs run sequentially). Deliberately simple and safe, but slow when the
+work is independent — a /24 sweep enumerating 20 live hosts, or a playbook whose
+branches don't depend on each other, has no reason to run strictly serially. Certain
+automatic scans and playbooks will want **additional workers/threads**.
+
+The enhancement: a **bounded worker pool** for independent work, every non-negotiable
+intact.
+
+- **Only parallelize independent work.** Different targets are independent, and the
+  store (SQLite WAL + idempotent, targeted, per-`(kind,scope,value)` writes) already
+  lets concurrent writers to different hosts land without clobbering (`test_store`
+  locks this). Within one playbook, ordered/dependent steps stay sequential —
+  fact-gating already expresses the dependency (an action isn't eligible until its
+  `requires` facts exist), so a scheduler can run all *currently-eligible,
+  independent* actions at once and no more.
+- **Bounded + configurable.** A max-workers cap (per engagement, sensible default) so
+  obol doesn't hammer the network, the operator's box, or trip IDS on an exam. The
+  cap is the knob; unbounded fan-out is never the default.
+- **Finer-grained than one global lock.** The single `_RUN_LOCK` is the current
+  serialization point; a pool replaces it with per-target (or per-resource) mutual
+  exclusion so two runs against the *same* host still can't interleave, while runs
+  against *different* hosts proceed in parallel. The scope gate still applies per run,
+  unchanged.
+- **The live feed already supports it.** The Activity view (0e) and the background-job
+  map already render many concurrent jobs; today the sweep just doesn't create them
+  concurrently. A pool makes several genuinely in-flight at once.
+
+Interlocks: the discovery sweep (§0b/c) and the **through-tunnel sweep** (§6e) are the
+biggest beneficiaries (many independent hosts); playbooks (item 5) gain parallel
+independent branches with per-step approval preserved; and the auto-tunnel cascade
+(§6d) can probe candidate methods/ports with bounded concurrency instead of strictly
+in series. Parallelism changes *scheduling* only — never what counts as proven, never
+what may be touched.
+
 ## UX guardrails (product decision — keep these)
 
 This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:

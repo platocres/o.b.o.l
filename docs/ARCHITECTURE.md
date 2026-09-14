@@ -40,6 +40,15 @@ into a plain domain model; `ws.facts.add(...)`, `ws.record_run(...)`,
 `ws.add_target(...)` mutate memory and persist nothing until `save()`. `save()`
 reconciles the model into SQLite. So callers and tests are unchanged.
 
+**Run-level concurrency (today, and where it's going).** The store is safe for
+concurrent writers (WAL, targeted idempotent writes), but *runs* are currently
+serialized: the web server holds one in-process `_RUN_LOCK` around each run, and a
+sweep enumerates hosts one at a time. This is intentional and simple. The planned
+step up is a **bounded worker pool** that parallelizes only *independent* work
+(different targets; currently-eligible, non-dependent playbook branches), replacing
+the single lock with per-target mutual exclusion and keeping the scope gate per run.
+See `docs/ROADMAP.md §9`.
+
 **JSON stays — as interchange.** `state.json` remains the format for the OSCP report,
 the offline `obol web` snapshot, the debug package, and migration: an existing
 `.obol/state.json` is read on first load and written to SQLite on the next `save()`.
