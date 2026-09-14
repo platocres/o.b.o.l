@@ -259,6 +259,7 @@ function onClick(e) {
     case "add-target": e.preventDefault(); addTargetPrompt(); break;
     case "scope-add": e.preventDefault(); addScopePrompt(); break;
     case "scope-del": e.stopPropagation(); delScope(el.dataset.scope); break;
+    case "sweep": e.preventDefault(); e.stopPropagation(); runSweep(el.dataset.range); break;
     case "quickstart": e.preventDefault(); e.stopPropagation(); runQuickStart(el.dataset.host); break;
     case "activate-target": activateTarget(host); break;
     case "del-target": e.stopPropagation(); delTarget(el.dataset.host); break;
@@ -455,7 +456,7 @@ async function buildEngagement() {
     || `<div class="empty">No activity yet.</div>`;
 
   const scopeChips = (s.scope || []).length
-    ? s.scope.map((v) => `<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${esc(v)}<button data-act="scope-del" data-scope="${esc(v)}" title="Remove ${esc(v)} from scope" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button></span>`).join("")
+    ? s.scope.map((v) => `<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${esc(v)}${v.includes("/") ? `<button class="btn xs" data-act="sweep" data-range="${esc(v)}" title="Discover live hosts in ${esc(v)} and add them as targets" style="padding:1px 6px">Sweep</button>` : ""}<button data-act="scope-del" data-scope="${esc(v)}" title="Remove ${esc(v)} from scope" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button></span>`).join("")
     : `<span class="muted">No scope yet — add a host or CIDR the runner is allowed to touch.</span>`;
 
   // catChart data is stashed for syncDonut after paint (charts are created, not morphed).
@@ -493,6 +494,26 @@ async function addScopePrompt() {
 async function delScope(value) {
   try { await apiDelete(`/api/scope?value=${encodeURIComponent(value)}`); render(); }
   catch (e) { toast("Could not remove scope", e.message, "err"); }
+}
+async function runSweep(range) {
+  if (!range) return;
+  let job;
+  try { job = await apiPost("/api/run/sweep", { range }); }
+  catch (e) { toast("Sweep failed to start", e.message, "err"); return; }
+  toast("Sweep started", `Discovering live hosts in ${range}…`, "");
+  // Targets stream in live over SSE (target_added); poll the job for the summary.
+  const id = job.job_id || job.id;
+  for (let i = 0; i < 240; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let j;
+    try { j = await api(`/api/sweep/jobs/${encodeURIComponent(id)}`); }
+    catch { continue; }
+    if (j.pending) continue;
+    if (j.success) toast("Sweep complete", j.message || `${(j.created || []).length} new targets`, "ok");
+    else toast("Sweep failed", j.message || "see run output", "err");
+    render();
+    return;
+  }
 }
 async function uploadBloodhound(input) {
   const files = input.files; if (!files.length) return;

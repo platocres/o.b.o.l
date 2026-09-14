@@ -129,7 +129,11 @@ obol/
   board.py       terminal render (rich + plain fallback); {{token}} templating;
                  explain view shows the full card (hypothesis, commands, refs)
   scope.py       target normalization + exact/CIDR scope checks
-  runner.py      fixed-argv runner; timeout, dry-run, raw output capture
+  runner.py      fixed-argv runner; timeout, dry-run, raw output capture;
+                 scope_target gates a range/discovery run on an authorized entry
+  discovery.py   engagement discovery sweep: nmap host discovery over an authorized
+                 scope range (through the one runner) -> live hosts -> auto-created
+                 targets. Scaffolding, not Orange methodology; stays proof-bound
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
                  (target=... pins a run to a host); eligible_actions = tool palette
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
@@ -154,7 +158,7 @@ obol/
                    chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
   seed.py        Forest demo fixture (post-nmap facts)
   cli.py         subcommands: init / engagement / target / next / explain / run /
-                 playbook(s) / scope / facts / report / serve / web / debug
+                 playbook(s) / sweep / scope / facts / report / serve / web / debug
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
   import_orange_web.js  converter: old-obol lanes.js web lane -> pack JSON

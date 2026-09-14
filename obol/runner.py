@@ -59,7 +59,19 @@ def _build_argv(command: str, *, allow_shell_tokens: bool = False) -> list[str]:
     return argv
 
 
-def _scope_check(argv: list[str], ws: Workspace) -> None:
+def _scope_check(argv: list[str], ws: Workspace, scope_target: str = "") -> None:
+    if scope_target:
+        # A range/discovery sweep: the "target" is a whole network, so the gate is
+        # stricter than host membership — the swept range must be an authorized
+        # scope ENTRY the operator explicitly added (exact match), and must appear
+        # in the command. This lets a sweep touch a CIDR without first having any
+        # host in it, while never sweeping a range that isn't in scope.
+        if scope_target not in ws.scope:
+            raise RunnerError(
+                f"scope refused {scope_target}: not an authorized scope entry")
+        if scope_target not in " ".join(argv):
+            raise RunnerError(f"command does not include scoped range {scope_target}")
+        return
     if not ws.target:
         raise RunnerError("workspace has no target; run `obol init --target <ip-or-host>`")
     allowed, reason = target_in_scope(ws.target, ws.scope)
@@ -81,10 +93,17 @@ def run_command(
     timeout: int = 300,
     dry_run: bool = False,
     allow_shell_tokens: bool = False,
+    scope_target: str = "",
 ) -> RunResult:
-    """Execute command safely and save raw evidence under .obol/runs/."""
+    """Execute command safely and save raw evidence under .obol/runs/.
+
+    `scope_target` switches the scope gate from per-host to per-range: the value
+    must be an authorized scope entry (a CIDR or host the operator added) and
+    appear in the command. Used by the engagement discovery sweep, which runs
+    against a network before any host in it is a target.
+    """
     argv = _build_argv(command, allow_shell_tokens=allow_shell_tokens)
-    _scope_check(argv, ws)
+    _scope_check(argv, ws, scope_target=scope_target)
     binary_index = 1 if argv[0] == "sudo" and len(argv) > 1 else 0
     if shutil.which(argv[binary_index]) is None and not dry_run:
         # Not on PATH — but the tool inventory may know where it is (a default Kali
