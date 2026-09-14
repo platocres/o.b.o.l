@@ -58,6 +58,11 @@ _PENELOPE_GOT_RE = re.compile(r"got reverse shell from\s+(?P<info>.+)", re.IGNOR
 _PENELOPE_UPGRADE_RE = re.compile(r"shell upgraded|spawned a pty|upgrading shell to pty", re.IGNORECASE)
 _PENELOPE_SID_RE = re.compile(r"session\s*id\s*[:=]?\s*(?P<sid>\w+)", re.IGNORECASE)
 _PENELOPE_HOST_RE = re.compile(r"(?P<host>[A-Za-z0-9][\w.-]*)~(?P<ip>\d{1,3}(?:\.\d{1,3}){3})")
+# ADCS: certipy find vulnerabilities + certipy/pywhisker certificate material.
+_ESC_RE = re.compile(r"\bESC(\d{1,2})\b")
+_CERTIPY_TEMPLATE_RE = re.compile(r"Template Name\s*:\s*(?P<name>\S[^\n]*)", re.IGNORECASE)
+_CERTIPY_UPN_RE = re.compile(r"certificate with UPN '(?P<upn>[^']+)'", re.IGNORECASE)
+_PFX_SAVED_RE = re.compile(r"saved[^\n]*?(?P<pfx>[A-Za-z0-9_./\\-]+\.pfx)", re.IGNORECASE)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
@@ -342,6 +347,9 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "penelope" in lowered_command:
         _parse_penelope(text, ws, source, facts)
+
+    if "certipy" in lowered_command or "pywhisker" in lowered_command:
+        _parse_adcs(text, ws, command, source, facts)
 
     return facts
 
@@ -977,6 +985,39 @@ def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) ->
         _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": "penelope"}, ProofState.SUPPORTED, source))
     elif os_name == "linux":
         _add(facts, Fact("foothold.linux", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
+
+
+def _parse_adcs(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Parse certipy/pywhisker output into ADCS findings and certificate material.
+
+    A `certipy find` ESC finding proves a vulnerable template exists
+    (enumeration/context). Obtaining a .pfx (certipy req, pywhisker) proves
+    certificate material for a principal — auth material that still has to be
+    used (PKINIT/UnPAC) to yield a ticket or hash. Neither proves access here.
+    """
+    lowered_command = command.lower()
+    escs = sorted({int(match.group(1)) for match in _ESC_RE.finditer(text)})
+    if escs and ("vulnerab" in text.lower() or "certipy" in lowered_command):
+        value: dict = {"esc": [f"ESC{n}" for n in escs]}
+        templates = sorted({match.group("name").strip() for match in _CERTIPY_TEMPLATE_RE.finditer(text)})
+        if templates:
+            value["templates"] = templates
+        _add(facts, Fact("adcs.vulnerable", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
+
+    pfxs = sorted({match.group("pfx") for match in _PFX_SAVED_RE.finditer(text)})
+    if pfxs:
+        value = {"files": pfxs}
+        upn = _CERTIPY_UPN_RE.search(text)
+        principal = ""
+        if upn:
+            principal = _clean_username(upn.group("upn"))
+        if not principal:
+            principal = _clean_username(_command_arg(command, "-upn", "--upn", "--target"))
+        if not principal:
+            principal = _clean_username(pfxs[0].replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0])
+        if principal and _valid_username(principal):
+            value["principal"] = principal
+        _add(facts, Fact("credential.certificate", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
 
 
 def _normalize_identity(identity: str) -> str:
