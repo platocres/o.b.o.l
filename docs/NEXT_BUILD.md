@@ -82,6 +82,30 @@ engagement" rather than one target at a time:
 This is the organization/aesthetic layer the roadmap called for — the job engine
 was already engagement-bound; nothing about the runner, parsers, or store changed.
 
+## Queued next (designed, not yet built)
+
+Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
+
+- **Parser coverage (ROADMAP item 1, TOP PRIORITY).** The main gap: `run` only
+  produces facts where a parser exists. Widen to SMB shares/sessions, WinRM
+  validation, HTTP enum, FTP/SSH/SNMP banners, and common NSE findings — each mapped
+  to the narrowest fact with anti-overfit tests. This is what makes more of the
+  Orange pack actually executable on a box.
+- **Pivoting, sessions & tunnels (ROADMAP §6).** One-click login (paired with a
+  non-interactive proof) → unlocks the privesc pack → post-foothold host enum
+  (`host.multihomed`) → one-click ligolo/chisel/sshuttle/ssh tunnels with a
+  route-aware runner (auto-proxychains for SOCKS, transparent for ligolo) →
+  auto-extend scope → through-tunnel sweep (recursion + health proof) → topology
+  map. Sessions/tunnels are live state (probed periodically); discoveries are facts.
+  Mines the operator's Charon (`docs/SOURCES.md §3`).
+- **Engagement profile & flag awareness (ROADMAP §7).** Pick the platform/exam type
+  (HTB / OffSec / TryHackMe / custom) so obol knows which flags to hunt and how to
+  score/report; per-target `machine_type`; captured flags are proof-bound objective
+  facts. Mines Pentest Companion (`docs/SOURCES.md §5`).
+- **Three small found-items** now in ROADMAP "Known smaller issues": an
+  engagement-wide secrets toggle for findings, the engagement-map credential fix,
+  and terminal parity for the 0e findings roll-up.
+
 ## 1. Playbook data model and dry-run runner — DONE
 
 A playbook is a named, ordered list of evidence-gathering steps, stored as data
