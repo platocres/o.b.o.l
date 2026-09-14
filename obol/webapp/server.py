@@ -110,6 +110,11 @@ QUICKSTART_ACTION_IDS = [
     "vhost-discovery",
     "nikto-scan",
 ]
+QUICKSTART_VARIANT_PREFERENCE = {
+    # Prefer the lighter ffuf common-wordlist pass over recursive feroxbuster when
+    # both are available; Quick Start should populate leads without surprise crawls.
+    "content-discovery": [1, 0, 2],
+}
 
 
 def _missing_dep() -> "SystemExit":
@@ -338,9 +343,15 @@ def _action_done(ws: Workspace, target: str, action) -> bool:
     return bool(action.produces) and all(tf.has(kind) for kind in action.produces)
 
 
+def _quickstart_variant_indices(action) -> list[int]:
+    total = len(action.commands or [{"run": action.command}])
+    preferred = [i for i in QUICKSTART_VARIANT_PREFERENCE.get(action.id, []) if 0 <= i < total]
+    return preferred + [i for i in range(total) if i not in preferred]
+
+
 def _first_runnable_variant(action, ws: Workspace, target: str) -> tuple[int | None, dict | None]:
     fallback = None
-    for i in range(len(action.commands or [{"run": action.command}])):
+    for i in _quickstart_variant_indices(action):
         try:
             preflight = _command_preflight(action, ws, command_index=i, target=target)
         except ActionError:
