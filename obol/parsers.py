@@ -38,6 +38,10 @@ _ASREP_RE = re.compile(r"(\$krb5asrep\$[^\s]+)", re.IGNORECASE)
 _ASREP_USER_RE = re.compile(r"\$krb5asrep\$\d+\$([^:@$]+)(?:@([^:$]+))?:", re.IGNORECASE)
 _TGS_RE = re.compile(r"(\$krb5tgs\$[^\s]+)", re.IGNORECASE)
 _TGS_USER_RE = re.compile(r"\$krb5tgs\$\d+\$\*?([^$*:]+)", re.IGNORECASE)
+# pwdump / secretsdump / nxc --sam|--lsa|--ntds tuple: [DOMAIN\]user:RID:LM:NT:::
+_NTDS_HASH_RE = re.compile(
+    r"(?:(?P<domain>[^\s\\:]+)\\)?(?P<user>[^\s\\:]+):(?P<rid>\d+):[0-9a-fA-F]{32}:(?P<nt>[0-9a-fA-F]{32}):::"
+)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
@@ -278,6 +282,10 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "getuserspns" in lowered_command or "kerberoast" in lowered_command:
         _parse_tgs_hashes(text, ws, source, facts)
+
+    is_nxc = "nxc " in lowered_command or lowered_command.startswith("nxc ")
+    if "secretsdump" in lowered_command or (is_nxc and any(flag in lowered_command for flag in ("--ntds", "--sam", "--lsa"))):
+        _parse_ntlm_dump(text, ws, command, source, facts)
 
     if "bloodhound-python" in lowered_command or "sharphound" in lowered_command:
         _parse_bloodhound_collection(text, ws, source, facts)
@@ -672,6 +680,51 @@ def _parse_tgs_hashes(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         return
     _add(facts, Fact("hash.tgs", _scope_for_domain(ws), {"hashes": hashes, "count": len(hashes)}, ProofState.SUPPORTED, source))
     _add(facts, Fact("credential.candidate", _scope_for_domain(ws), {"kind": "tgs_hash", "count": len(hashes)}, ProofState.SUPPORTED, source))
+
+
+def _parse_ntlm_dump(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Parse SAM/LSA/NTDS dump output into crackable NTLM material, not access.
+
+    Handles both raw impacket-secretsdump lines and NetExec-prefixed dump lines
+    (`SMB  host  445  DC  DOMAIN\\user:RID:LM:NT:::`). A dumped NTLM hash is
+    pass-the-hash/crackable material — it never proves plaintext credentials or
+    that the operator has used it for access. A domain (NTDS) dump additionally
+    records `loot.ntds`; the krbtgt hash is called out for golden-ticket gating.
+    """
+    entries: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    krbtgt_nt = ""
+    for match in _NTDS_HASH_RE.finditer(text):
+        user = _clean_username(match.group("user"))
+        if not user:
+            continue
+        nt = match.group("nt").lower()
+        key = (user.lower(), nt)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({"user": user, "rid": int(match.group("rid")), "nthash": nt})
+        if user.lower() == "krbtgt":
+            krbtgt_nt = nt
+    if not entries:
+        return
+
+    lowered = text.lower()
+    lowered_command = command.lower()
+    ntds_context = (
+        bool(krbtgt_nt)
+        or "--ntds" in lowered_command
+        or "-just-dc" in lowered_command
+        or any(marker in lowered for marker in ("ntds.dit", "drsuapi", "dumping domain credentials"))
+    )
+
+    scope = _scope_for_domain(ws)
+    _add(facts, Fact("hash.ntlm", scope, {"count": len(entries), "entries": entries}, ProofState.SUPPORTED, source))
+    _add(facts, Fact("credential.candidate", scope, {"kind": "ntlm_hash", "count": len(entries)}, ProofState.SUPPORTED, source))
+    if krbtgt_nt:
+        _add(facts, Fact("hash.krbtgt", scope, {"nthash": krbtgt_nt}, ProofState.SUPPORTED, source))
+    if ntds_context:
+        _add(facts, Fact("loot.ntds", scope, {"count": len(entries), "method": "credential-dump"}, ProofState.SUPPORTED, source))
 
 
 # --------------------------------------------------------------------------- #

