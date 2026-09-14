@@ -18,7 +18,7 @@ const ACCESS = {
 };
 const NODE_COLOR = { domain: "#6366F1", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
-const state = { view: "engagement", target: null, tab: "overview", secrets: false };
+const state = { view: "engagement", target: null, tab: "overview", secrets: false, lastRun: null };
 const charts = {};
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -55,6 +55,54 @@ function toast(title, body, kind) {
 }
 function flash() { const f = $("#flash"); f.classList.add("show"); setTimeout(() => f.classList.remove("show"), 1200); }
 
+function shortJson(value, limit = 150) {
+  if (!value || (typeof value === "object" && !Object.keys(value).length)) return "";
+  let s = typeof value === "string" ? value : JSON.stringify(value);
+  if (s.length > limit) s = s.slice(0, limit - 1) + "…";
+  return s;
+}
+function factChip(f) {
+  const val = shortJson(f.value);
+  return `<div class="fact-chip">
+    <div class="fc-top"><span class="fc-label">${esc(f.label || f.kind)}</span><span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category || "other")}</span></div>
+    <div class="fc-kind">${esc(f.kind)}</div>
+    ${val ? `<code class="fc-val">${esc(val)}</code>` : ""}
+    ${f.evidence ? `<div class="fc-src" title="${esc(f.evidence)}">${esc(f.evidence)}</div>` : ""}</div>`;
+}
+function factsSummaryHtml(summary) {
+  const sections = summary || [];
+  if (!sections.length) return `<div class="empty">No facts recorded yet. Run the nmap prelude to start filling this in.</div>`;
+  return `<div class="facts-summary">${sections.map((s) => `<section class="fact-section">
+    <div class="fact-section-h"><span>${esc(s.title)}</span><span class="muted mono">${s.count}</span></div>
+    <div class="fact-chip-grid">${(s.facts || []).map(factChip).join("")}</div>
+  </section>`).join("")}</div>`;
+}
+function runStatusPanel(host) {
+  const r = state.lastRun;
+  if (!r || r.target !== host) return "";
+  if (r.pending) {
+    return `<div class="run-panel pending"><div class="run-head"><span class="pulse"></span><div><b>${esc(r.dry ? "Dry-running" : "Running command")}</b><div class="muted">Waiting for the shared runner to return…</div></div></div>
+      <div class="muted mono" style="margin-top:8px">${esc(r.action_id || "")}</div></div>`;
+  }
+  if (r.error) {
+    return `<div class="run-panel failed"><div class="run-head"><span class="status-dot bad"></span><div><b>Run refused</b><div class="muted">${esc(r.error)}</div></div></div></div>`;
+  }
+  const o = r.outcome || {};
+  const facts = o.facts || o.added || [];
+  const okClass = o.success ? (o.dry_run ? "pending" : "ok") : "failed";
+  const title = o.dry_run ? "Dry-run complete" : (o.success ? "Command succeeded" : "Command failed");
+  const preview = (!o.success || !facts.length)
+    ? `<div class="run-previews">${o.stderr_preview ? `<div><div class="rp-label">stderr preview</div><pre>${esc(o.stderr_preview)}</pre></div>` : ""}${o.stdout_preview ? `<div><div class="rp-label">stdout preview</div><pre>${esc(o.stdout_preview)}</pre></div>` : ""}</div>`
+    : "";
+  return `<div class="run-panel ${okClass}">
+    <div class="run-head"><span class="status-dot ${o.success ? "good" : "bad"}"></span>
+      <div><b>${esc(title)}</b><div class="muted">${esc(o.message || "")}${o.duration_ms ? ` · ${o.duration_ms}ms` : ""}${o.returncode !== null && o.returncode !== undefined ? ` · rc ${o.returncode}` : ""}</div></div></div>
+    ${o.command ? `<pre class="cmd run-cmd">$ ${esc(o.command)}</pre>` : ""}
+    ${facts.length ? `<div class="run-facts"><div class="rp-label">Facts stored (${facts.length})</div><div class="fact-chip-grid compact">${facts.map(factChip).join("")}</div></div>` : `<div class="muted" style="margin-top:8px">No new facts were parsed and stored from this output.</div>`}
+    ${preview}
+    ${o.stdout_path || o.stderr_path ? `<div class="muted mono" style="font-size:11px;margin-top:8px">${o.stdout_path ? `stdout ${esc(o.stdout_path)}` : ""}${o.stderr_path ? ` · stderr ${esc(o.stderr_path)}` : ""}</div>` : ""}
+  </div>`;
+}
 // ── boot ───────────────────────────────────────────────────────────────────
 let ENGS = { engagements: [], active: null };
 async function boot() {
@@ -255,6 +303,7 @@ async function renderTarget(c) {
         ${b.meta.active ? `<span class="pill" style="border-color:var(--green)66;color:var(--green)">active</span>` : `<button class="btn sm" id="mk-active">Make active</button>`}
       </div>
       ${chainBar(b.chain)}
+      ${runStatusPanel(b.meta.host)}
     </div>
     <div class="tabbar">${tabs}</div>
     <div id="tabc"></div>`;
@@ -307,8 +356,9 @@ function tabOverview(el, b) {
   el.innerHTML = `
     <div class="grid-2">
       <div class="card"><div class="panel-h"><h2>Open ports</h2></div>${(b.open_ports || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap">${b.open_ports.map((p) => `<span class="pill mono">${esc(p)}</span>`).join("")}</div>` : `<div class="muted">None parsed yet — run the nmap prelude.</div>`}</div>
-      <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings</div></div>
+      <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Path</h2></div><div class="flow-scroll">${flowSVG(b.graph)}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Next moves — run from here</h2><span class="muted mono">${b.next.length}</span></div>${groups}</div>`;
   wireRun(el, b.meta.host);
@@ -478,21 +528,39 @@ function wireRun(el, host) {
   el.querySelectorAll("[data-run]").forEach((b) => b.addEventListener("click", () => runAction(b.dataset.run, host, b.dataset.dry === "1")));
 }
 async function runAction(actionId, host, dry) {
+  state.lastRun = { target: host, pending: true, action_id: actionId, dry };
+  if (state.view === "target" && state.target === host) render();
   try {
     const o = await apiPost("/api/run/action", { action_id: actionId, target: host, dry_run: dry });
+    state.lastRun = { target: host, pending: false, outcome: o };
     if (o.dry_run) toast("Dry-run", `${o.command}\n(not executed)`, "ok");
-    else if (o.added_count) toast("Ran " + o.tool, `+${o.added_count}: ${o.added.map((f) => f.kind).join(", ")}`, "ok");
+    else if (!o.success) toast("Run failed", o.message || "command failed", "err");
+    else if (o.added_count) toast("Ran " + o.tool, `+${o.added_count}: ${o.facts.map((f) => f.kind).join(", ")}`, "ok");
     else toast("Ran " + o.tool, "no new facts — raw output saved", "");
-  } catch (e) { toast("Run failed", e.message, "err"); }
+    render();
+  } catch (e) {
+    state.lastRun = { target: host, pending: false, error: e.message };
+    toast("Run failed", e.message, "err");
+    if (state.view === "target" && state.target === host) render();
+  }
 }
 async function runPlaybookStep(name, step, dry, needsApproval, host) {
   if (needsApproval && !dry && !confirm(`Step ${step} is noisy/intrusive. Run it now?`)) return;
+  state.lastRun = { target: host, pending: true, action_id: `${name} step ${step}`, dry };
+  if (state.view === "target" && state.target === host) render();
   try {
     const o = await apiPost("/api/run/playbook", { name, step, target: host, dry_run: dry, approve: needsApproval });
+    state.lastRun = { target: host, pending: false, outcome: o };
     if (o.dry_run) toast(`Dry-run · step ${step}`, o.command, "ok");
-    else if (o.added_count) toast(`Ran step ${step}`, `+${o.added_count}: ${o.added.map((f) => f.kind).join(", ")}`, "ok");
+    else if (!o.success) toast(`Step ${step} failed`, o.message || "command failed", "err");
+    else if (o.added_count) toast(`Ran step ${step}`, `+${o.added_count}: ${o.facts.map((f) => f.kind).join(", ")}`, "ok");
     else toast(`Ran step ${step}`, "no new facts — raw output saved", "");
-  } catch (e) { toast(e.status === 409 ? "Needs approval" : "Step failed", e.message, e.status === 409 ? "" : "err"); }
+    render();
+  } catch (e) {
+    state.lastRun = { target: host, pending: false, error: e.message };
+    toast(e.status === 409 ? "Needs approval" : "Step failed", e.message, e.status === 409 ? "" : "err");
+    if (state.view === "target" && state.target === host) render();
+  }
 }
 
 // ── engagement attack path ──────────────────────────────────────────────────

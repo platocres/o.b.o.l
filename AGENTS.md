@@ -171,8 +171,9 @@ action's declared `produces`; that was only a scaffold. A port fact is not a win
 users, credentials, access, or privilege.
 
 **Still missing:** parser coverage across the rest of the Orange AD pack, sibling
-packs (privesc/pivoting/cracking/…), web-surface tool-availability display, richer
-target/input management, and Charon-style tool-provider/degradation behavior.
+packs (privesc/pivoting/cracking/…), command-composer/preflight controls for the
+point-and-click web runner, richer target/input management, and Charon-style
+tool-provider/degradation behavior.
 
 ## Run / test / regenerate
 

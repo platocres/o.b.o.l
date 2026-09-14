@@ -53,9 +53,17 @@ def test_targets_and_bundle(cx):
     assert {t["label"] for t in meta["targets"]} == {"DC01", "WEB"}
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     assert set(b) >= {"meta", "access", "phase", "chain", "next", "tools", "checklist",
-                      "findings", "commands", "evidence", "graph"}
+                      "findings", "commands", "evidence", "graph", "facts_summary",
+                      "facts_total"}
     # a bare target unlocks the nmap prelude (so you can start from the UI)
     assert any(a["id"] == "nmap-fast-open-ports" for a in b["next"])
+    # the target bundle carries accumulated useful facts for the operator memory panel
+    assert b["facts_total"] >= 1
+    assert any(
+        f["kind"] == "target.configured"
+        for section in b["facts_summary"]
+        for f in section["facts"]
+    )
     # the static checklist covers every phase regardless of proof state
     assert [c["phase"] for c in b["checklist"]] == ["recon", "enum", "creds", "access", "escalate", "loot"]
     assert cx.get("/api/target", params={"target": "9.9.9.9"}, headers=H).status_code == 404
@@ -68,6 +76,8 @@ def test_run_from_site_scoped_to_target(cx):
                   json={"action_id": action["id"], "target": "10.10.10.161", "dry_run": True},
                   headers=H).json()
     assert out["dry_run"] is True and "10.10.10.161" in out["command"]
+    assert out["success"] is True and out["status"] == "dry-run"
+    assert out["message"] and out["facts"] == [] and out["added_count"] == 0
 
 
 def test_run_unknown_and_missing(cx):
