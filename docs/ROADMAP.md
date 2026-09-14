@@ -64,6 +64,14 @@ template (`docs/SOURCES.md` §2). Order by OSCP value: `web` (23) and
 reuse the shared fact-kind namespace so cross-domain gating works (e.g. a web
 foothold producing `linux.shell` unlocks the privesc pack).
 
+- **`web` (23) — DONE.** `obol/packs/orange_web_2025_03.json` via
+  `scripts/import_orange_web.js`; the planner merges packs (`pack.load_packs`), so
+  an HTTP port unlocks web recon after the nmap spine. Fact kinds are remapped onto
+  the shared namespace and kept to their narrowest claim. Recon parsers
+  (content discovery, vhosts, nikto) landed; the exploitation cards remain
+  explain-only until their success-signal parsers exist. Next lanes:
+  `linux-privesc` / `windows-privesc`.
+
 ## 4. OSCP report generation
 
 `obol report` narrated from the run ledger (`Workspace.runs`) + facts + lineage

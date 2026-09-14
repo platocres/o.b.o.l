@@ -22,6 +22,11 @@ from .facts import Fact, FactSet, ProofState
 
 PACKS_DIR = Path(__file__).parent / "packs"
 DEFAULT_PACK = "orange_ad_2025_03"
+# Packs loaded together by the planner. Sibling packs reuse the shared fact-kind
+# namespace so cross-domain gating works (e.g. an HTTP port unlocks web actions,
+# a web foothold could unlock a privesc pack). Order is load order only; the
+# planner ranks by each action's priority, not pack order.
+PACK_NAMES = ["orange_ad_2025_03", "orange_web_2025_03"]
 
 
 @dataclass
@@ -118,6 +123,15 @@ _FRIENDLY = {
     "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",
     "config.review": "config review", "lateral.movement": "lateral movement",
     "http.reachable": "HTTP is reachable", "winrm.reachable": "WinRM is reachable",
+    "web.content_map": "a map of discovered web content", "web.vhost": "a discovered virtual host",
+    "web.source": "exposed application source", "web.parameterized": "a parameterized web endpoint",
+    "web.authenticated": "authenticated web access", "web.upload_form": "a file-upload form",
+    "web.upload_confirmed": "a confirmed file upload", "web.lfi_confirmed": "a confirmed local file inclusion",
+    "web.sqli_confirmed": "a confirmed SQL injection", "web.cmdi_confirmed": "a confirmed command injection",
+    "web.ssrf_confirmed": "a confirmed SSRF", "web.users": "enumerated application users",
+    "foothold.webshell": "a web shell", "db.creds": "database credentials",
+    "loot.files": "recovered files", "cloud.aws_access": "AWS cloud access",
+    "exploit.candidate": "a candidate exploit",
 }
 
 
@@ -140,17 +154,36 @@ def load_pack(name: str = DEFAULT_PACK) -> list[Action]:
     return [Action.from_json(a) for a in data["actions"]]
 
 
+def load_packs(names: list[str] | None = None) -> list[Action]:
+    """Load and concatenate several packs (default: all shipped packs).
+
+    Action ids are unique across packs; if a later pack ever reused an id, the
+    first definition wins and the duplicate is dropped, so a merge can never
+    silently shadow methodology.
+    """
+    names = names if names is not None else PACK_NAMES
+    seen: set[str] = set()
+    out: list[Action] = []
+    for name in names:
+        for action in load_pack(name):
+            if action.id in seen:
+                continue
+            seen.add(action.id)
+            out.append(action)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # planner                                                                      #
 # --------------------------------------------------------------------------- #
 def next_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
-    pack = pack if pack is not None else load_pack()
+    pack = pack if pack is not None else load_packs()
     live = [a for a in pack if a.eligible(facts) and not a.settled(facts)]
     return sorted(live, key=lambda a: a.priority, reverse=True)
 
 
 def blocked_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
-    pack = pack if pack is not None else load_pack()
+    pack = pack if pack is not None else load_packs()
     blocked = [a for a in pack if not a.eligible(facts) and not a.settled(facts)]
     return sorted(blocked, key=lambda a: a.priority, reverse=True)
 

@@ -75,6 +75,28 @@ _NMAP_DISCOVERED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Web content/vhost discovery + nikto output shapes (tool-stable signals only).
+_WEB_GOBUSTER_RE = re.compile(r"^(?P<path>/\S*)\s+\(Status:\s*(?P<code>\d{3})\)", re.MULTILINE)
+_WEB_FEROX_RE = re.compile(
+    r"^\s*(?P<code>\d{3})\s+\w+\s+\d+l\s+\d+w\s+\d+c\s+(?P<url>https?://\S+)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_WEB_FFUF_RE = re.compile(r"^(?P<token>\S+)\s+\[Status:\s*(?P<code>\d{3})", re.MULTILINE)
+_WEB_DIRB_RE = re.compile(r"^\+\s+(?P<url>https?://\S+)\s+\(CODE:(?P<code>\d{3})", re.IGNORECASE | re.MULTILINE)
+_WEB_GOBUSTER_VHOST_RE = re.compile(r"Found:\s*(?P<name>\S+)\s+\(Status:\s*(?P<code>\d{3})\)", re.IGNORECASE)
+_NIKTO_FINDING_RE = re.compile(r"^\+\s+(?P<text>\S.+)$", re.MULTILINE)
+_WEB_PATH_IN_TEXT_RE = re.compile(r"/[A-Za-z0-9_][A-Za-z0-9_./-]{1,}")
+_WEB_INTERESTING_RE = re.compile(
+    r"/admin|/api|/upload|/backup|/login|/dashboard|/config|/phpmyadmin|/wp-admin"
+    r"|\.git|\.svn|\.bak|\.old|\.zip|\.tar|\.sql|\.env|\.config",
+    re.IGNORECASE,
+)
+_NIKTO_NOISE_PREFIXES = (
+    "target ip", "target hostname", "target port", "start time", "end time",
+    "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
+    "host(s) tested", "requests:", "0 host", "1 host",
+)
+
 # Post-credential AD path signals.
 _NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE)
 _AUTH_MATERIAL_RE = re.compile(r"^(?:(?P<domain>[^\\\s:/]+)\\)?(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^\s()]+)")
@@ -258,6 +280,30 @@ _INTERACTIVE_RE = re.compile(
 )
 
 
+def _is_web_vhost_command(command: str) -> bool:
+    c = command.lower()
+    if "gobuster vhost" in c:
+        return True
+    if "host: fuzz" in c or "host:fuzz" in c:
+        return True
+    return "wfuzz" in c and "host:" in c and "fuzz" in c
+
+
+def _is_web_content_command(command: str) -> bool:
+    if _is_web_vhost_command(command):
+        return False
+    c = command.lower()
+    if "feroxbuster" in c or "gobuster dir" in c or "dirb " in c or "dirsearch" in c:
+        return True
+    # ffuf content mode fuzzes the path (…/FUZZ); vhost mode fuzzes the Host header.
+    return "ffuf" in c and "/fuzz" in c
+
+
+def _url_path(url: str) -> str:
+    match = re.match(r"https?://[^/]+(/\S*)", url)
+    return match.group(1) if match else url
+
+
 def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
     lowered = command.lower()
     if action.id == "ad-anon-ldap-enum":
@@ -350,6 +396,13 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "certipy" in lowered_command or "pywhisker" in lowered_command:
         _parse_adcs(text, ws, command, source, facts)
+
+    if _is_web_vhost_command(command):
+        _parse_web_vhosts(text, ws, source, facts)
+    elif _is_web_content_command(command):
+        _parse_web_content(text, ws, source, facts)
+    if "nikto" in lowered_command:
+        _parse_nikto(text, ws, source, facts)
 
     return facts
 
@@ -1025,3 +1078,100 @@ def _normalize_identity(identity: str) -> str:
     if identity.lower() == "nt authority\\system":
         return "nt authority\\system"
     return identity
+
+
+# --------------------------------------------------------------------------- #
+# Web recon: content discovery, virtual hosts, nikto
+# --------------------------------------------------------------------------- #
+def _parse_web_content(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """Directory/content-discovery hits (gobuster/feroxbuster/ffuf/dirb) -> web.content_map.
+
+    Discovered paths are attack surface, not a vulnerability or access. Only the
+    hits the tool reports are recorded; 404s are ignored.
+    """
+    paths: set[str] = set()
+    for match in _WEB_GOBUSTER_RE.finditer(text):
+        if match.group("code") != "404":
+            paths.add(match.group("path"))
+    for match in _WEB_FEROX_RE.finditer(text):
+        if match.group("code") != "404":
+            paths.add(_url_path(match.group("url")))
+    for match in _WEB_DIRB_RE.finditer(text):
+        if match.group("code") != "404":
+            paths.add(_url_path(match.group("url")))
+    for match in _WEB_FFUF_RE.finditer(text):
+        token = match.group("token")
+        if match.group("code") == "404" or token.startswith(":") or token.lower() == "status":
+            continue
+        paths.add(token if token.startswith("/") else "/" + token)
+
+    paths = {p for p in paths if p and not p.lower().startswith("http")}
+    if not paths:
+        return
+    ordered = sorted(paths, key=str.lower)
+    value: dict = {"paths": ordered[:50], "count": len(ordered)}
+    interesting = [p for p in ordered if _WEB_INTERESTING_RE.search(p)]
+    if interesting:
+        value["interesting"] = interesting[:20]
+    _add(facts, Fact("web.content_map", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+
+def _parse_web_vhosts(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """Virtual-host fuzzing hits (ffuf/wfuzz/gobuster vhost) -> web.vhost."""
+    names: set[str] = set()
+    for match in _WEB_GOBUSTER_VHOST_RE.finditer(text):
+        if match.group("code") != "404":
+            names.add(match.group("name"))
+    for match in _WEB_FFUF_RE.finditer(text):
+        token = match.group("token")
+        if match.group("code") == "404" or token.startswith(":") or token.lower() == "status":
+            continue
+        names.add(token)
+
+    names = {n.strip().rstrip(",") for n in names if n and not n.lower().startswith("http")}
+    names = {n for n in names if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,}", n)}
+    if not names:
+        return
+    ordered = sorted(names, key=str.lower)
+    _add(facts, Fact("web.vhost", f"host:{ws.target}", {"vhosts": ordered[:50], "count": len(ordered)}, ProofState.SUPPORTED, source))
+
+
+def _parse_nikto(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """Nikto output -> candidate findings (exploit.candidate) and any paths it reveals.
+
+    Nikto findings are leads to verify, never confirmed vulnerabilities or access.
+    """
+    findings: list[str] = []
+    for raw in _NIKTO_FINDING_RE.findall(text):
+        finding = raw.strip()
+        if not finding or finding.lower().startswith(_NIKTO_NOISE_PREFIXES):
+            continue
+        findings.append(finding)
+    if not findings:
+        return
+
+    paths: set[str] = set()
+    for finding in findings:
+        paths.update(_WEB_PATH_IN_TEXT_RE.findall(finding))
+    if paths:
+        ordered = sorted(paths, key=str.lower)
+        _add(
+            facts,
+            Fact(
+                "web.content_map",
+                f"host:{ws.target}",
+                {"paths": ordered[:50], "count": len(ordered), "tool": "nikto"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    _add(
+        facts,
+        Fact(
+            "exploit.candidate",
+            f"host:{ws.target}",
+            {"count": len(findings), "findings": findings[:20], "tool": "nikto"},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )

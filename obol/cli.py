@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import board
 from .facts import Fact
-from .pack import load_pack, next_actions
+from .pack import load_packs, next_actions
 from .parsers import parse_action_output
 from .runner import RunnerError, run_command
 from .seed import seed_forest
@@ -190,7 +190,7 @@ def cmd_playbook(args) -> None:
         print(f"no playbook named {args.name!r}. available: {names}", file=sys.stderr)
         raise SystemExit(1)
     try:
-        steps = playbook.resolve_steps(pb, load_pack())
+        steps = playbook.resolve_steps(pb, load_packs())
     except KeyError as exc:
         print(f"playbook {pb.name!r} references unknown pack action {exc}", file=sys.stderr)
         raise SystemExit(1)

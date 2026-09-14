@@ -1,0 +1,23 @@
+{
+  "name": "web-recon",
+  "title": "Web Initial Recon",
+  "description": "The opening evidence sweep for an HTTP target: content discovery, nikto, and virtual-host fuzzing. Unlocks once nmap has proven an HTTP port. Each step runs through the same scope-enforced runner and parser as `obol run`.",
+  "steps": [
+    {
+      "label": "Content discovery",
+      "action_id": "content-discovery",
+      "note": "Fuzz paths for the unlinked surface (admin panels, .git, backups, /api) — maps discovered content."
+    },
+    {
+      "label": "Nikto scan",
+      "action_id": "nikto-scan",
+      "note": "Baseline server/app misconfiguration and interesting-file leads (candidates to verify, not confirmed vulns)."
+    },
+    {
+      "label": "Virtual-host discovery",
+      "action_id": "vhost-discovery",
+      "require_approval": true,
+      "note": "Subdomain/vhost fuzzing — noisier, and needs a known domain (set one with --set domain=example.com if nmap did not reveal it)."
+    }
+  ]
+}
