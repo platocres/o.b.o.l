@@ -45,7 +45,9 @@ _PASSWORD_FLAG_RE = re.compile(
     r"(?P<prefix>\s(?:-p|--password)\s+)(?P<value>'[^']*'|\"[^\"]*\"|\S+)",
     re.IGNORECASE,
 )
-_IMPACKET_SECRET_RE = re.compile(r"(?P<left>\b[^\s/'\"]+/[^\s:'\"]+:)(?P<secret>[^@\s'\"]+)(?P<right>@)")
+_IMPACKET_SECRET_RE = re.compile(
+    r"(?P<left>\b[^\s/'\"]+/[^\s:'\"]+:)(?P<secret>[^@\s'\"]+)(?P<quote>['\"]?)(?P<right>@)"
+)
 _CATEGORY_ORDER = {
     "target": 0,
     "scan": 1,
@@ -113,7 +115,7 @@ def redact_command(command: str, *, include_secrets: bool = False) -> str:
     """
     if include_secrets or not command:
         return command
-    redacted = _IMPACKET_SECRET_RE.sub(r"\g<left><redacted>\g<right>", command)
+    redacted = _IMPACKET_SECRET_RE.sub(r"\g<left><redacted>\g<quote>\g<right>", command)
     if _AUTH_TOOL_RE.search(redacted):
         redacted = _PASSWORD_FLAG_RE.sub(r"\g<prefix><redacted>", redacted)
     return redacted
