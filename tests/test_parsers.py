@@ -146,7 +146,7 @@ def test_nxc_smb_guest_rid_brute_produces_user_list_and_guest_session_only():
     ws = _workspace()
     ws.facts.add(Fact("ad.domain_known", "domain:corp.local", {"name": "corp.local"}, source="test"))
     action = next(action for action in load_pack() if action.id == "ad-user-enum")
-    out = """
+    out = r"""
 SMB         10.10.10.10     445    DC01         [+] corp.local\guest:
 SMB         10.10.10.10     445    DC01         500: CORP\Administrator (SidTypeUser)
 SMB         10.10.10.10     445    DC01         1105: CORP\alice.smith (SidTypeUser)

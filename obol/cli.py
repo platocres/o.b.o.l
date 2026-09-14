@@ -201,9 +201,9 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--demo", action="store_true", help="seed the HTB Forest demo facts")
     pi.set_defaults(func=cmd_init)
 
-    sub.add_parser("next", help="show proven facts, ranked next actions, and blocked paths").set_defaults(func=cmd_next)
+    sub.add_parser("next", help="show proven facts and the ranked next actions that matter").set_defaults(func=cmd_next)
 
-    pe = sub.add_parser("explain", help="show the command and proof boundary for next action N")
+    pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)
     pe.set_defaults(func=cmd_explain)
 
