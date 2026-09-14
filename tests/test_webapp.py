@@ -54,11 +54,12 @@ def test_targets_and_bundle(cx):
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     assert set(b) >= {"meta", "access", "phase", "chain", "next", "tools", "checklist",
                       "findings", "commands", "evidence", "graph", "facts_summary",
-                      "facts_total"}
+                      "facts_total", "quickstart"}
     # a bare target unlocks the nmap prelude (so you can start from the UI)
     assert any(a["id"] == "nmap-fast-open-ports" for a in b["next"])
-    # the target bundle carries accumulated useful facts for the operator memory panel
+    # the target bundle carries accumulated useful facts and a Quick Start plan
     assert b["facts_total"] >= 1
+    assert b["quickstart"]["steps"][0]["action_id"] == "nmap-fast-open-ports"
     assert any(
         f["kind"] == "target.configured"
         for section in b["facts_summary"]
@@ -72,6 +73,10 @@ def test_targets_and_bundle(cx):
 def test_run_from_site_scoped_to_target(cx):
     b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
     action = next(a for a in b["next"] if a["id"] == "nmap-fast-open-ports")
+    preflight = action["variants"][0]["preflight"]
+    assert preflight["command"].endswith("10.10.10.161")
+    assert preflight["missing_inputs"] == []
+    assert preflight["parser"]["state"] == "supported"
     out = cx.post("/api/run/action",
                   json={"action_id": action["id"], "target": "10.10.10.161", "dry_run": True},
                   headers=H).json()
@@ -83,6 +88,41 @@ def test_run_from_site_scoped_to_target(cx):
 def test_run_unknown_and_missing(cx):
     assert cx.post("/api/run/action", json={"action_id": "nope"}, headers=H).status_code == 404
     assert cx.post("/api/run/action", json={}, headers=H).status_code == 422
+
+
+def test_preflight_reports_missing_fact_prerequisite(cx):
+    r = cx.get("/api/action/preflight",
+               params={"action_id": "nmap-version-scripts", "target": "10.10.10.161"},
+               headers=H)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["can_run"] is False
+    assert "nmap_ports" in {i["name"] for i in data["missing_inputs"]}
+    assert any(i["kind"] == "missing_input" for i in data["issues"])
+
+
+def test_inputs_fill_command_tokens(cx):
+    before = cx.get("/api/action/preflight",
+                    params={"action_id": "asrep-roast", "target": "10.10.10.161"},
+                    headers=H).json()
+    assert {"userlist", "hashfile"}.issubset({i["name"] for i in before["missing_inputs"]})
+    r = cx.post("/api/inputs",
+                json={"target": "10.10.10.161",
+                      "inputs": {"userlist": "users.txt", "hashfile": "hashes.asrep"}},
+                headers=H)
+    assert r.status_code == 200 and set(r.json()["saved"]) == {"userlist", "hashfile"}
+    after = cx.get("/api/action/preflight",
+                   params={"action_id": "asrep-roast", "target": "10.10.10.161"},
+                   headers=H).json()
+    assert "users.txt" in after["command"] and "hashes.asrep" in after["command"]
+    assert not ({"userlist", "hashfile"} & {i["name"] for i in after["missing_inputs"]})
+
+
+def test_playbook_steps_include_preflight(cx):
+    pb = cx.get("/api/playbook/ad-recon", params={"target": "10.10.10.161"}, headers=H).json()
+    assert pb["steps"]
+    assert {"preflight", "command"}.issubset(pb["steps"][0])
+    assert pb["steps"][0]["preflight"]["command"].endswith("10.10.10.161")
 
 
 def test_checklist_toggle_persists(cx):
