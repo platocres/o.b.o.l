@@ -18,8 +18,10 @@ can never touch a network the operator has not put in scope.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 
+from .facts import Fact, ProofState
 from .runner import RunnerError, run_command
 from .scope import normalize_target, target_in_scope
 from .workspace import Workspace
@@ -55,7 +57,12 @@ def discovery_command(ws: Workspace, range_: str) -> str:
 
 def parse_live_hosts(text: str) -> list[str]:
     """Extract the live host IPs from `nmap -sn` output, de-duplicated, in order."""
-    hosts: list[str] = []
+    return [record["host"] for record in parse_live_host_records(text)]
+
+
+def parse_live_host_records(text: str) -> list[dict]:
+    """Extract live hosts plus any rDNS identity nmap reported."""
+    records: list[dict] = []
     seen: set[str] = set()
     for match in _REPORT_RE.finditer(text or ""):
         raw = match.group("ip") or match.group("name")
@@ -65,12 +72,48 @@ def parse_live_hosts(text: str) -> list[str]:
         if not norm or norm in seen:
             continue
         try:
-            int(norm.split(".")[0]) if "." in norm else int(norm.split(":")[0], 16)
+            ipaddress.ip_address(norm)
         except ValueError:
             continue
         seen.add(norm)
-        hosts.append(norm)
-    return hosts
+        record = {"host": norm}
+        name = (match.group("name") or "").strip().strip(".")
+        if match.group("ip") and name and normalize_target(name) != norm:
+            if "." in name:
+                parts = [part for part in name.split(".") if part]
+                record["fqdn"] = name.lower()
+                record["hostname"] = parts[0]
+                if len(parts) > 1:
+                    record["domain"] = ".".join(parts[1:]).lower()
+            else:
+                record["hostname"] = name
+        records.append(record)
+    return records
+
+
+def _record_identity_facts(ws: Workspace, record: dict, source: str) -> list[str]:
+    host = record["host"]
+    produced = []
+    facts = [
+        Fact("host.up", f"host:{host}", {"target": host}, ProofState.SUPPORTED, source),
+    ]
+    if record.get("hostname"):
+        facts.append(Fact("host.hostname", f"host:{host}", {"name": record["hostname"]}, ProofState.SUPPORTED, source))
+    if record.get("fqdn"):
+        value = {"fqdn": record["fqdn"]}
+        if record.get("hostname"):
+            value["hostname"] = record["hostname"]
+        if record.get("domain"):
+            value["domain"] = record["domain"]
+        facts.append(Fact("host.fqdn", f"host:{host}", value, ProofState.SUPPORTED, source))
+    if record.get("domain"):
+        facts.append(Fact("host.domain", f"host:{host}", {"domain": record["domain"]}, ProofState.SUPPORTED, source))
+
+    for fact in facts:
+        if ws.facts.add(fact):
+            produced.append(fact.kind)
+    ws.apply_fact_enrichment(facts)
+    return produced
 
 
 def run_sweep(ws: Workspace, range_: str, *, dry_run: bool = False,
@@ -99,24 +142,38 @@ def run_sweep(ws: Workspace, range_: str, *, dry_run: bool = False,
     if dry_run:
         return summary
 
-    hosts = parse_live_hosts(result.stdout)
+    records = parse_live_host_records(result.stdout)
+    hosts = [record["host"] for record in records]
     created: list[str] = []
     existing: list[str] = []
-    for host in hosts:
+    produced: list[str] = []
+    for record in records:
+        host = record["host"]
         # Defense in depth: only add a host that really falls inside an authorized
         # scope entry (it does — it came from a scoped range — but never trust the
         # parse alone to widen scope).
         allowed, _ = target_in_scope(host, ws.scope)
         if not allowed:
             continue
-        (existing if ws.get_target(host) else created).append(host)
-        ws.add_target(host)
+        already_present = ws.get_target(host)
+        (existing if already_present else created).append(host)
+        ws.add_target(
+            host,
+            label="" if already_present else (record.get("hostname") or record.get("fqdn") or ""),
+        )
+        ws.enrich_target_identity(
+            host,
+            hostname=record.get("hostname", ""),
+            fqdn=record.get("fqdn", ""),
+            domain=record.get("domain", ""),
+        )
+        produced.extend(_record_identity_facts(ws, record, command))
 
     summary["hosts"] = hosts
     summary["created"] = created
     summary["existing"] = existing
     ws.record_run(
-        "nmap", command, [],
+        "nmap", command, sorted(set(produced)),
         target="", surface="sweep", sweep=True, range=range_,
         returncode=result.returncode, timed_out=result.timed_out,
         dry_run=False, stdout=str(result.stdout_path), stderr=str(result.stderr_path),
@@ -127,4 +184,10 @@ def run_sweep(ws: Workspace, range_: str, *, dry_run: bool = False,
     return summary
 
 
-__all__ = ["DISCOVERY_COMMAND", "discovery_command", "parse_live_hosts", "run_sweep"]
+__all__ = [
+    "DISCOVERY_COMMAND",
+    "discovery_command",
+    "parse_live_hosts",
+    "parse_live_host_records",
+    "run_sweep",
+]

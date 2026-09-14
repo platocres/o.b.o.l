@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS targets (
     host     TEXT PRIMARY KEY,
     label    TEXT,
+    hostname TEXT,
+    fqdn     TEXT,
+    domain   TEXT,
     os       TEXT,
     status   TEXT,
     notes    TEXT,
@@ -99,6 +102,15 @@ CREATE TABLE IF NOT EXISTS events (
 _EVENT_KEEP = 2000
 
 
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the schema and apply tiny additive migrations for older stores."""
+    conn.executescript(_SCHEMA)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(targets)")}
+    for name in ("hostname", "fqdn", "domain"):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE targets ADD COLUMN {name} TEXT")
+
+
 def fact_hash(kind: str, scope: str, value: dict) -> str:
     """Stable identity for a fact row: same (kind, scope, value) always hashes the
     same, so re-recording a fact is an idempotent no-op and two processes that both
@@ -134,7 +146,7 @@ class Store:
     def initialize(self) -> None:
         conn = self.connect()
         try:
-            conn.executescript(_SCHEMA)
+            _ensure_schema(conn)
             conn.commit()
         finally:
             conn.close()
@@ -145,10 +157,12 @@ class Store:
         JSON payload uses), for `Workspace.load` to build its in-memory model."""
         conn = self.connect()
         try:
-            conn.executescript(_SCHEMA)
+            _ensure_schema(conn)
             meta = {r["k"]: r["v"] for r in conn.execute("SELECT k, v FROM meta")}
             targets = [
                 {"host": r["host"], "label": r["label"], "os": r["os"] or "",
+                 "hostname": r["hostname"] or "", "fqdn": r["fqdn"] or "",
+                 "domain": r["domain"] or "",
                  "status": r["status"] or "active", "notes": r["notes"] or "",
                  "added_at": r["added_at"] or 0.0}
                 for r in conn.execute("SELECT * FROM targets ORDER BY ord, rowid")
@@ -202,7 +216,7 @@ class Store:
         one it forwarded, oldest first."""
         conn = self.connect()
         try:
-            conn.executescript(_SCHEMA)
+            _ensure_schema(conn)
             rows = conn.execute(
                 "SELECT id, ts, type, target, detail FROM events WHERE id > ? ORDER BY id LIMIT ?",
                 (int(after_id), int(limit)),
@@ -218,7 +232,7 @@ class Store:
     def latest_event_id(self) -> int:
         conn = self.connect()
         try:
-            conn.executescript(_SCHEMA)
+            _ensure_schema(conn)
             row = conn.execute("SELECT MAX(id) AS m FROM events").fetchone()
         finally:
             conn.close()
@@ -245,7 +259,7 @@ class Store:
         events: list[dict] = []
         conn = self.connect()
         try:
-            conn.executescript(_SCHEMA)
+            _ensure_schema(conn)
             conn.execute("BEGIN IMMEDIATE")
 
             # meta -------------------------------------------------------------
@@ -269,12 +283,23 @@ class Store:
                     continue
                 existed = conn.execute("SELECT 1 FROM targets WHERE host=?", (host,)).fetchone()
                 conn.execute(
-                    "INSERT INTO targets(host, label, os, status, notes, added_at, ord) "
-                    "VALUES(?,?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET "
-                    "label=excluded.label, os=excluded.os, status=excluded.status, "
+                    "INSERT INTO targets(host, label, hostname, fqdn, domain, os, status, notes, added_at, ord) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET "
+                    "label=CASE "
+                    "WHEN excluded.label IS NULL OR excluded.label='' THEN targets.label "
+                    "WHEN lower(excluded.label)=lower(excluded.host) "
+                    "AND targets.label IS NOT NULL AND targets.label!='' "
+                    "AND lower(targets.label)!=lower(targets.host) THEN targets.label "
+                    "ELSE excluded.label END, "
+                    "hostname=COALESCE(NULLIF(excluded.hostname, ''), targets.hostname), "
+                    "fqdn=COALESCE(NULLIF(excluded.fqdn, ''), targets.fqdn), "
+                    "domain=COALESCE(NULLIF(excluded.domain, ''), targets.domain), "
+                    "os=COALESCE(NULLIF(excluded.os, ''), targets.os), status=excluded.status, "
                     "notes=excluded.notes, ord=excluded.ord",
-                    (host, t.get("label") or host, t.get("os", ""), t.get("status", "active"),
-                     t.get("notes", ""), t.get("added_at", time.time()), i),
+                    (host, t.get("label") or host, t.get("hostname", ""),
+                     t.get("fqdn", ""), t.get("domain", ""), t.get("os", ""),
+                     t.get("status", "active"), t.get("notes", ""),
+                     t.get("added_at", time.time()), i),
                 )
                 if not existed:
                     events.append({"type": "target_added", "target": host,

@@ -139,7 +139,8 @@ obol/
                  (target=... pins a run to a host); eligible_actions = tool palette
   parsers.py     evidence parsers; generic nmap/nxc/LDAP output -> narrow facts
   graph.py       facts+actions -> per-target graph model + mermaid (one projection);
-                 build_engagement_graph stitches all targets + BloodHound overlay
+                 build_engagement_graph stitches scope, targets, domains, services,
+                 and BloodHound overlay from evidence-backed links
   report.py      OSCP markdown report + build_report_context (per-target rollup +
                  evidence + engagement graph, structured for the web)
   web.py         self-contained read-only static HTML snapshot (`obol web`)

@@ -28,6 +28,13 @@ def test_parse_live_hosts_handles_rdns_and_bare_ips():
     # the IP is taken from the parens when reverse DNS resolved, else the bare token
     assert discovery.parse_live_hosts(SN_OUTPUT) == [
         "10.10.10.161", "10.10.10.175", "10.10.10.200"]
+    records = discovery.parse_live_host_records(SN_OUTPUT)
+    assert records[1] == {
+        "host": "10.10.10.175",
+        "hostname": "dc02",
+        "fqdn": "dc02.htb.local",
+        "domain": "htb.local",
+    }
 
 
 def test_parse_live_hosts_empty_when_nothing_up():
@@ -49,6 +56,10 @@ def test_run_sweep_creates_targets_for_live_hosts(tmp_path, monkeypatch):
     out = discovery.run_sweep(ws, "10.10.10.0/24")
     assert out["created"] == ["10.10.10.161", "10.10.10.175", "10.10.10.200"]
     assert {t["host"] for t in ws.targets} == set(out["created"])
+    dc02 = ws.get_target("10.10.10.175")
+    assert dc02["label"] == "dc02" and dc02["fqdn"] == "dc02.htb.local"
+    assert ws.facts.has("host.up") and ws.facts.has("host.fqdn")
+    assert {"host.up", "host.fqdn"} <= set(ws.runs[-1]["produced"])
     # a re-sweep is idempotent — the same hosts come back as existing, not created
     out2 = discovery.run_sweep(ws, "10.10.10.0/24")
     assert out2["created"] == [] and set(out2["existing"]) == set(out["created"])
@@ -56,6 +67,19 @@ def test_run_sweep_creates_targets_for_live_hosts(tmp_path, monkeypatch):
     row = ws.runs[-1]
     assert row["sweep"] is True and row["range"] == "10.10.10.0/24"
     assert Workspace(tmp_path).load().targets, "targets persisted"
+
+
+def test_run_sweep_enriches_existing_targets_without_overwriting_custom_label(tmp_path, monkeypatch):
+    ws = Workspace(tmp_path)
+    ws.add_scope("10.10.10.0/24")
+    ws.add_target("10.10.10.175", "MANUAL")
+    monkeypatch.setattr(discovery, "run_command", lambda *a, **k: _result(SN_OUTPUT))
+
+    discovery.run_sweep(ws, "10.10.10.0/24")
+    target = ws.get_target("10.10.10.175")
+    assert target["label"] == "MANUAL"
+    assert target["hostname"] == "dc02"
+    assert target["domain"] == "htb.local"
 
 
 def test_run_sweep_refuses_unauthorized_range(tmp_path, monkeypatch):

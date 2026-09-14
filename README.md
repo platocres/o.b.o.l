@@ -50,7 +50,7 @@ surface that drives the *same* store as the terminal, not a separate app:
 
 - **Engagements** — create and switch between engagements; each holds many targets.
 - **Overview** — target status cards, evidence charted by category, a BloodHound
-  domain panel, the engagement attack path, and a live activity feed.
+  domain panel, the scan-populated engagement map, and a live activity feed.
 - **Per-target tabs** — click a target for a tabbed view instead of one long page:
   - **Overview** — an attack-chain bar showing where you are for that target, the
     per-target path map, and ranked next moves grouped by phase.
@@ -66,8 +66,9 @@ surface that drives the *same* store as the terminal, not a separate app:
   path…"**, and point-and-click run of any available tool against a chosen target.
   The per-target Tools tab shows the service-aware subset; a link opens the full
   catalogue. A tool the page reports as found is guaranteed to launch.
-- **Engagement attack path** — every target stitched to the shared domain and to
-  each other by the evidence that connects them, with a BloodHound overlay.
+- **Engagement map** — scope ranges, discovered hosts, hostnames/FQDNs/domains,
+  exposed services, and BloodHound findings stitched together only where evidence
+  connects them.
 - **Run from the site** — launching a tool or playbook step goes through the *same*
   scope-enforced runner/parser/store as the terminal; the browser triggers by action
   id + target, so the server fills the command from that target's facts and secrets

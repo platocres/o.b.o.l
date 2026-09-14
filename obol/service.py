@@ -109,6 +109,7 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
         for fact in parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd):
             if ws.facts.add(fact):
                 added.append(fact)
+        ws.apply_fact_enrichment(added)
 
     ledger = {"target": ws.target}
     ledger.update(ledger_extra or {})

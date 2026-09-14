@@ -10,6 +10,12 @@ from obol.workspace import Workspace, has_state
 def test_persist_and_reload(tmp_path):
     ws = Workspace(tmp_path)
     ws.add_target("10.10.10.5", "DC")
+    ws.enrich_target_identity(
+        "10.10.10.5",
+        hostname="DC01",
+        fqdn="dc01.corp.local",
+        domain="corp.local",
+    )
     ws.facts.add(Fact("ports.open", "host:10.10.10.5", {"ports": [445]}, source="nmap"))
     ws.record_run("nmap", "nmap -Pn 10.10.10.5", ["ports.open"])
     ws.save()
@@ -17,6 +23,9 @@ def test_persist_and_reload(tmp_path):
 
     again = Workspace(tmp_path).load()
     assert [t["host"] for t in again.targets] == ["10.10.10.5"]
+    assert again.targets[0]["hostname"] == "DC01"
+    assert again.targets[0]["fqdn"] == "dc01.corp.local"
+    assert again.targets[0]["domain"] == "corp.local"
     assert again.facts.has("ports.open")
     assert len(again.runs) == 1 and again.runs[0]["id"]
 
@@ -43,6 +52,35 @@ def test_two_writers_do_not_clobber(tmp_path):
     assert {"10.0.0.1", "10.0.0.2"} <= hosts, "both writers' targets survived"
     assert {"smb.reachable", "http.reachable"} <= final.facts.kinds()
     assert len([r for r in final.runs if r["tool"] in ("nxc", "nmap")]) == 2
+
+
+def test_stale_writer_does_not_blank_target_identity(tmp_path):
+    Workspace(tmp_path).load().save()  # create the db
+    enriched = Workspace(tmp_path).load()
+    stale = Workspace(tmp_path).load()
+
+    enriched.add_target("10.0.0.1")
+    enriched.enrich_target_identity(
+        "10.0.0.1",
+        hostname="DC01",
+        fqdn="dc01.corp.local",
+        domain="corp.local",
+    )
+    enriched.save()
+
+    stale.add_target("10.0.0.1")  # older blank target record
+    stale.save()
+
+    final = Workspace(tmp_path).load().get_target("10.0.0.1")
+    assert final["label"] == "DC01"
+    assert final["hostname"] == "DC01"
+    assert final["fqdn"] == "dc01.corp.local"
+    assert final["domain"] == "corp.local"
+
+    editor = Workspace(tmp_path).load()
+    editor.add_target("10.0.0.1", "SAUNA")
+    editor.save()
+    assert Workspace(tmp_path).load().get_target("10.0.0.1")["label"] == "SAUNA"
 
 
 def test_resave_is_idempotent(tmp_path):
@@ -96,8 +134,12 @@ def test_legacy_json_migration(tmp_path):
         "name": "Legacy Eng", "created_at": 1.0, "target": "10.0.0.1",
         "targets": [{"host": "10.0.0.1", "label": "OLD"}],
         "scope": ["10.0.0.1"],
-        "facts": [{"kind": "host.up", "scope": "host:10.0.0.1", "value": {},
-                   "state": "supported", "source": "old nmap"}],
+        "facts": [
+            {"kind": "host.up", "scope": "host:10.0.0.1", "value": {},
+             "state": "supported", "source": "old nmap"},
+            {"kind": "host.domain", "scope": "host:10.0.0.1", "value": {"domain": "corp.local"},
+             "state": "supported", "source": "old nmap"},
+        ],
         "runs": [{"id": "legacy1", "tool": "nmap", "command": "x", "produced": [], "at": 1.0}],
     }
     (obol / "state.json").write_text(json.dumps(legacy))
@@ -105,10 +147,12 @@ def test_legacy_json_migration(tmp_path):
 
     ws = Workspace(tmp_path).load()          # reads legacy JSON in memory
     assert ws.name == "Legacy Eng" and ws.facts.has("host.up")
+    assert ws.targets[0]["domain"] == "corp.local"
     ws.save()                                 # migrates to SQLite
     assert (obol / STATE_DB).exists()
 
     migrated = Workspace(tmp_path).load()
     assert migrated.name == "Legacy Eng"
+    assert migrated.targets[0]["domain"] == "corp.local"
     assert migrated.facts.has("host.up")
     assert len(migrated.runs) == 1

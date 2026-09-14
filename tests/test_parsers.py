@@ -116,6 +116,9 @@ PORT    STATE SERVICE       VERSION
     values = {fact.kind: fact.value for fact in facts}
     assert values["ad.domain_known"]["name"] == "corp.local"
     assert values["ad.base_dn"]["base_dn"] == "DC=corp,DC=local"
+    assert values["host.domain"]["domain"] == "corp.local"
+    assert values["host.hostname"]["name"] == "DC01"
+    assert values["host.fqdn"]["fqdn"] == "dc01.corp.local"
     assert values["ad.dc_candidate"]["name"] == "DC01"
     assert values["smb.signing"]["required"] is True
     assert values["web.title"]["titles"] == ["Internal Portal"]
@@ -132,7 +135,7 @@ LDAP        10.10.10.10     389    DC01         [*] Windows Server 2019 Build 17
 """
     facts = parse_action_output(action, ws, "nxc ldap 10.10.10.10 -u '' -p ''", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "ldap.reachable"} <= kinds
+    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname", "host.domain", "ldap.reachable"} <= kinds
     assert "credential.available" not in kinds
     assert "access.admin" not in kinds
     assert "foothold.windows" not in kinds
@@ -176,7 +179,7 @@ SMB         10.10.10.10     445    DC01         [*] Windows Server 2019 Build 17
 """
     facts = parse_action_output(action, ws, "nxc smb 10.10.10.10", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "smb.reachable", "smb.signing", "smb.smbv1"} <= kinds
+    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname", "host.domain", "smb.reachable", "smb.signing", "smb.smbv1"} <= kinds
     values = {fact.kind: fact.value for fact in facts}
     assert values["smb.signing"]["enabled"] is True
     assert values["smb.smbv1"]["enabled"] is False

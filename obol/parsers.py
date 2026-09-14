@@ -496,6 +496,7 @@ def _parse_nmap(text: str, ws: Workspace, source: str, facts: list[Fact], action
 def _parse_nmap_script_facts(text: str, ws: Workspace, source: str, facts: list[Fact]) -> dict:
     context: dict = {}
     domains = {match.group("domain").strip().lower() for match in _NMAP_DOMAIN_NAME_RE.finditer(text)}
+    fqdns = {match.group("fqdn").strip().lower() for match in _NMAP_FQDN_RE.finditer(text)}
     for match in _NMAP_FQDN_RE.finditer(text):
         fqdn = match.group("fqdn").strip().lower()
         parts = [part for part in fqdn.split(".") if part]
@@ -506,10 +507,21 @@ def _parse_nmap_script_facts(text: str, ws: Workspace, source: str, facts: list[
         context["domain"] = domain
         _add(facts, Fact("ad.domain_known", f"domain:{domain}", {"name": domain}, ProofState.SUPPORTED, source))
         _add(facts, Fact("ad.base_dn", f"domain:{domain}", {"base_dn": _base_dn_from_domain(domain)}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("host.domain", f"host:{ws.target}", {"domain": domain}, ProofState.SUPPORTED, source))
 
     names = {match.group("name").strip() for match in _NMAP_COMPUTER_NAME_RE.finditer(text)}
     if names:
         context["name"] = sorted(names, key=str.lower)[0]
+        _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": context["name"]}, ProofState.SUPPORTED, source))
+
+    for fqdn in sorted(fqdns, key=str.lower):
+        parts = [part for part in fqdn.split(".") if part]
+        value = {"fqdn": fqdn}
+        if parts:
+            value["hostname"] = parts[0]
+        if len(parts) > 1:
+            value["domain"] = ".".join(parts[1:])
+        _add(facts, Fact("host.fqdn", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
 
     signing = _NMAP_SMB_SIGNING_RE.search(text)
     if signing:
@@ -582,8 +594,11 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         if domain and domain not in {"None", "-"}:
             _add(facts, Fact("ad.domain_known", f"domain:{domain}", {"name": domain}, ProofState.SUPPORTED, source))
             _add(facts, Fact("ad.base_dn", f"domain:{domain}", {"base_dn": _base_dn_from_domain(domain)}, ProofState.SUPPORTED, source))
+            _add(facts, Fact("host.domain", f"host:{ws.target}", {"domain": domain}, ProofState.SUPPORTED, source))
 
     name_match = _NAME_RE.search(text)
+    if name_match:
+        _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": name_match.group(1).strip()}, ProofState.SUPPORTED, source))
     if name_match or domain:
         value = {"host": ws.target}
         if name_match:
@@ -684,6 +699,7 @@ def _parse_ldapsearch(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         if domain:
             value["domain"] = domain
             _add(facts, Fact("ad.domain_known", f"domain:{domain}", {"name": domain}, ProofState.SUPPORTED, source))
+            _add(facts, Fact("host.domain", f"host:{ws.target}", {"domain": domain}, ProofState.SUPPORTED, source))
         _add(facts, Fact("ad.base_dn", scope, value, ProofState.SUPPORTED, source))
         _add(facts, Fact("ldap.reachable", f"host:{ws.target}", {"tool": "ldapsearch"}, ProofState.SUPPORTED, source))
 

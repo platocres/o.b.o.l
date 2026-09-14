@@ -18,8 +18,8 @@ Priority order. Item 1 is what the tool most needs to become usable on a live bo
   (`workspace.targets`, per-target fact scoping via `facts_for_target`). The web is
   a tabbed per-target console (Overview with an attack-chain bar + per-target path,
   a service-aware point-and-click Tools palette, Playbooks, a static Checklist,
-  Findings, Evidence/screenshots, Commands), plus an engagement-wide attack path
-  that stitches targets to the shared domain and a **BloodHound** overlay
+  Findings, Evidence/screenshots, Commands), plus an engagement-wide map that
+  stitches scope, targets, domains, services, and a **BloodHound** overlay
   (`obol/bloodhound.py`). Per-target findings and evidence roll up into the report.
   `obol engagement` / `obol target` manage it from the terminal.
 - **Robust web surface (item 5, largely done):** localhost FastAPI app
@@ -84,11 +84,15 @@ The build sequence (each a reviewable PR):
   real multi-target bug: `FactSet.add` deduped by `(kind, value)` and dropped one
   host's fact when two targets produced an identical baseline finding (e.g.
   `port:445`) — it now dedups by `(kind, scope, value)`, matching the store's key.
-- **(d) Target enrichment — hostname + domain.** A parser maps nmap/nxc/LDAP
-  hostname and FQDN output to the discovered host; `ws` renames the target's
-  label from IP to hostname when found. Add a `domain` field to the target
-  record (store migration: new `targets.domain` column) and group the web target
-  list by domain as `ad.domain_known` / BloodHound data lands.
+- **(d) Target enrichment + engagement map — DONE.** Parsers map nmap/nxc/LDAP
+  hostname, FQDN, and domain output back to the host that produced it. Discovery
+  also preserves rDNS names from `nmap -sn`. `Workspace` stores `hostname`,
+  `fqdn`, and `domain` on each target, upgrades raw IP labels when identity is
+  found, and preserves operator-provided labels. Store migration adds those
+  target identity columns. The web groups targets by domain and the engagement
+  map now populates from scans: authorized scope ranges link to matching targets,
+  targets link to domains only when host-scoped evidence supports it, and open
+  ports/services render as service nodes.
 - **(e) Engagement-level run & findings view.** Surface sweep runs and the
   facts/findings they produce at the *engagement* level (not just per-target):
   a live activity feed of the sweep's steps and a clean, category-organized

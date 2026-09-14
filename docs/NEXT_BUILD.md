@@ -19,7 +19,7 @@ panel. PR #18 shipped the command composer/preflight layer plus a visible
 per-target **Quick Start** button that runs nmap first and then safe service-aware
 enumeration, including nxc-first AD/SMB checks.
 
-## Current build: Quick Start Orchestrator + Parser Expansion v1
+## Shipped: Quick Start Orchestrator + Parser Expansion v1
 
 Quick Start should feel alive, not like one long blocking request. This build turns
 Quick Start into a background job with a live step timeline:
@@ -40,6 +40,16 @@ nikto candidate leads. These facts must remain proof-bound: no exploit, credenti
 admin, or foothold fact is created from basic enumeration output.
 
 This queue exists so agents do not drift after each build lands.
+
+## Current build: scan-populated engagement map + target enrichment v1
+
+The overview map now fills from the same evidence as the terminal workflow:
+nmap discovery keeps rDNS identity, nmap/nxc/LDAP parsers emit host-scoped
+hostname/FQDN/domain facts, the target record persists that identity, and the web
+groups hosts by domain. The engagement graph now renders authorized scope ranges,
+discovered targets, evidence-backed domain links, open service nodes, and the
+BloodHound overlay without inventing host-to-host relationships from shared
+domain facts alone.
 
 ## 1. Playbook data model and dry-run runner — DONE
 
