@@ -180,11 +180,11 @@ function drawSevBars(canvasId, counts) {
 async function renderFlow(c) {
   const [g, nx] = await Promise.all([api("/api/graph"), api("/api/next")]);
   const legend = `<div class="flow-legend">
-    <span><span class="sw" style="background:#10B981"></span>proven fact</span>
-    <span><span class="sw" style="background:#2b5d8a"></span>done</span>
-    <span><span class="sw" style="background:#0e7490"></span>next move</span>
-    <span><span class="sw" style="background:#3b4763"></span>turns up next</span>
-    <span class="muted">· columns are engagement phases, left → right</span></div>`;
+    <span class="flk"><span class="sw pill" style="background:var(--green)"></span>evidence proven</span>
+    <span class="flk"><span class="sw pill ghost"></span>evidence still to find</span>
+    <span class="flk"><span class="sw rect" style="background:#2b5d8a"></span>move done</span>
+    <span class="flk"><span class="sw rect" style="background:var(--accent)"></span>move available now</span>
+    <span class="flk muted">pill = evidence · box = move · column = phase (left → right)</span></div>`;
 
   const moves = nx.actions.length ? nx.actions.map(moveCard).join("") :
     `<div class="empty">No live moves — every unlocked action is done.</div>`;
@@ -227,42 +227,47 @@ function flowSVG(g) {
   const cols = PHASES.filter((p) => byPhase[p] && byPhase[p].length);
   if (!cols.length) return `<div class="empty">Nothing on the path yet — run a scan.</div>`;
 
-  const COLW = 210, GAP = 44, NW = 176, NH = 34, ROW = 46, PADX = 20, PADY = 44;
+  // Geometry. Nodes are foreignObject cards so labels wrap/ellipsis inside the box
+  // (no SVG text overflow) and the whole column fits a fixed width.
+  const NW = 178, NH = 42, COLW = 214, ROW = 56, PADX = 22, PADY = 46;
   const pos = {};
   cols.forEach((p, ci) => {
     byPhase[p].forEach((n, ri) => {
-      pos[n.id] = { x: PADX + ci * (COLW), y: PADY + ri * ROW, w: NW, h: NH, node: n };
+      pos[n.id] = { x: PADX + ci * COLW, y: PADY + ri * ROW, w: NW, h: NH, node: n };
     });
   });
-  const height = PADY + Math.max(...cols.map((p) => byPhase[p].length)) * ROW + 12;
-  const width = PADX * 2 + cols.length * COLW;
+  const height = PADY + Math.max(...cols.map((p) => byPhase[p].length)) * ROW + 14;
+  const width = PADX * 2 + (cols.length - 1) * COLW + NW;
 
+  // Edges: solid when the evidence is already in hand, dashed toward evidence not
+  // yet found (a "this move will turn that up" hint).
   let edges = "";
   g.edges.forEach((e) => {
     const a = pos[e.from], b = pos[e.to];
     if (!a || !b) return;
     const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2;
     const mx = (x1 + x2) / 2;
-    edges += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="#2A3654" stroke-width="1.5"/>`;
+    const future = b.node.type === "fact" && b.node.state === "future";
+    edges += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" ` +
+      `stroke="${future ? "#3D4D75" : "#4b5a86"}" stroke-width="1.5"${future ? ' stroke-dasharray="4 4"' : ""}/>`;
   });
 
   const headers = cols.map((p, ci) =>
-    `<text x="${PADX + ci * COLW + NW / 2}" y="24" text-anchor="middle" fill="${PHASE_COLOR[p]}" font-size="11" font-weight="700" letter-spacing="1">${PHASE_LABEL[p].toUpperCase()}</text>`).join("");
+    `<text x="${PADX + ci * COLW + NW / 2}" y="24" text-anchor="middle" fill="${PHASE_COLOR[p]}" font-size="11" font-weight="700" letter-spacing="1.2">${PHASE_LABEL[p].toUpperCase()}</text>` +
+    `<line x1="${PADX + ci * COLW}" y1="32" x2="${PADX + ci * COLW + NW}" y2="32" stroke="${PHASE_COLOR[p]}" stroke-opacity="0.35" stroke-width="1.5"/>`).join("");
 
   let nodes = "";
   Object.values(pos).forEach(({ x, y, w, h, node }) => {
     const isFact = node.type === "fact";
-    let fill, stroke, tcol = "#E6EAF2";
-    if (isFact) { fill = node.state === "proven" ? "#10B981" : "#1A2438"; stroke = node.state === "proven" ? "#0d3b0d" : "#3b4763"; tcol = node.state === "proven" ? "#04120b" : "#8b98a5"; }
-    else { fill = node.state === "done" ? "#2b5d8a" : "#0e7490"; stroke = node.state === "done" ? "#173952" : "#083344"; }
-    const rx = isFact ? h / 2 : 7;
-    const label = node.label.length > 26 ? node.label.slice(0, 25) + "…" : node.label;
-    const click = (!isFact && node.state === "next") ? ` class="node-click" data-node-action="${esc(node.action_id)}" style="cursor:pointer"` : "";
-    nodes += `<g${click}><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>` +
-      `<text x="${x + w / 2}" y="${y + h / 2 + 4}" text-anchor="middle" fill="${tcol}" font-size="12" font-weight="${isFact ? 600 : 650}">${esc(label)}<title>${esc(node.label)}</title></text></g>`;
+    const cls = isFact ? `fnode fact ${node.state}` : `fnode action ${node.state}`;
+    const clickable = !isFact && node.state === "next";
+    const attrs = clickable ? ` data-node-action="${esc(node.action_id)}" style="cursor:pointer"` : "";
+    nodes += `<foreignObject x="${x}" y="${y}" width="${w}" height="${h}"${attrs}>` +
+      `<div xmlns="http://www.w3.org/1999/xhtml" class="${cls}" title="${esc(node.label)}">` +
+      `<span>${esc(node.label)}</span></div></foreignObject>`;
   });
 
-  return `<svg class="flow" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${headers}${edges}${nodes}</svg>`;
+  return `<svg class="flow" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMinYMin meet">${headers}${edges}${nodes}</svg>`;
 }
 
 // ── findings ──────────────────────────────────────────────────────────────

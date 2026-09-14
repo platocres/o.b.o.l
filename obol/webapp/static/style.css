@@ -74,8 +74,7 @@ code, .mono { font-family: var(--mono); }
   background: var(--accent-soft); color: var(--accent-2);
   font-weight: 800; font-family: var(--mono); border: 1px solid var(--accent-ring);
 }
-.brand-text { font-weight: 700; letter-spacing: .04em; font-size: 15px; }
-.brand-text b { color: var(--accent-2); }
+.brand-text { font-weight: 800; letter-spacing: .08em; font-size: 15px; color: var(--text); }
 .nav { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
 .nav-item {
   display: flex; align-items: center; gap: 11px; width: 100%;
@@ -117,7 +116,23 @@ code, .mono { font-family: var(--mono); }
 .panel-h h2 { font-size: 12px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin: 0; font-weight: 700; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 860px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } #app { grid-template-columns: 64px 1fr; } .brand-text, .nav-item span:not(.ni-ic) { display: none; } }
+@media (max-width: 860px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  #app { grid-template-columns: 60px 1fr; }
+  .brand-text, .nav-item span:not(.ni-ic) { display: none; }
+  .brand { justify-content: center; padding: 4px 0 16px; }
+  .nav-item { justify-content: center; padding: 10px 0; }
+  /* the category donut + legend two-up collapses to stacked */
+  .card .grid-2[style] { grid-template-columns: 1fr !important; }
+}
+@media (max-width: 600px) {
+  .topbar { flex-wrap: wrap; row-gap: 4px; padding: 11px 16px; }
+  .topbar .spacer { flex-basis: 100%; height: 0; }
+  .content { padding: 16px 14px 48px; }
+  .stat-val { font-size: 23px; }
+  .chart-wrap { height: 190px; }
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+}
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
 .stat { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; }
@@ -146,11 +161,11 @@ pre.cmd { font-family: var(--mono); font-size: 12.5px; background: var(--bg); bo
   border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 8px 0 0; color: var(--text-2); white-space: pre-wrap; word-break: break-all; }
 
 /* ── access ladder meter ──────────────────────────────────────────────── */
-.ladder { display: flex; gap: 6px; }
-.ladder-seg { flex: 1; text-align: center; }
+.ladder { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.ladder-seg { flex: 1 0 66px; min-width: 66px; text-align: center; }
 .ladder-bar { height: 8px; border-radius: 4px; background: var(--bg4); border: 1px solid var(--line); }
 .ladder-seg.on .ladder-bar { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-color: var(--accent); }
-.ladder-lbl { font-size: 10.5px; color: var(--muted); margin-top: 6px; }
+.ladder-lbl { font-size: 10.5px; color: var(--muted); margin-top: 6px; line-height: 1.2; }
 .ladder-seg.on .ladder-lbl { color: var(--text-2); }
 
 /* ── donut / charts ───────────────────────────────────────────────────── */
@@ -194,8 +209,25 @@ td.kind { font-family: var(--mono); color: var(--accent-2); white-space: nowrap;
 .flow-scroll { overflow-x: auto; background: var(--bg1); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
 svg.flow { display: block; }
 svg.flow text { font-family: var(--sans); }
-.flow-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 4px 2px 12px; font-size: 12px; color: var(--text-2); }
-.flow-legend .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; vertical-align: -1px; margin-right: 6px; }
+.flow-legend { display: flex; gap: 14px 18px; flex-wrap: wrap; margin: 4px 2px 12px; font-size: 12px; color: var(--text-2); }
+.flow-legend .flk { display: inline-flex; align-items: center; gap: 7px; }
+.flow-legend .sw { width: 22px; height: 13px; display: inline-block; border: 1.5px solid transparent; }
+.flow-legend .sw.pill { border-radius: 999px; border-color: #0d3b0d; }
+.flow-legend .sw.pill.ghost { background: #1A2438; border-color: #3b4763; }
+.flow-legend .sw.rect { border-radius: 4px; }
+/* foreignObject node cards — labels wrap to 2 lines then ellipsis, never overflow */
+.fnode { box-sizing: border-box; width: 100%; height: 100%; display: flex; align-items: center;
+  justify-content: center; text-align: center; padding: 3px 9px; border: 1.5px solid transparent;
+  font-family: var(--sans); line-height: 1.12; overflow: hidden; }
+.fnode span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; font-weight: 600; }
+.fnode.fact { border-radius: 999px; }
+.fnode.action { border-radius: 8px; font-weight: 650; }
+.fnode.fact.proven { background: var(--green); border-color: #0d3b0d; color: #04140c; }
+.fnode.fact.future { background: #1A2438; border-color: #3b4763; color: #8b98a5; }
+.fnode.action.done { background: #2b5d8a; border-color: #173952; color: #eaf2fb; }
+.fnode.action.next { background: var(--accent); border-color: var(--accent-2); color: #fff; }
+.fnode.action.next:hover { background: var(--accent-2); }
 
 /* ── toast ────────────────────────────────────────────────────────────── */
 .toast-wrap { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 50; }
