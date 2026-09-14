@@ -79,6 +79,7 @@ _CATEGORY_ORDER = {
     "access": 5,
     "loot": 6,
     "config": 7,
+    "web": 8,
     "other": 99,
 }
 
@@ -109,6 +110,8 @@ def _fact_category(kind: str) -> str:
         return "loot"
     if kind.startswith(("config.", "vuln.")):
         return "config"
+    if kind.startswith("web."):
+        return "web"
     return "other"
 
 
