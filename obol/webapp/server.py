@@ -195,7 +195,9 @@ def _parser_status(action, command: str) -> dict:
         any(f" {name} " in padded for name in (
             "nmap", "nxc", "ldapsearch", "smbclient", "smbmap", "rpcclient",
             "enum4linux", "hashcat", "john", "penelope", "certipy", "pywhisker",
-            "feroxbuster", "ffuf", "nikto", "dirb", "gobuster",
+            "feroxbuster", "ffuf", "nikto", "dirb", "gobuster", "whatweb",
+            "curl", "snmpwalk", "snmp-check", "onesixtyone", "ftp", "lftp",
+            "nc", "ncat", "telnet",
         ))
         or any(marker in lowered for marker in (
             "getnpusers", "getuserspns", "secretsdump", "bloodhound-python",

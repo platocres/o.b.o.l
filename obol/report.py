@@ -100,7 +100,8 @@ def _fact_category(kind: str) -> str:
         return "target"
     if kind.startswith("scan."):
         return "scan"
-    if kind.startswith(("service.", "ldap.", "smb.", "winrm.", "kerberos.", "http.")):
+    if kind.startswith(("service.", "ldap.", "smb.", "winrm.", "kerberos.", "http.",
+                        "rdp.", "ssh.", "ftp.", "snmp.", "dns.")):
         return "service"
     if kind.startswith(("ad.", "hash.", "kerberos.")):
         return "ad"
@@ -110,7 +111,7 @@ def _fact_category(kind: str) -> str:
         return "access"
     if kind.startswith("loot."):
         return "loot"
-    if kind.startswith(("config.", "vuln.")):
+    if kind.startswith(("config.", "vuln.", "exploit.")):
         return "config"
     if kind.startswith("web."):
         return "web"

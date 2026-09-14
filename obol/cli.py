@@ -8,12 +8,13 @@ running `obol next` -> `obol run N` -> `obol next` again.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from . import __version__, board, discovery, library, quickstart, service, sessions
-from .facts import Fact
-from .pack import load_packs, next_actions
+from .facts import Fact, ProofState
+from .pack import friendly, load_packs, next_actions
 from .runner import RunnerError
 from .scope import extract_ip_scope_entries, normalize_scope_entry, target_in_scope
 from .seed import seed_forest
@@ -88,6 +89,7 @@ Core loop
   obol scope add 10.10.10.0/24       authorize a lab range
   obol scan                          sweep every scope entry, then Quick Start hosts
   obol overview                      show scope, hosts, ports, and next moves
+  obol findings                      show cross-host findings with evidence refs
   obol target use 10.10.10.5         switch active target
   obol next                          show next moves for the active target
   obol explain 1                     show the exact command choices
@@ -262,8 +264,8 @@ def _run_action(ws, action, *, command_index, timeout, dry_run, allow_shell,
     elif added:
         print(f"\n{board.SYM_OK} ingested — new facts:")
         for f in added:
-            detail = f.value.get("password") or f.value.get("hash") or f.value.get("sam") or f.value.get("count") or ""
-            print(f"   + {f.kind}" + (f"  ({detail})" if detail else ""))
+            detail = _value_summary(f.value)
+            print(f"   + {f.kind}" + (f"  ({_trim(detail, 100)})" if detail else ""))
     else:
         print("\n(no new facts parsed — raw output was still saved)")
     return outcome.result, added
@@ -348,6 +350,97 @@ def cmd_facts(args) -> None:
     ws = _load_or_exit()
     for f in sorted(ws.facts.facts, key=lambda x: x.kind):
         print(f"  {f.state.value:12} {f.kind:28} {f.value}")
+
+
+def _trim(text: str, limit: int = 160) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _value_summary(value: dict) -> str:
+    if not value:
+        return ""
+    if "port" in value:
+        bits = [f"{value.get('port')}/{value.get('protocol', 'tcp')}"]
+        if value.get("service"):
+            bits.append(str(value["service"]))
+        if value.get("version"):
+            bits.append(str(value["version"]))
+        return " ".join(bits)
+    for key in ("count", "status", "reason", "community", "identity", "user", "name", "domain", "fqdn", "banner"):
+        if key in value and value[key] not in ("", None):
+            return f"{key}={value[key]}"
+    for key in ("ports", "users", "shares", "paths", "vhosts", "titles", "headers", "banners", "locations", "files"):
+        if key not in value:
+            continue
+        items = value[key]
+        if key == "shares" and isinstance(items, list):
+            items = [row.get("name", "") for row in items if isinstance(row, dict)]
+        if isinstance(items, list):
+            shown = ", ".join(str(item) for item in items[:6])
+            if len(items) > 6:
+                shown += f", +{len(items) - 6}"
+            return shown
+    if "items" in value and isinstance(value["items"], list):
+        items = []
+        for item in value["items"][:6]:
+            if isinstance(item, dict):
+                items.append(f"{item.get('name')}={item.get('value')}")
+            else:
+                items.append(str(item))
+        suffix = f", +{len(value['items']) - 6}" if len(value["items"]) > 6 else ""
+        return ", ".join(items) + suffix
+    return json.dumps(value, sort_keys=True)
+
+
+def cmd_findings(args) -> None:
+    from .report import _CATEGORY_ORDER, _fact_category, _redact_value, redact_command
+
+    ws = _load_or_exit()
+    include_secrets = not args.redact
+    host_labels = {t["host"]: (t.get("label") or t["host"]) for t in ws.targets}
+    rows = []
+    for fact in ws.facts.facts:
+        if fact.state is not ProofState.SUPPORTED and not args.include_refuted:
+            continue
+        category = _fact_category(fact.kind)
+        if args.category and category != args.category:
+            continue
+        scope = fact.scope or ""
+        host = scope[5:] if scope.startswith("host:") else ""
+        if args.host and host != args.host:
+            continue
+        if scope.startswith("domain:"):
+            origin = scope[7:]
+        elif host:
+            origin = host_labels.get(host, host)
+        else:
+            origin = "engagement"
+        value = _redact_value(fact.value, include_secrets=include_secrets)
+        rows.append((category, origin, fact.kind, fact.state.value, value, fact.source or ""))
+
+    rows.sort(key=lambda r: (_CATEGORY_ORDER.get(r[0], 99), r[1], r[2], json.dumps(r[4], sort_keys=True)))
+    if not rows:
+        print("no findings yet")
+        return
+
+    print(f"\n== findings · {ws.name} ==")
+    current = ""
+    shown = 0
+    for category, origin, kind, state, value, source in rows:
+        if args.limit and shown >= args.limit:
+            print(f"\n… showing first {args.limit} finding(s); rerun with --limit 0 for all")
+            break
+        if category != current:
+            current = category
+            print(f"\n[{category}]")
+        state_prefix = "" if state == "supported" else f"{state} "
+        detail = _value_summary(value)
+        print(f"  {origin:18} {state_prefix}{friendly(kind)}" + (f" — {_trim(detail)}" if detail else ""))
+        if not args.no_evidence and source:
+            print(f"    source: {_trim(redact_command(source, include_secrets=include_secrets))}")
+        shown += 1
+    print()
 
 
 def cmd_sweep(args) -> None:
@@ -794,6 +887,15 @@ try:
     pp.set_defaults(func=cmd_playbook)
 
     sub.add_parser("facts", help="list all proven facts").set_defaults(func=cmd_facts)
+
+    pf = sub.add_parser("findings", help="show engagement-wide findings grouped by category")
+    pf.add_argument("--host", help="only show host-scoped findings for this host")
+    pf.add_argument("--category", help="only show one category (target, service, ad, credential, access, ...)")
+    pf.add_argument("--limit", type=int, default=0, help="maximum findings to print (0 = all)")
+    pf.add_argument("--redact", action="store_true", help="redact passwords/hashes/tickets")
+    pf.add_argument("--include-refuted", action="store_true", help="include refuted validation evidence")
+    pf.add_argument("--no-evidence", action="store_true", help="hide source command lines")
+    pf.set_defaults(func=cmd_findings)
 
     pscan = sub.add_parser("scan", help="scan every scoped entry, then Quick Start scoped targets")
     pscan.add_argument("entries", nargs="*", help="optional IP/CIDR entries to authorize and scan now")

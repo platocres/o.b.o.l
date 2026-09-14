@@ -20,7 +20,7 @@ from .workspace import Workspace
 
 _DOMAIN_RE = re.compile(r"\(domain:([^)]+)\)", re.IGNORECASE)
 _NAME_RE = re.compile(r"\(name:([^)]+)\)", re.IGNORECASE)
-_NXC_PROTO_REACHABLE_RE = re.compile(r"^(?P<proto>LDAP|SMB)\s+\S+\s+\d+\s+\S+", re.IGNORECASE | re.MULTILINE)
+_NXC_PROTO_REACHABLE_RE = re.compile(r"^(?P<proto>LDAP|SMB|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+", re.IGNORECASE | re.MULTILINE)
 _SAM_RE = re.compile(r"\bsAMAccountName:\s*([^\s,;]+)", re.IGNORECASE)
 _UPN_RE = re.compile(r"\buserPrincipalName:\s*([^\s,;@]+)(?:@[^\s,;]+)?", re.IGNORECASE)
 _NXC_USER_ROW_RE = re.compile(
@@ -98,6 +98,14 @@ _NMAP_SMB_SIGNING_RE = re.compile(
 )
 _NMAP_HTTP_TITLE_RE = re.compile(r"^\|\s*_?http-title:\s*(?P<title>.+)$", re.IGNORECASE | re.MULTILINE)
 _NMAP_HTTP_SERVER_RE = re.compile(r"^\|\s*_?http-server-header:\s*(?P<header>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_GENERATOR_RE = re.compile(r"^\|\s*_?http-generator:\s*(?P<generator>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_REDIRECT_RE = re.compile(r"^\|\s*_?http-title:\s*Did not follow redirect to (?P<location>\S+)", re.IGNORECASE | re.MULTILINE)
+_NMAP_FTP_ANON_RE = re.compile(r"ftp-anon:\s*Anonymous FTP login allowed|Anonymous FTP login allowed", re.IGNORECASE)
+_NMAP_SSH_HOSTKEY_RE = re.compile(
+    r"^\|_?\s+(?P<bits>\d{3,5})\s+(?P<fingerprint>[0-9a-f:]{16,})\s+\((?P<kind>[^)]+)\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NMAP_SNMP_FIELD_RE = re.compile(r"^\|\s*(?P<key>enterprise|name|description|location|contact):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
 _NXC_SIGNING_RE = re.compile(r"\(signing:(?P<enabled>True|False)\)", re.IGNORECASE)
 _NXC_SMBV1_RE = re.compile(r"\(SMBv1:(?P<enabled>True|False)\)", re.IGNORECASE)
 
@@ -122,9 +130,18 @@ _NIKTO_NOISE_PREFIXES = (
     "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
     "host(s) tested", "requests:", "0 host", "1 host",
 )
+_HTTP_STATUS_RE = re.compile(r"^HTTP/\S+\s+(?P<status>\d{3})(?:\s+(?P<reason>.*))?$", re.IGNORECASE | re.MULTILINE)
+_HTTP_HEADER_RE = re.compile(r"^(?P<key>Server|X-Powered-By|Location|Content-Type):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_WHATWEB_PLUGIN_RE = re.compile(r"\b(?P<name>[A-Za-z][A-Za-z0-9_.+-]{1,30})\[(?P<value>[^\]\r\n]{1,120})\]")
+_SSH_BANNER_RE = re.compile(r"\bSSH-(?P<version>[12]\.\d+)-(?P<banner>[^\r\n]+)", re.IGNORECASE)
+_FTP_BANNER_RE = re.compile(r"^(?:220[- ](?P<banner>.+)|230\s+(?P<login>Login successful.*))$", re.IGNORECASE | re.MULTILINE)
+_SNMP_SYSDESCR_RE = re.compile(r"SNMPv2-MIB::sysDescr\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSNAME_RE = re.compile(r"SNMPv2-MIB::sysName\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSLOCATION_RE = re.compile(r"SNMPv2-MIB::sysLocation\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSCONTACT_RE = re.compile(r"SNMPv2-MIB::sysContact\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
 
 # Post-credential AD path signals.
-_NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE)
+_NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
 _AUTH_MATERIAL_RE = re.compile(r"^(?:(?P<domain>[^\\\s:/]+)\\)?(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^\s()]+)")
 _EW_PROMPT_RE = re.compile(r"\*Evil-WinRM\*\s+PS\s+", re.IGNORECASE)
 _BH_ZIP_RE = re.compile(r"\b[^\s/\\]+(?:bloodhound|bhloot|sharphound)?[^\s/\\]*\.zip\b", re.IGNORECASE)
@@ -448,6 +465,16 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
         _parse_web_content(text, ws, source, facts)
     if "nikto" in lowered_command:
         _parse_nikto(text, ws, source, facts)
+    if "whatweb" in lowered_command or "curl" in lowered_command:
+        _parse_http_metadata(text, ws, source, facts)
+    if any(tool in lowered_command for tool in ("snmpwalk", "snmp-check", "onesixtyone")):
+        _parse_snmp_output(text, ws, command, source, facts)
+    if "ftp " in f" {lowered_command} " or "lftp" in lowered_command:
+        _parse_ftp_output(text, ws, command, source, facts)
+    if _SSH_BANNER_RE.search(text):
+        _parse_ssh_banner(text, ws, source, facts)
+    if (" 21" in f" {lowered_command} " or "ftp" in lowered_command) and _FTP_BANNER_RE.search(text):
+        _parse_ftp_output(text, ws, command, source, facts)
 
     return facts
 
@@ -566,6 +593,43 @@ def _parse_nmap_script_facts(text: str, ws: Workspace, source: str, facts: list[
     if headers:
         _add(facts, Fact("web.server", f"host:{ws.target}", {"headers": headers[:10]}, ProofState.SUPPORTED, source))
 
+    generators = sorted({match.group("generator").strip() for match in _NMAP_HTTP_GENERATOR_RE.finditer(text) if match.group("generator").strip()})
+    tech = []
+    for item in generators:
+        tech.append({"name": "generator", "value": item})
+    redirects = sorted({match.group("location").strip() for match in _NMAP_HTTP_REDIRECT_RE.finditer(text) if match.group("location").strip()})
+    if redirects:
+        _add(facts, Fact("http.redirect", f"host:{ws.target}", {"locations": redirects[:10]}, ProofState.SUPPORTED, source))
+    if tech:
+        _add(facts, Fact("web.tech", f"host:{ws.target}", {"items": tech[:20], "tool": "nmap"}, ProofState.SUPPORTED, source))
+
+    if _NMAP_FTP_ANON_RE.search(text):
+        _add(facts, Fact("ftp.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("ftp.anonymous_login", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+
+    if "ssh-hostkey" in text.lower():
+        keys = []
+        for match in _NMAP_SSH_HOSTKEY_RE.finditer(text):
+            keys.append({
+                "bits": int(match.group("bits")),
+                "fingerprint": match.group("fingerprint"),
+                "type": match.group("kind").strip(),
+            })
+        if keys:
+            _add(facts, Fact("ssh.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+            _add(facts, Fact("ssh.hostkey", f"host:{ws.target}", {"keys": keys[:10], "count": len(keys)}, ProofState.SUPPORTED, source))
+
+    snmp_values: dict[str, str] = {}
+    if "snmp-info" in text.lower():
+        for match in _NMAP_SNMP_FIELD_RE.finditer(text):
+            key = match.group("key").lower()
+            snmp_values[key] = match.group("value").strip()
+    if snmp_values:
+        _add(facts, Fact("snmp.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("snmp.info", f"host:{ws.target}", snmp_values, ProofState.SUPPORTED, source))
+        if snmp_values.get("name"):
+            _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": snmp_values["name"]}, ProofState.SUPPORTED, source))
+
     return context
 
 
@@ -586,14 +650,26 @@ def _parse_service_reachability(port: int, proto: str, service: str, ws: Workspa
     value = {"port": port, "protocol": proto}
     if service:
         value["service"] = service
+
+    if port == 53 or service_l in {"domain", "dns"}:
+        _add(facts, Fact("dns.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 161 or "snmp" in service_l:
+        _add(facts, Fact("snmp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
     if proto != "tcp":
         return
+    if port == 21 or service_l == "ftp":
+        _add(facts, Fact("ftp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 22 or service_l == "ssh":
+        _add(facts, Fact("ssh.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {389, 636, 3268, 3269} or "ldap" in service_l:
         _add(facts, Fact("ldap.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {445, 139} or service_l in {"microsoft-ds", "netbios-ssn"}:
         _add(facts, Fact("smb.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port == 88 or "kerberos" in service_l:
         _add(facts, Fact("kerberos.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 3389 or service_l == "ms-wbt-server" or "rdp" in service_l:
+        _add(facts, Fact("rdp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {5985, 5986} or "wsman" in service_l or "winrm" in service_l:
         _add(facts, Fact("winrm.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {80, 443, 8080, 8000, 8443} or service_l in {"http", "https", "ssl/http"}:
@@ -655,7 +731,7 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
 
     for match in _NXC_PROTO_REACHABLE_RE.finditer(text):
         proto = match.group("proto").lower()
-        if proto in {"ldap", "smb"}:
+        if proto in {"ldap", "smb", "winrm", "rdp", "ssh", "ftp"}:
             _add(facts, Fact(f"{proto}.reachable", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
 
     if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE | re.MULTILINE):
@@ -1115,6 +1191,14 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
     non_system = [ident for ident in identities if ident.lower() != "nt authority\\system"]
     if non_system:
         foothold_value["identity"] = non_system[0]
+        facts[:] = [
+            fact for fact in facts
+            if not (
+                fact.kind == "foothold.windows"
+                and fact.scope == f"host:{ws.target}"
+                and "identity" not in fact.value
+            )
+        ]
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold_value, ProofState.SUPPORTED, source))
 
     if is_system:
@@ -1253,6 +1337,135 @@ def _normalize_identity(identity: str) -> str:
     if identity.lower() == "nt authority\\system":
         return "nt authority\\system"
     return identity
+
+
+# --------------------------------------------------------------------------- #
+# Generic service metadata: HTTP, SSH, FTP, SNMP
+# --------------------------------------------------------------------------- #
+def _parse_http_metadata(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """HTTP metadata from curl/whatweb-style output.
+
+    Headers, titles, redirects, and technology fingerprints are context for follow-up
+    enum. They are not vulnerability, credential, or access facts.
+    """
+    status_values = []
+    for match in _HTTP_STATUS_RE.finditer(text):
+        value = {"status": int(match.group("status"))}
+        reason = (match.group("reason") or "").strip()
+        if reason:
+            value["reason"] = reason
+        status_values.append(value)
+    if status_values:
+        _add(facts, Fact("http.reachable", f"host:{ws.target}", {"tool": "http-client"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("http.response", f"host:{ws.target}", {"responses": status_values[:10]}, ProofState.SUPPORTED, source))
+
+    servers: set[str] = set()
+    redirects: set[str] = set()
+    content_types: set[str] = set()
+    tech: list[dict] = []
+    for match in _HTTP_HEADER_RE.finditer(text):
+        key = match.group("key").lower()
+        value = match.group("value").strip()
+        if not value:
+            continue
+        if key == "server":
+            servers.add(value)
+        elif key == "x-powered-by":
+            tech.append({"name": "x-powered-by", "value": value})
+        elif key == "location":
+            redirects.add(value)
+        elif key == "content-type":
+            content_types.add(value)
+
+    for match in _WHATWEB_PLUGIN_RE.finditer(text):
+        name = match.group("name").strip()
+        value = match.group("value").strip()
+        if name.lower() in {"title", "ip", "country", "email", "summary"}:
+            continue
+        if name.lower() in {"httpserver", "server"}:
+            servers.add(value)
+        else:
+            tech.append({"name": name, "value": value})
+
+    title_match = re.search(r"\bTitle\[(?P<title>[^\]\r\n]+)\]", text)
+    if title_match and title_match.group("title").strip():
+        _add(facts, Fact("web.title", f"host:{ws.target}", {"titles": [title_match.group("title").strip()]}, ProofState.SUPPORTED, source))
+    if servers:
+        _add(facts, Fact("web.server", f"host:{ws.target}", {"headers": sorted(servers)[:10]}, ProofState.SUPPORTED, source))
+    if redirects:
+        _add(facts, Fact("http.redirect", f"host:{ws.target}", {"locations": sorted(redirects)[:10]}, ProofState.SUPPORTED, source))
+    if content_types:
+        tech.extend({"name": "content-type", "value": item} for item in sorted(content_types))
+    if tech:
+        dedup: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for item in tech:
+            key = (item["name"].lower(), item["value"].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(item)
+        _add(facts, Fact("web.tech", f"host:{ws.target}", {"items": dedup[:20]}, ProofState.SUPPORTED, source))
+
+
+def _parse_ssh_banner(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    banners = sorted({match.group(0).strip() for match in _SSH_BANNER_RE.finditer(text)}, key=str.lower)
+    if not banners:
+        return
+    _add(facts, Fact("ssh.reachable", f"host:{ws.target}", {"tool": "banner"}, ProofState.SUPPORTED, source))
+    _add(facts, Fact("ssh.banner", f"host:{ws.target}", {"banners": banners[:10]}, ProofState.SUPPORTED, source))
+
+
+def _parse_ftp_output(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    banners: list[str] = []
+    login_success = False
+    for match in _FTP_BANNER_RE.finditer(text):
+        banner = (match.group("banner") or match.group("login") or "").strip()
+        if banner:
+            banners.append(banner)
+        if match.group("login"):
+            login_success = True
+    if not banners and not login_success:
+        return
+    _add(facts, Fact("ftp.reachable", f"host:{ws.target}", {"tool": "ftp-client"}, ProofState.SUPPORTED, source))
+    if banners:
+        _add(facts, Fact("ftp.banner", f"host:{ws.target}", {"banners": sorted(set(banners))[:10]}, ProofState.SUPPORTED, source))
+    if login_success and re.search(r"\banonymous\b", command, re.IGNORECASE):
+        _add(facts, Fact("ftp.anonymous_login", f"host:{ws.target}", {"tool": "ftp-client"}, ProofState.SUPPORTED, source))
+
+
+def _parse_snmp_output(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("timeout", "no response from", "authorizationerror", "authentication failure")):
+        return
+    if "snmpv2-mib::" not in lowered and not re.search(r"\[[^\]]+\]\s+\S", text):
+        return
+
+    value: dict = {}
+    for key, regex in (
+        ("description", _SNMP_SYSDESCR_RE),
+        ("name", _SNMP_SYSNAME_RE),
+        ("location", _SNMP_SYSLOCATION_RE),
+        ("contact", _SNMP_SYSCONTACT_RE),
+    ):
+        match = regex.search(text)
+        if match:
+            value[key] = match.group("value").strip().strip('"')
+
+    community = _command_arg(command, "-c", "--community")
+    if not community:
+        one = re.search(r"\[(?P<community>[^\]]+)\]\s+(?P<description>.+)", text)
+        if one:
+            community = one.group("community").strip()
+            value.setdefault("description", one.group("description").strip())
+    if community:
+        _add(facts, Fact("snmp.community", f"host:{ws.target}", {"community": community}, ProofState.SUPPORTED, source))
+
+    _add(facts, Fact("snmp.reachable", f"host:{ws.target}", {"tool": "snmp"}, ProofState.SUPPORTED, source))
+    if value:
+        _add(facts, Fact("snmp.info", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        if value.get("name"):
+            _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": value["name"]}, ProofState.SUPPORTED, source))
 
 
 # --------------------------------------------------------------------------- #
