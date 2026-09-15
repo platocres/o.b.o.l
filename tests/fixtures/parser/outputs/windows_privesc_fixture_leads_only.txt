@@ -1,0 +1,20 @@
+Privilege Name                Description                               State
+============================= ========================================= ========
+SeImpersonatePrivilege        Impersonate a client after authentication Enabled
+SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled
+
+OS Name:                   Microsoft Windows Server 2019 Standard
+OS Version:                10.0.17763 N/A Build 17763
+System Type:               x64-based PC
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Installer
+    AlwaysInstallElevated    REG_DWORD    0x1
+HKEY_CURRENT_USER\SOFTWARE\Policies\Microsoft\Windows\Installer
+    AlwaysInstallElevated    REG_DWORD    0x1
+
+VulnSvc     C:\Program Files\Vuln App\service.exe     Auto
+SERVICE_CHANGE_CONFIG
+BUILTIN\Users:(F)
+Currently stored credentials:
+    Target: Domain:interactive=CORP\backup
+DefaultPassword    REG_SZ    Summer2026!
