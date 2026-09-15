@@ -2,7 +2,7 @@
 
 Read [AGENTS.md](AGENTS.md) first, then its linked docs
 ([`docs/SOURCES.md`](docs/SOURCES.md), [`docs/ROADMAP.md`](docs/ROADMAP.md)).
-This file only records ChatGPT-specific workflow lessons so future chats do not
+This file only records ChatGPT-specific workflow lessons for Work Chats so future Work Chats do not
 have to rediscover them.
 
 ## GitHub handling
