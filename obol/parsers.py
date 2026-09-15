@@ -20,7 +20,7 @@ from .workspace import Workspace
 
 _DOMAIN_RE = re.compile(r"\(domain:([^)]+)\)", re.IGNORECASE)
 _NAME_RE = re.compile(r"\(name:([^)]+)\)", re.IGNORECASE)
-_NXC_PROTO_REACHABLE_RE = re.compile(r"^(?P<proto>LDAP|SMB)\s+\S+\s+\d+\s+\S+", re.IGNORECASE | re.MULTILINE)
+_NXC_PROTO_REACHABLE_RE = re.compile(r"^(?P<proto>LDAP|SMB|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+", re.IGNORECASE | re.MULTILINE)
 _SAM_RE = re.compile(r"\bsAMAccountName:\s*([^\s,;]+)", re.IGNORECASE)
 _UPN_RE = re.compile(r"\buserPrincipalName:\s*([^\s,;@]+)(?:@[^\s,;]+)?", re.IGNORECASE)
 _NXC_USER_ROW_RE = re.compile(
@@ -98,6 +98,14 @@ _NMAP_SMB_SIGNING_RE = re.compile(
 )
 _NMAP_HTTP_TITLE_RE = re.compile(r"^\|\s*_?http-title:\s*(?P<title>.+)$", re.IGNORECASE | re.MULTILINE)
 _NMAP_HTTP_SERVER_RE = re.compile(r"^\|\s*_?http-server-header:\s*(?P<header>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_GENERATOR_RE = re.compile(r"^\|\s*_?http-generator:\s*(?P<generator>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_HTTP_REDIRECT_RE = re.compile(r"^\|\s*_?http-title:\s*Did not follow redirect to (?P<location>\S+)", re.IGNORECASE | re.MULTILINE)
+_NMAP_FTP_ANON_RE = re.compile(r"ftp-anon:\s*Anonymous FTP login allowed|Anonymous FTP login allowed", re.IGNORECASE)
+_NMAP_SSH_HOSTKEY_RE = re.compile(
+    r"^\|_?\s+(?P<bits>\d{3,5})\s+(?P<fingerprint>[0-9a-f:]{16,})\s+\((?P<kind>[^)]+)\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NMAP_SNMP_FIELD_RE = re.compile(r"^\|_?\s*(?P<key>enterprise|name|description|location|contact):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
 _NXC_SIGNING_RE = re.compile(r"\(signing:(?P<enabled>True|False)\)", re.IGNORECASE)
 _NXC_SMBV1_RE = re.compile(r"\(SMBv1:(?P<enabled>True|False)\)", re.IGNORECASE)
 
@@ -122,9 +130,68 @@ _NIKTO_NOISE_PREFIXES = (
     "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
     "host(s) tested", "requests:", "0 host", "1 host",
 )
+_HTTP_STATUS_RE = re.compile(r"^HTTP/\S+\s+(?P<status>\d{3})(?:\s+(?P<reason>.*))?$", re.IGNORECASE | re.MULTILINE)
+_HTTP_HEADER_RE = re.compile(r"^(?P<key>Server|X-Powered-By|Location|Content-Type):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_WHATWEB_PLUGIN_RE = re.compile(r"\b(?P<name>[A-Za-z][A-Za-z0-9_.+-]{1,30})\[(?P<value>[^\]\r\n]{1,120})\]")
+_SSH_BANNER_RE = re.compile(r"\bSSH-(?P<version>[12]\.\d+)-(?P<banner>[^\r\n]+)", re.IGNORECASE)
+_FTP_BANNER_RE = re.compile(r"^(?:220[- ](?P<banner>.+)|230\s+(?P<login>Login successful.*))$", re.IGNORECASE | re.MULTILINE)
+_SNMP_SYSDESCR_RE = re.compile(r"SNMPv2-MIB::sysDescr\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSNAME_RE = re.compile(r"SNMPv2-MIB::sysName\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSLOCATION_RE = re.compile(r"SNMPv2-MIB::sysLocation\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_SNMP_SYSCONTACT_RE = re.compile(r"SNMPv2-MIB::sysContact\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_OS_SIGNATURES: dict[str, tuple[re.Pattern, ...]] = {
+    "windows": (
+        re.compile(r"\bMicrosoft Windows\b", re.IGNORECASE),
+        re.compile(r"\bWindows\s+(?:Server|\d|XP|Vista)\b", re.IGNORECASE),
+        re.compile(r"\bOS:\s*Windows\b", re.IGNORECASE),
+        re.compile(r"\bRunning:\s*(?:Microsoft\s+)?Windows\b", re.IGNORECASE),
+        re.compile(r"cpe:/o:microsoft:windows", re.IGNORECASE),
+        re.compile(r"\bMicrosoft-IIS\b", re.IGNORECASE),
+    ),
+    "linux": (
+        re.compile(r"\bLinux\b", re.IGNORECASE),
+        re.compile(r"\bUbuntu\b", re.IGNORECASE),
+        re.compile(r"\bDebian\b", re.IGNORECASE),
+        re.compile(r"\bCentOS\b", re.IGNORECASE),
+        re.compile(r"\bRed Hat\b", re.IGNORECASE),
+        re.compile(r"\bFedora\b", re.IGNORECASE),
+        re.compile(r"\bSamba\b", re.IGNORECASE),
+        re.compile(r"\bUnix\b", re.IGNORECASE),
+        re.compile(r"cpe:/o:linux", re.IGNORECASE),
+    ),
+}
+_PRIVESC_ACTION_IDS = {
+    "linux-enum", "sudo-abuse", "writable-passwd", "nfs-squash",
+    "lxc-lxd-escape", "docker-socket", "suid-gtfobins", "pspy-monitor",
+    "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
+    "windows-enum", "seimpersonate", "unquoted-service-path",
+    "weak-service-permissions", "alwaysinstallelevated", "dpapi-secrets",
+    "stored-credentials", "wesng-patch-gaps", "windows-persistence",
+    "lsass-dump-onbox",
+}
+_LINUX_PRIVESC_ACTION_IDS = {
+    "linux-enum", "sudo-abuse", "writable-passwd", "nfs-squash",
+    "lxc-lxd-escape", "docker-socket", "suid-gtfobins", "pspy-monitor",
+    "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
+}
+_WINDOWS_PRIVESC_ACTION_IDS = _PRIVESC_ACTION_IDS - _LINUX_PRIVESC_ACTION_IDS
+_UNAME_RE = re.compile(
+    r"\bLinux\s+(?P<host>\S+)\s+(?P<kernel>[0-9][^\s]+).*?\b(?P<arch>x86_64|i[3-6]86|aarch64|armv\w+)\b",
+    re.IGNORECASE,
+)
+_SUID_PATH_RE = re.compile(r"(?P<path>/[A-Za-z0-9_./+-]+)")
+_CAPABILITY_RE = re.compile(r"^(?P<path>/\S+)\s*=\s*(?P<caps>[^#\r\n]+cap_[^#\r\n]+)$", re.IGNORECASE | re.MULTILINE)
+_PASSWD_MODE_RE = re.compile(r"^(?P<mode>-[rwxstST-]{9})\s+.*\s+(?P<path>/etc/passwd)\b", re.MULTILINE)
+_WIN_PRIV_RE = re.compile(r"^\s*(?P<name>Se[A-Za-z0-9]+Privilege)\s+.+?\s+(?P<state>Enabled|Disabled)\s*$", re.IGNORECASE | re.MULTILINE)
+_SYSTEMINFO_FIELD_RE = re.compile(r"^\s*(?P<key>OS Name|OS Version|System Type):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_DANGEROUS_WIN_PRIVS = {
+    "seimpersonateprivilege", "seassignprimarytokenprivilege", "sedebugprivilege",
+    "sebackupprivilege", "serestoreprivilege", "setakeownershipprivilege",
+    "seloaddriverprivilege", "semanagevolumeprivilege", "setcbprivilege",
+}
 
 # Post-credential AD path signals.
-_NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE)
+_NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
 _AUTH_MATERIAL_RE = re.compile(r"^(?:(?P<domain>[^\\\s:/]+)\\)?(?P<user>[A-Za-z0-9._$-]{2,}):(?P<secret>[^\s()]+)")
 # An NT hash (or LM:NT pair) — pass-the-hash auth material, not a plaintext password.
 _NT_HASH_RE = re.compile(r"^(?:[0-9a-fA-F]{32}:)?[0-9a-fA-F]{32}$")
@@ -189,6 +256,73 @@ def _add(out: list[Fact], fact: Fact) -> None:
         for existing in out
     ):
         out.append(fact)
+
+
+def _line_for_match(text: str, match: re.Match) -> str:
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    if end == -1:
+        end = len(text)
+    return text[start:end].strip()[:220]
+
+
+def _add_os_observation(
+    facts: list[Fact],
+    ws: Workspace,
+    source: str,
+    *,
+    family: str,
+    evidence: str,
+    confidence: str,
+    tool: str,
+    promote: bool = False,
+) -> None:
+    family = family.strip().lower()
+    if family not in {"windows", "linux"}:
+        return
+    value = {
+        "family": family,
+        "confidence": confidence,
+        "tool": tool,
+        "evidence": evidence.strip()[:220],
+    }
+    _add(facts, Fact("host.os_hint", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if promote:
+        _add(facts, Fact("host.os_family", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+
+def _add_os_from_text(
+    text: str,
+    ws: Workspace,
+    source: str,
+    facts: list[Fact],
+    *,
+    tool: str,
+    confidence: str = "high",
+    promote: bool = False,
+) -> None:
+    matches: dict[str, str] = {}
+    for family, patterns in _OS_SIGNATURES.items():
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                matches[family] = _line_for_match(text, match) or match.group(0)
+                break
+    # Multiple families in one transcript means a proxy, relay, Samba-on-Linux vs
+    # Windows-service mix, or otherwise ambiguous evidence. Keep hints, but do not
+    # promote to a single OS family from conflicting text.
+    promote_single = promote and len(matches) == 1
+    for family, evidence in matches.items():
+        _add_os_observation(
+            facts,
+            ws,
+            source,
+            family=family,
+            evidence=evidence,
+            confidence=confidence,
+            tool=tool,
+            promote=promote_single,
+        )
 
 
 def _clean_username(user: str) -> str:
@@ -441,6 +575,9 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
     if "penelope" in lowered_command:
         _parse_penelope(text, ws, source, facts)
 
+    if action.id in _PRIVESC_ACTION_IDS:
+        _parse_privesc_output(action.id, text, ws, command, source, facts)
+
     if "certipy" in lowered_command or "pywhisker" in lowered_command:
         _parse_adcs(text, ws, command, source, facts)
 
@@ -450,6 +587,16 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
         _parse_web_content(text, ws, source, facts)
     if "nikto" in lowered_command:
         _parse_nikto(text, ws, source, facts)
+    if "whatweb" in lowered_command or "curl" in lowered_command:
+        _parse_http_metadata(text, ws, source, facts)
+    if any(tool in lowered_command for tool in ("snmpwalk", "snmp-check", "onesixtyone")):
+        _parse_snmp_output(text, ws, command, source, facts)
+    if "ftp " in f" {lowered_command} " or "lftp" in lowered_command:
+        _parse_ftp_output(text, ws, command, source, facts)
+    if _SSH_BANNER_RE.search(text):
+        _parse_ssh_banner(text, ws, source, facts)
+    if (" 21" in f" {lowered_command} " or "ftp" in lowered_command) and _FTP_BANNER_RE.search(text):
+        _parse_ftp_output(text, ws, command, source, facts)
 
     return facts
 
@@ -459,6 +606,7 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 # --------------------------------------------------------------------------- #
 def _parse_nmap(text: str, ws: Workspace, source: str, facts: list[Fact], action_id: str) -> None:
     open_ports: dict[tuple[int, str], dict] = {}
+    _add_os_from_text(text, ws, source, facts, tool="nmap", confidence="high", promote=True)
 
     for match in _NMAP_DISCOVERED_RE.finditer(text):
         port = int(match.group("port"))
@@ -568,6 +716,43 @@ def _parse_nmap_script_facts(text: str, ws: Workspace, source: str, facts: list[
     if headers:
         _add(facts, Fact("web.server", f"host:{ws.target}", {"headers": headers[:10]}, ProofState.SUPPORTED, source))
 
+    generators = sorted({match.group("generator").strip() for match in _NMAP_HTTP_GENERATOR_RE.finditer(text) if match.group("generator").strip()})
+    tech = []
+    for item in generators:
+        tech.append({"name": "generator", "value": item})
+    redirects = sorted({match.group("location").strip() for match in _NMAP_HTTP_REDIRECT_RE.finditer(text) if match.group("location").strip()})
+    if redirects:
+        _add(facts, Fact("http.redirect", f"host:{ws.target}", {"locations": redirects[:10]}, ProofState.SUPPORTED, source))
+    if tech:
+        _add(facts, Fact("web.tech", f"host:{ws.target}", {"items": tech[:20], "tool": "nmap"}, ProofState.SUPPORTED, source))
+
+    if _NMAP_FTP_ANON_RE.search(text):
+        _add(facts, Fact("ftp.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("ftp.anonymous_login", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+
+    if "ssh-hostkey" in text.lower():
+        keys = []
+        for match in _NMAP_SSH_HOSTKEY_RE.finditer(text):
+            keys.append({
+                "bits": int(match.group("bits")),
+                "fingerprint": match.group("fingerprint"),
+                "type": match.group("kind").strip(),
+            })
+        if keys:
+            _add(facts, Fact("ssh.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+            _add(facts, Fact("ssh.hostkey", f"host:{ws.target}", {"keys": keys[:10], "count": len(keys)}, ProofState.SUPPORTED, source))
+
+    snmp_values: dict[str, str] = {}
+    if "snmp-info" in text.lower():
+        for match in _NMAP_SNMP_FIELD_RE.finditer(text):
+            key = match.group("key").lower()
+            snmp_values[key] = match.group("value").strip()
+    if snmp_values:
+        _add(facts, Fact("snmp.reachable", f"host:{ws.target}", {"tool": "nmap"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("snmp.info", f"host:{ws.target}", snmp_values, ProofState.SUPPORTED, source))
+        if snmp_values.get("name"):
+            _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": snmp_values["name"]}, ProofState.SUPPORTED, source))
+
     return context
 
 
@@ -588,16 +773,44 @@ def _parse_service_reachability(port: int, proto: str, service: str, ws: Workspa
     value = {"port": port, "protocol": proto}
     if service:
         value["service"] = service
+
+    if port == 53 or service_l in {"domain", "dns"}:
+        _add(facts, Fact("dns.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 161 or "snmp" in service_l:
+        _add(facts, Fact("snmp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
     if proto != "tcp":
         return
+    if port == 21 or service_l == "ftp":
+        _add(facts, Fact("ftp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 22 or service_l == "ssh":
+        _add(facts, Fact("ssh.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {389, 636, 3268, 3269} or "ldap" in service_l:
         _add(facts, Fact("ldap.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port in {445, 139} or service_l in {"microsoft-ds", "netbios-ssn"}:
         _add(facts, Fact("smb.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port == 88 or "kerberos" in service_l:
         _add(facts, Fact("kerberos.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if port == 3389 or service_l == "ms-wbt-server" or "rdp" in service_l:
+        _add(facts, Fact("rdp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=f"{port}/{proto} {service or 'rdp'}",
+            confidence="medium",
+            tool="nmap",
+            promote=False,
+        )
     if port in {5985, 5986} or "wsman" in service_l or "winrm" in service_l:
         _add(facts, Fact("winrm.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=f"{port}/{proto} {service or 'winrm'}",
+            confidence="high",
+            tool="nmap",
+            promote=True,
+        )
     if port in {80, 443, 8080, 8000, 8443} or service_l in {"http", "https", "ssl/http"}:
         _add(facts, Fact("http.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
 
@@ -610,6 +823,7 @@ def _looks_like_ad_ldap(text: str) -> bool:
 # NetExec / LDAP / SMB enumeration
 # --------------------------------------------------------------------------- #
 def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    _add_os_from_text(text, ws, source, facts, tool="nxc", confidence="high", promote=True)
     domain = ""
     domain_match = _DOMAIN_RE.search(text)
     if domain_match:
@@ -657,8 +871,17 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
 
     for match in _NXC_PROTO_REACHABLE_RE.finditer(text):
         proto = match.group("proto").lower()
-        if proto in {"ldap", "smb"}:
+        if proto in {"ldap", "smb", "winrm", "rdp", "ssh", "ftp"}:
             _add(facts, Fact(f"{proto}.reachable", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
+        if proto in {"winrm", "rdp"}:
+            _add_os_observation(
+                facts, ws, source,
+                family="windows",
+                evidence=match.group(0).strip(),
+                confidence="high" if proto == "winrm" else "medium",
+                tool="nxc",
+                promote=(proto == "winrm"),
+            )
 
     if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE | re.MULTILINE):
         _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
@@ -1071,6 +1294,14 @@ def _parse_evil_winrm(text: str, ws: Workspace, command: str, source: str, facts
         value["domain"] = domain
     _add(facts, Fact("winrm.authenticated", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="evil-winrm authenticated shell",
+        confidence="high",
+        tool="evil-winrm",
+        promote=True,
+    )
     if user and (nthash or (password and _valid_password(password))):
         cred_value = {"user": _clean_username(user), "service": "winrm",
                       "method": "pth" if nthash else "evil-winrm"}
@@ -1144,7 +1375,23 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
     non_system = [ident for ident in identities if ident.lower() != "nt authority\\system"]
     if non_system:
         foothold_value["identity"] = non_system[0]
+        facts[:] = [
+            fact for fact in facts
+            if not (
+                fact.kind == "foothold.windows"
+                and fact.scope == f"host:{ws.target}"
+                and "identity" not in fact.value
+            )
+        ]
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold_value, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="Windows command execution output",
+        confidence="high",
+        tool=tool,
+        promote=True,
+    )
 
     if is_system:
         _add(
@@ -1179,6 +1426,14 @@ def _parse_ssh_exec(text: str, ws: Workspace, command: str, source: str, facts: 
     _add(facts, Fact("access.shell", f"host:{ws.target}", {"service": "ssh"}, ProofState.SUPPORTED, source))
     _add(facts, Fact("foothold.linux", f"host:{ws.target}",
                      {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="linux",
+        evidence=m.group(0),
+        confidence="high",
+        tool="ssh",
+        promote=True,
+    )
     if m.group("uid") == "0" or user.lower() == "root":
         _add(facts, Fact("access.admin", f"host:{ws.target}",
                          {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
@@ -1202,6 +1457,14 @@ def _parse_nxc_rdp(text: str, ws: Workspace, command: str, source: str, facts: l
     if user:
         foothold["identity"] = _clean_username(user)
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="nxc rdp authentication succeeded",
+        confidence="high",
+        tool="nxc",
+        promote=True,
+    )
     if "pwn3d" in text.lower():
         _add(facts, Fact("access.admin", f"host:{ws.target}",
                          {"service": "rdp"}, ProofState.SUPPORTED, source))
@@ -1238,10 +1501,322 @@ def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) ->
 
     _add(facts, Fact("access.shell", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if os_name == "windows":
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=info or "penelope reported Windows shell",
+            confidence="high",
+            tool="penelope",
+            promote=True,
+        )
         _add(facts, Fact("foothold.windows", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
         _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": "penelope"}, ProofState.SUPPORTED, source))
     elif os_name == "linux":
+        _add_os_observation(
+            facts, ws, source,
+            family="linux",
+            evidence=info or "penelope reported Linux shell",
+            confidence="high",
+            tool="penelope",
+            promote=True,
+        )
         _add(facts, Fact("foothold.linux", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
+
+
+def _add_host_privesc_fact(
+    facts: list[Fact],
+    ws: Workspace,
+    source: str,
+    kind: str,
+    value: dict,
+    lead_kinds: set[str],
+) -> None:
+    _add(facts, Fact(kind, f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if kind.startswith("privesc.") and kind != "privesc.leads":
+        lead_kinds.add(kind)
+
+
+def _add_privesc_leads(facts: list[Fact], ws: Workspace, source: str, lead_kinds: set[str]) -> None:
+    if not lead_kinds:
+        return
+    _add(
+        facts,
+        Fact(
+            "privesc.leads",
+            f"host:{ws.target}",
+            {"kinds": sorted(lead_kinds), "count": len(lead_kinds)},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )
+
+
+def _parse_linux_privesc_output(
+    text: str,
+    ws: Workspace,
+    command: str,
+    source: str,
+    facts: list[Fact],
+    lead_kinds: set[str],
+) -> None:
+    lowered = text.lower()
+    lowered_command = command.lower()
+    id_match = _LINUX_ID_RE.search(text)
+    if id_match:
+        user = id_match.group("user").strip()
+        _add_os_observation(
+            facts, ws, source,
+            family="linux",
+            evidence=id_match.group(0),
+            confidence="high",
+            tool="local-enum",
+            promote=True,
+        )
+        id_line = _line_for_match(text, id_match) or id_match.group(0)
+        groups = sorted({match.group(1).lower() for match in re.finditer(r"\d+\(([^)]+)\)", id_line)})
+        if {"lxd", "lxc"} & set(groups):
+            _add_host_privesc_fact(facts, ws, source, "privesc.lxd_group", {"groups": groups, "user": user}, lead_kinds)
+        if "docker" in groups:
+            _add_host_privesc_fact(facts, ws, source, "privesc.docker_group", {"groups": groups, "user": user}, lead_kinds)
+        if id_match.group("uid") == "0" or user.lower() == "root":
+            _add(facts, Fact("access.admin", f"host:{ws.target}", {"identity": user, "method": "local-enum"}, ProofState.SUPPORTED, source))
+    elif "whoami" in lowered_command and re.search(r"(?im)^\s*root\s*$", text):
+        _add(facts, Fact("access.admin", f"host:{ws.target}", {"identity": "root", "method": "whoami"}, ProofState.SUPPORTED, source))
+
+    uname = _UNAME_RE.search(text)
+    if uname:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "host.kernel",
+            {"kernel": uname.group("kernel"), "tool": "uname", "evidence": uname.group(0).strip()[:220]},
+            lead_kinds,
+        )
+        _add_host_privesc_fact(facts, ws, source, "host.arch", {"arch": uname.group("arch"), "tool": "uname"}, lead_kinds)
+
+    sudo_entries = []
+    if "may run the following commands" in lowered or "nopasswd:" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.lower().startswith(("matching defaults", "user ", "sudoers")):
+                continue
+            if "nopasswd:" in line.lower() or re.search(r"\([^)]+\)\s+\S+", line):
+                sudo_entries.append(line[:220])
+    if sudo_entries:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.sudo_rights",
+            {"entries": sorted(set(sudo_entries))[:20], "nopasswd": any("nopasswd" in e.lower() for e in sudo_entries)},
+            lead_kinds,
+        )
+
+    suid_paths: set[str] = set()
+    if "-perm -4000" in lowered_command or "suid" in lowered or "rws" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or "/proc/" in line:
+                continue
+            if line.startswith("/") and " " not in line:
+                suid_paths.add(line)
+                continue
+            if "rws" in line.lower():
+                match = _SUID_PATH_RE.search(line)
+                if match:
+                    suid_paths.add(match.group("path"))
+    if suid_paths:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.suid_candidate",
+            {"paths": sorted(suid_paths)[:40], "count": len(suid_paths)},
+            lead_kinds,
+        )
+
+    caps = []
+    for match in _CAPABILITY_RE.finditer(text):
+        caps.append({"path": match.group("path"), "capabilities": match.group("caps").strip()})
+    if caps:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.capability",
+            {"entries": caps[:40], "count": len(caps)},
+            lead_kinds,
+        )
+
+    passwd = _PASSWD_MODE_RE.search(text)
+    if passwd:
+        mode = passwd.group("mode")
+        group_writable = mode[5] == "w"
+        world_writable = mode[8] == "w"
+        if group_writable or world_writable:
+            _add_host_privesc_fact(
+                facts, ws, source,
+                "privesc.passwd_writable",
+                {"path": "/etc/passwd", "mode": mode, "world_writable": world_writable, "group_writable": group_writable},
+                lead_kinds,
+            )
+
+    if "no_root_squash" in lowered:
+        exports = [line.strip() for line in text.splitlines() if "no_root_squash" in line.lower()]
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.nfs_no_root_squash",
+            {"exports": exports[:20], "count": len(exports) or 1},
+            lead_kinds,
+        )
+
+    cron_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"cron|timer|systemd", line, re.IGNORECASE) and re.search(r"\b(writable|world-writable|rwx|777)\b", line, re.IGNORECASE)
+    ]
+    if cron_lines:
+        _add_host_privesc_fact(facts, ws, source, "privesc.cron_writable", {"evidence": cron_lines[:20]}, lead_kinds)
+
+    process_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"\bUID=0\b|\broot\b.*\bCMD\b|\bCMD:", line, re.IGNORECASE)
+    ]
+    if process_lines and ("pspy" in lowered_command or "uid=0" in lowered or "cmd:" in lowered):
+        _add_host_privesc_fact(facts, ws, source, "privesc.process_lead", {"commands": process_lines[:30]}, lead_kinds)
+
+    if re.search(r"password\s*[=:]\s*\S+|BEGIN OPENSSH|api[_-]?key|secret", text, re.IGNORECASE):
+        _add(
+            facts,
+            Fact("credential.candidate", f"host:{ws.target}", {"kind": "local_file_secret", "evidence": "local loot output"}, ProofState.SUPPORTED, source),
+        )
+
+
+def _parse_windows_privesc_output(
+    text: str,
+    ws: Workspace,
+    command: str,
+    source: str,
+    facts: list[Fact],
+    lead_kinds: set[str],
+) -> None:
+    lowered = text.lower()
+    if _SYSTEM_ID_RE.search(text):
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence="Windows local command output",
+            confidence="high",
+            tool="local-enum",
+            promote=True,
+        )
+        _add(facts, Fact("access.system", f"host:{ws.target}", {"identity": "nt authority\\system", "method": "local-enum"}, ProofState.SUPPORTED, source))
+
+    sysinfo: dict[str, str] = {}
+    for match in _SYSTEMINFO_FIELD_RE.finditer(text):
+        sysinfo[match.group("key").lower()] = match.group("value").strip()
+    if sysinfo:
+        os_name = sysinfo.get("os name", "")
+        os_version = sysinfo.get("os version", "")
+        if os_name or os_version:
+            _add_host_privesc_fact(
+                facts, ws, source,
+                "host.kernel",
+                {"kernel": " ".join(part for part in (os_name, os_version) if part), "tool": "systeminfo"},
+                lead_kinds,
+            )
+            _add_os_observation(
+                facts, ws, source,
+                family="windows",
+                evidence=(os_name or os_version),
+                confidence="high",
+                tool="systeminfo",
+                promote=True,
+            )
+        if sysinfo.get("system type"):
+            _add_host_privesc_fact(facts, ws, source, "host.arch", {"arch": sysinfo["system type"], "tool": "systeminfo"}, lead_kinds)
+
+    privileges = []
+    for match in _WIN_PRIV_RE.finditer(text):
+        name = match.group("name")
+        state = match.group("state").lower()
+        if state == "enabled" and name.lower() in _DANGEROUS_WIN_PRIVS:
+            privileges.append(name)
+    if privileges:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.windows_privilege",
+            {"privileges": sorted(set(privileges)), "state": "Enabled"},
+            lead_kinds,
+        )
+
+    if "alwaysinstallelevated" in lowered and len(re.findall(r"0x1|\b0*1\b", lowered)) >= 2:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.always_install_elevated",
+            {"hklm": True, "hkcu": True},
+            lead_kinds,
+        )
+
+    unquoted = []
+    if ".exe" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or ".exe" not in line.lower() or '"' in line:
+                continue
+            if re.search(r"[A-Za-z]:\\Program Files[^,\r\n]+\.exe", line, re.IGNORECASE):
+                unquoted.append(line[:220])
+    if unquoted:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.unquoted_service_path",
+            {"services": sorted(set(unquoted))[:20], "count": len(set(unquoted))},
+            lead_kinds,
+        )
+
+    weak_service = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if re.search(r"SERVICE_CHANGE_CONFIG|\(F\)|\(M\)|BUILTIN\\Users:.*\([FM]\)", line, re.IGNORECASE):
+            weak_service.append(line[:220])
+    if weak_service:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.weak_service_permission",
+            {"evidence": sorted(set(weak_service))[:30]},
+            lead_kinds,
+        )
+
+    stored = []
+    for marker, label in (
+        ("Target:", "cmdkey"),
+        ("DefaultPassword", "autologon"),
+        ("unattend.xml", "unattend"),
+        ("sysprep", "sysprep"),
+        ("confCons.xml", "mRemoteNG"),
+        (".rdp", "rdp_file"),
+    ):
+        if marker.lower() in lowered:
+            stored.append(label)
+    if stored:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.stored_credentials",
+            {"kinds": sorted(set(stored)), "count": len(set(stored))},
+            lead_kinds,
+        )
+        _add(facts, Fact("credential.candidate", f"host:{ws.target}", {"kind": "stored_windows_credentials"}, ProofState.SUPPORTED, source))
+
+    patch_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"\bMS\d{2}-\d{3}\b|CVE-\d{4}-\d+|missing patches?|exploit", line, re.IGNORECASE)
+    ]
+    if patch_lines and ("wesng" in command.lower() or "windows-exploit-suggester" in command.lower() or "missing" in lowered):
+        _add_host_privesc_fact(facts, ws, source, "privesc.patch_gap", {"evidence": patch_lines[:30]}, lead_kinds)
+        _add(facts, Fact("exploit.candidate", f"host:{ws.target}", {"tool": "windows-exploit-suggester", "findings": patch_lines[:30]}, ProofState.SUPPORTED, source))
+
+
+def _parse_privesc_output(action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    if not text.strip():
+        return
+    lead_kinds: set[str] = set()
+    if action_id in _LINUX_PRIVESC_ACTION_IDS:
+        _parse_linux_privesc_output(text, ws, command, source, facts, lead_kinds)
+    if action_id in _WINDOWS_PRIVESC_ACTION_IDS:
+        _parse_windows_privesc_output(text, ws, command, source, facts, lead_kinds)
+    _add_privesc_leads(facts, ws, source, lead_kinds)
 
 
 def _parse_adcs(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
@@ -1282,6 +1857,146 @@ def _normalize_identity(identity: str) -> str:
     if identity.lower() == "nt authority\\system":
         return "nt authority\\system"
     return identity
+
+
+# --------------------------------------------------------------------------- #
+# Generic service metadata: HTTP, SSH, FTP, SNMP
+# --------------------------------------------------------------------------- #
+def _parse_http_metadata(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """HTTP metadata from curl/whatweb-style output.
+
+    Headers, titles, redirects, and technology fingerprints are context for follow-up
+    enum. They are not vulnerability, credential, or access facts.
+    """
+    _add_os_from_text(text, ws, source, facts, tool="http", confidence="medium", promote=False)
+    status_values = []
+    for match in _HTTP_STATUS_RE.finditer(text):
+        value = {"status": int(match.group("status"))}
+        reason = (match.group("reason") or "").strip()
+        if reason:
+            value["reason"] = reason
+        status_values.append(value)
+    if status_values:
+        _add(facts, Fact("http.reachable", f"host:{ws.target}", {"tool": "http-client"}, ProofState.SUPPORTED, source))
+        _add(facts, Fact("http.response", f"host:{ws.target}", {"responses": status_values[:10]}, ProofState.SUPPORTED, source))
+
+    servers: set[str] = set()
+    redirects: set[str] = set()
+    content_types: set[str] = set()
+    tech: list[dict] = []
+    for match in _HTTP_HEADER_RE.finditer(text):
+        key = match.group("key").lower()
+        value = match.group("value").strip()
+        if not value:
+            continue
+        if key == "server":
+            servers.add(value)
+        elif key == "x-powered-by":
+            tech.append({"name": "x-powered-by", "value": value})
+        elif key == "location":
+            redirects.add(value)
+        elif key == "content-type":
+            content_types.add(value)
+
+    for match in _WHATWEB_PLUGIN_RE.finditer(text):
+        name = match.group("name").strip()
+        value = match.group("value").strip()
+        if name.lower() in {"title", "ip", "country", "email", "summary"}:
+            continue
+        if name.lower() in {"httpserver", "server"}:
+            servers.add(value)
+        else:
+            tech.append({"name": name, "value": value})
+
+    title_match = re.search(r"\bTitle\[(?P<title>[^\]\r\n]+)\]", text)
+    if title_match and title_match.group("title").strip():
+        _add(facts, Fact("web.title", f"host:{ws.target}", {"titles": [title_match.group("title").strip()]}, ProofState.SUPPORTED, source))
+    if servers:
+        _add(facts, Fact("web.server", f"host:{ws.target}", {"headers": sorted(servers)[:10]}, ProofState.SUPPORTED, source))
+    if redirects:
+        _add(facts, Fact("http.redirect", f"host:{ws.target}", {"locations": sorted(redirects)[:10]}, ProofState.SUPPORTED, source))
+    if content_types:
+        tech.extend({"name": "content-type", "value": item} for item in sorted(content_types))
+    if tech:
+        dedup: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for item in tech:
+            key = (item["name"].lower(), item["value"].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(item)
+        _add(facts, Fact("web.tech", f"host:{ws.target}", {"items": dedup[:20]}, ProofState.SUPPORTED, source))
+
+
+def _parse_ssh_banner(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    banners = sorted({match.group(0).strip() for match in _SSH_BANNER_RE.finditer(text)}, key=str.lower)
+    if not banners:
+        return
+    _add_os_from_text("\n".join(banners), ws, source, facts, tool="ssh", confidence="medium", promote=False)
+    _add(facts, Fact("ssh.reachable", f"host:{ws.target}", {"tool": "banner"}, ProofState.SUPPORTED, source))
+    _add(facts, Fact("ssh.banner", f"host:{ws.target}", {"banners": banners[:10]}, ProofState.SUPPORTED, source))
+
+
+def _parse_ftp_output(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    banners: list[str] = []
+    login_success = False
+    for match in _FTP_BANNER_RE.finditer(text):
+        banner = (match.group("banner") or match.group("login") or "").strip()
+        if banner:
+            banners.append(banner)
+        if match.group("login"):
+            login_success = True
+    if not banners and not login_success:
+        return
+    _add(facts, Fact("ftp.reachable", f"host:{ws.target}", {"tool": "ftp-client"}, ProofState.SUPPORTED, source))
+    if banners:
+        _add(facts, Fact("ftp.banner", f"host:{ws.target}", {"banners": sorted(set(banners))[:10]}, ProofState.SUPPORTED, source))
+    if login_success and re.search(r"\banonymous\b", command, re.IGNORECASE):
+        _add(facts, Fact("ftp.anonymous_login", f"host:{ws.target}", {"tool": "ftp-client"}, ProofState.SUPPORTED, source))
+
+
+def _parse_snmp_output(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("timeout", "no response from", "authorizationerror", "authentication failure")):
+        return
+    if "snmpv2-mib::" not in lowered and not re.search(r"\[[^\]]+\]\s+\S", text):
+        return
+
+    value: dict = {}
+    for key, regex in (
+        ("description", _SNMP_SYSDESCR_RE),
+        ("name", _SNMP_SYSNAME_RE),
+        ("location", _SNMP_SYSLOCATION_RE),
+        ("contact", _SNMP_SYSCONTACT_RE),
+    ):
+        match = regex.search(text)
+        if match:
+            value[key] = match.group("value").strip().strip('"')
+
+    community = _command_arg(command, "-c", "--community")
+    if not community:
+        one = re.search(r"\[(?P<community>[^\]]+)\]\s+(?P<description>.+)", text)
+        if one:
+            community = one.group("community").strip()
+            value.setdefault("description", one.group("description").strip())
+    if community:
+        _add(facts, Fact("snmp.community", f"host:{ws.target}", {"community": community}, ProofState.SUPPORTED, source))
+
+    _add(facts, Fact("snmp.reachable", f"host:{ws.target}", {"tool": "snmp"}, ProofState.SUPPORTED, source))
+    if value:
+        _add(facts, Fact("snmp.info", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_from_text(
+            "\n".join(str(v) for v in value.values()),
+            ws,
+            source,
+            facts,
+            tool="snmp",
+            confidence="high",
+            promote=True,
+        )
+        if value.get("name"):
+            _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": value["name"]}, ProofState.SUPPORTED, source))
 
 
 # --------------------------------------------------------------------------- #

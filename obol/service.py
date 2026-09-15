@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from . import board
 from .facts import Fact, FactSet
+from .localenum import parse_local_enum_output
 from .pack import Action, load_packs, next_actions
 from .parsers import parse_action_output
 from .runner import RunResult, RunnerError, run_command
@@ -81,6 +82,19 @@ def eligible_actions(facts: FactSet, pack: list[Action] | None = None) -> list[A
     return sorted(live, key=lambda a: a.priority, reverse=True)
 
 
+def _parsed_facts(action: Action, ws: Workspace, cmd: str, result: RunResult) -> list[Fact]:
+    """Run every parser family that knows about this action/output shape.
+
+    `parsers.py` holds the broad external-tool parser corpus. `localenum.py` is kept
+    separate because post-foothold host/network output is pivot-specific and should
+    only become facts for the small local-enum action ids that request it.
+    """
+    facts: list[Fact] = []
+    facts.extend(parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd))
+    facts.extend(parse_local_enum_output(action, ws, cmd, result.stdout, result.stderr, source=cmd))
+    return facts
+
+
 def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
                timeout: int = 300, dry_run: bool = False, allow_shell: bool = False,
                args_extra: str = "", target: str = "", context: dict | None = None,
@@ -109,7 +123,7 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
 
     added: list[Fact] = []
     if not result.dry_run:
-        for fact in parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd):
+        for fact in _parsed_facts(action, ws, cmd, result):
             if ws.facts.add(fact):
                 added.append(fact)
         ws.apply_fact_enrichment(added)

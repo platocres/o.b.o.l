@@ -32,10 +32,10 @@ Next Steps). This is the foundation Charon never had.
 |---|---|---|
 | `ad` | 30 | ✅ `obol/packs/orange_ad_2025_03.json` |
 | `web` | 23 | ✅ `obol/packs/orange_web_2025_03.json` |
+| `linux-privesc` | 12 | ✅ `obol/packs/orange_linux_privesc_2025_03.json` |
+| `windows-privesc` | 10 | ✅ `obol/packs/orange_windows_privesc_2025_03.json` |
 | `pivoting` | 12 | ⏳ |
-| `linux-privesc` | 12 | ⏳ |
 | `recon` | 11 | ⏳ |
-| `windows-privesc` | 10 | ⏳ |
 | `cracking` | 7 | ⏳ |
 | `shells` | 6 | ⏳ |
 | `database` | 6 | ⏳ |
@@ -64,6 +64,10 @@ Copy it, change the lane name, review the derived proof boundaries, and add a
 `NOTICE.md` entry. **Watch the fact-kind namespace** — reuse the existing kinds
 (see AGENTS.md) so packs interoperate; a card producing `credential.candidate` must
 not silently become `credential.available`.
+
+The web and privesc lanes use specialized companion converters
+(`scripts/import_orange_web.js`, `scripts/import_orange_privesc.js`) because they
+need namespace and proof-boundary remaps before the pack is safe to execute.
 
 ## 3. Charon — the mature engine to learn from (and de-sprawl)
 

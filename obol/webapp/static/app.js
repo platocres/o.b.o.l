@@ -19,7 +19,7 @@ const PHASE_COLOR = { recon: "#38BDF8", enum: "#818CF8", creds: "#F59E0B",
   access: "#34D399", escalate: "#F472B6", loot: "#A855F7" };
 const SEV_COLOR = { critical: "#E11D48", high: "#F97316", medium: "#EAB308", low: "#3B82F6", info: "#6B7591" };
 const CAT_COLOR = { target: "#38BDF8", scan: "#818CF8", service: "#22D3EE", ad: "#F472B6",
-  credential: "#F59E0B", access: "#34D399", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
+  credential: "#F59E0B", access: "#34D399", privesc: "#FB7185", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
 const ACCESS = {
   discovered: { c: "#6B7591", t: "Discovered" }, enumerated: { c: "#3B82F6", t: "Enumerated" },
   credentialed: { c: "#EAB308", t: "Credentialed" }, foothold: { c: "#14B8A6", t: "Foothold" },
@@ -434,7 +434,7 @@ async function buildEngagement() {
     return `<div class="tcard" data-act="open" data-open="${esc(tg.host)}">
       <div class="tcard-h"><span class="tdot" style="background:${a.c}"></span><span class="t">${esc(tg.label)}</span>
         <span class="spacer" style="flex:1"></span><span class="mono muted" style="font-size:11px">${esc(tg.host)}</span></div>
-      ${identity ? `<div class="mono muted" style="font-size:12px;margin-top:5px">${esc(identity)}</div>` : ""}
+      <div class="mono muted" style="font-size:12px;margin-top:5px">${identity ? esc(identity) : ""}${tg.os ? `${identity ? " · " : ""}${esc(tg.os)}` : ""}</div>
       <div class="row" style="margin-top:8px;gap:6px">
         <span class="pill" style="border-color:${a.c}66;color:${a.c}">${a.t}</span>
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
@@ -636,7 +636,7 @@ function tabOverview(b) {
   return `
     <div class="grid-2">
       <div class="card"><div class="panel-h"><h2>Open ports</h2></div>${(b.open_ports || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap">${b.open_ports.map((p) => `<span class="pill mono">${esc(p)}</span>`).join("")}</div>` : `<div class="muted">None parsed yet — run the nmap prelude.</div>`}</div>
-      <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
+      <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b> · OS: <b style="color:var(--text)">${esc(b.meta.os || "unknown")}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
     ${sessionsCard(b)}
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
@@ -1047,7 +1047,8 @@ function engagementSVG(g) {
     if (node.type === "target") {
       const a = ACCESS[node.meta.access] || ACCESS.discovered; fill = a.c;
       const domain = node.meta.domain ? ` · ${node.meta.domain}` : "";
-      sub = a.t + (node.meta.dc ? " · DC" : "") + domain;
+      const os = node.meta.os ? ` · ${node.meta.os}` : "";
+      sub = a.t + (node.meta.dc ? " · DC" : "") + domain + os;
       const svc = (node.meta.services || []).slice(0, 4).map((s) => s.label).join(" · ");
       extra = svc ? `<span class="egs muted">${esc(svc)}${node.meta.service_count > 4 ? " …" : ""}</span>` : `<span class="egs muted">${esc(node.meta.host || "")}</span>`;
     } else if (node.type === "service") {

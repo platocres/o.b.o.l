@@ -66,6 +66,7 @@ REGISTRY: list[ToolDef] = [
     ToolDef("nslookup", "nslookup", "Recon", ["nslookup"], apt="dnsutils"),
     ToolDef("ntpdate", "ntpdate", "Recon", ["ntpdate", "ntpdig"], apt="ntpsec-ntpdate"),
     ToolDef("xfreerdp", "xfreerdp", "Recon", ["xfreerdp", "xfreerdp3"], apt="freerdp2-x11"),
+    ToolDef("sshpass", "sshpass", "Recon", ["sshpass"], apt="sshpass"),
     # AD / Windows tooling that runs on Linux
     ToolDef("evil-winrm", "Evil-WinRM", "AD / Windows", ["evil-winrm"], apt="evil-winrm"),
     ToolDef("kerbrute", "Kerbrute", "AD / Windows", ["kerbrute"], apt="kerbrute",

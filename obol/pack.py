@@ -24,9 +24,16 @@ PACKS_DIR = Path(__file__).parent / "packs"
 DEFAULT_PACK = "orange_ad_2025_03"
 # Packs loaded together by the planner. Sibling packs reuse the shared fact-kind
 # namespace so cross-domain gating works (e.g. an HTTP port unlocks web actions,
-# a web foothold could unlock a privesc pack). Order is load order only; the
-# planner ranks by each action's priority, not pack order.
-PACK_NAMES = ["orange_ad_2025_03", "orange_web_2025_03"]
+# a web foothold could unlock a privesc pack, and a proven foothold can unlock
+# pivot-candidate local enumeration). Order is load order only; the planner ranks
+# by each action's priority, not pack order.
+PACK_NAMES = [
+    "orange_ad_2025_03",
+    "orange_web_2025_03",
+    "orange_linux_privesc_2025_03",
+    "orange_windows_privesc_2025_03",
+    "obol_local_pivot_2026_09",
+]
 
 
 @dataclass
@@ -56,6 +63,8 @@ class Action:
         return bool(pk) and pk.issubset(facts.kinds())
 
     def eligible(self, facts: FactSet) -> bool:
+        if not os_compatible(facts, self.os):
+            return False
         if not all(facts.has(k) for k in self.requires_all):
             return False
         if self.requires_any and not any(facts.has(k) for k in self.requires_any):
@@ -63,6 +72,9 @@ class Action:
         return True
 
     def unmet(self, facts: FactSet) -> str:
+        if not os_compatible(facts, self.os):
+            family = host_os_family(facts) or "another OS"
+            return f"blocked because target looks like {family}"
         for k in self.requires_all:
             if not facts.has(k):
                 return f"blocked until {friendly(k)} exists"
@@ -95,10 +107,26 @@ class Action:
 _FRIENDLY = {
     "target.configured": "a configured target",
     "host.up": "a live host",
+    "host.os_family": "target OS family",
+    "host.os_hint": "target OS hint",
+    "host.interface": "host network interface",
+    "host.ip_address": "host IP address",
+    "host.route": "host route",
+    "host.arp_neighbor": "host ARP neighbor",
+    "host.dns_server": "host DNS server",
+    "host.listen_socket": "host listening socket",
+    "host.multihomed": "multi-homed host",
+    "network.subnet_candidate": "candidate adjacent subnet",
+    "pivot.candidate": "pivot candidate",
     "ports.open": "open ports",
     "scan.nmap.quick": "a quick nmap open-port scan",
     "scan.nmap.version": "an nmap service/version scan",
     "scan.nmap.udp": "an nmap UDP scan",
+    "scan.local.interfaces": "local interface enumeration",
+    "scan.local.routes": "local route table enumeration",
+    "scan.local.neighbors": "local neighbor cache enumeration",
+    "scan.local.dns": "local resolver enumeration",
+    "scan.local.listeners": "local listening-socket enumeration",
     "ad.dc_candidate": "a domain-controller candidate", "ad.domain_known": "the domain",
     "ad.base_dn": "the LDAP base DN", "ad.user_list": "a domain user list",
     "ad.anonymous_bind": "anonymous LDAP bind", "ad.graph.collected": "the AD graph",
@@ -115,6 +143,15 @@ _FRIENDLY = {
     "smb.reachable": "SMB is reachable", "smb.authenticated": "authenticated SMB access",
     "smb.null_session": "SMB null session", "smb.guest_session": "SMB guest session",
     "smb.shares": "SMB shares", "winrm.authenticated": "authenticated WinRM access",
+    "winrm.reachable": "WinRM is reachable", "rdp.reachable": "RDP is reachable",
+    "rdp.authenticated": "authenticated RDP access", "ssh.reachable": "SSH is reachable",
+    "ssh.authenticated": "authenticated SSH access", "ssh.banner": "an SSH banner",
+    "ssh.hostkey": "SSH host keys", "ftp.reachable": "FTP is reachable",
+    "ftp.authenticated": "authenticated FTP access", "ftp.banner": "an FTP banner",
+    "ftp.anonymous_login": "anonymous FTP login", "snmp.reachable": "SNMP is reachable",
+    "snmp.community": "an SNMP community", "snmp.info": "SNMP system info",
+    "dns.reachable": "DNS is reachable", "http.response": "an HTTP response",
+    "http.redirect": "an HTTP redirect",
     "access.admin": "administrative access", "access.system": "SYSTEM access",
     "access.desktop": "an interactive desktop", "foothold.windows": "a Windows foothold",
     "access.shell": "an interactive shell", "foothold.linux": "a Linux foothold",
@@ -122,8 +159,28 @@ _FRIENDLY = {
     "persistence.domain": "domain persistence", "enum.deep": "deep enumeration",
     "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",
     "config.review": "config review", "lateral.movement": "lateral movement",
-    "http.reachable": "HTTP is reachable", "winrm.reachable": "WinRM is reachable",
+    "host.kernel": "host kernel/version", "host.arch": "host architecture",
+    "privesc.leads": "local privilege escalation leads",
+    "privesc.sudo_rights": "sudo rights lead",
+    "privesc.suid_candidate": "SUID/SGID candidate",
+    "privesc.capability": "dangerous Linux capability",
+    "privesc.cron_writable": "writable scheduled task or cron lead",
+    "privesc.process_lead": "process-monitoring privesc lead",
+    "privesc.passwd_writable": "writable /etc/passwd lead",
+    "privesc.nfs_no_root_squash": "NFS no_root_squash lead",
+    "privesc.lxd_group": "LXD group escape lead",
+    "privesc.docker_group": "Docker socket/group escape lead",
+    "privesc.windows_privilege": "dangerous Windows privilege",
+    "privesc.always_install_elevated": "AlwaysInstallElevated lead",
+    "privesc.unquoted_service_path": "unquoted service path lead",
+    "privesc.weak_service_permission": "weak service permission lead",
+    "privesc.stored_credentials": "stored Windows credential lead",
+    "privesc.patch_gap": "missing-patch privesc lead",
+    "persistence.linux": "Linux persistence", "persistence.windows": "Windows persistence",
+    "http.reachable": "HTTP is reachable",
     "web.content_map": "a map of discovered web content", "web.vhost": "a discovered virtual host",
+    "web.title": "a web page title", "web.server": "a web server header",
+    "web.tech": "web technology fingerprints",
     "web.source": "exposed application source", "web.parameterized": "a parameterized web endpoint",
     "web.authenticated": "authenticated web access", "web.upload_form": "a file-upload form",
     "web.upload_confirmed": "a confirmed file upload", "web.lfi_confirmed": "a confirmed local file inclusion",
@@ -143,6 +200,48 @@ def friendly(kind: str) -> str:
     if kind.startswith("service."):
         return f"{kind.split('.', 1)[1]} service evidence"
     return kind
+
+
+def _normalize_os_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"windows", "win"}:
+        return "windows"
+    if text in {"linux", "unix", "gnu/linux"}:
+        return "linux"
+    return ""
+
+
+def host_os_family(facts: FactSet) -> str:
+    """Return the single proven target OS family, or '' when unknown/conflicting."""
+    families = {
+        family
+        for value in facts.values("host.os_family")
+        for family in [_normalize_os_name(value.get("family", ""))]
+        if family
+    }
+    if not families:
+        if facts.has("foothold.windows") or facts.has("winrm.authenticated") or facts.has("rdp.authenticated"):
+            families.add("windows")
+        if facts.has("foothold.linux"):
+            families.add("linux")
+    return next(iter(families)) if len(families) == 1 else ""
+
+
+def os_compatible(facts: FactSet, action_os: list[str] | tuple[str, ...] | None) -> bool:
+    """Whether an action's OS tags fit this target.
+
+    Unknown target OS stays permissive so early recon still works. Once a host has
+    one proven OS family, wrong-platform actions are hidden from next moves and
+    tool palettes.
+    """
+    allowed = {_normalize_os_name(item) for item in (action_os or [])}
+    allowed.discard("")
+    if not allowed:
+        return True
+    family = host_os_family(facts)
+    if not family:
+        return True
+    return family in allowed
 
 
 # --------------------------------------------------------------------------- #

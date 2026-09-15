@@ -66,6 +66,35 @@ def test_scope_add_multiple_and_remove(tmp_path, monkeypatch, capsys):
     assert Workspace(tmp_path).load().scope == ["10.0.0.0/24"]
 
 
+def test_findings_rollup_groups_by_category_host_and_evidence(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init"])
+    capsys.readouterr()
+
+    ws = Workspace(tmp_path).load()
+    ws.add_target("10.0.0.5", "WEB")
+    ws.facts.add(Fact("port:80", "host:10.0.0.5", {"port": 80, "protocol": "tcp", "service": "http"}, source="nmap -p- 10.0.0.5"))
+    ws.facts.add(Fact("web.title", "host:10.0.0.5", {"titles": ["Portal"]}, source="curl http://10.0.0.5"))
+    ws.facts.add(Fact("ad.domain_known", "domain:corp.local", {"name": "corp.local"}, source="nxc ldap 10.0.0.5"))
+    ws.save()
+
+    cli.main(["findings"])
+    out = capsys.readouterr().out
+    assert "== findings" in out
+    assert "[target]" in out and "[web]" in out and "[ad]" in out
+    assert "WEB" in out
+    assert "port 80 open" in out
+    assert "Portal" in out
+    assert "source: nmap -p- 10.0.0.5" in out
+    assert "corp.local" in out
+
+    cli.main(["findings", "--host", "10.0.0.5", "--no-evidence"])
+    host_only = capsys.readouterr().out
+    assert "Portal" in host_only
+    assert "corp.local" not in host_only
+    assert "source:" not in host_only
+
+
 def test_scan_sweeps_every_scope_entry_and_quickstarts_targets(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     cli.main(["init"])

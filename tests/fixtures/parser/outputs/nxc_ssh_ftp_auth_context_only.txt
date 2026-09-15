@@ -1,0 +1,4 @@
+SSH         10.10.10.10     22     LINUX01      [*] SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10
+SSH         10.10.10.10     22     LINUX01      [+] corp.local\svc-audit:Spring2026!
+FTP         10.10.10.10     21     FTP01        [*] Banner: 220 vsFTPd 3.0.3
+FTP         10.10.10.10     21     FTP01        [+] corp.local\svc-audit:Spring2026!

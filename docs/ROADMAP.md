@@ -132,16 +132,23 @@ exists. The current spine is:
 
 Next work should widen this carefully:
 
-- **More service parsers.** Add generic parsers for SMB share/session output,
-  WinRM validation, HTTP enumeration, FTP/SSH banners, SNMP, and common nmap NSE
-  script findings. Every parser must map output to the narrowest fact and include
-  anti-overfit tests.
+- **More service parsers — PARTLY DONE.** Generic parser coverage now includes SMB
+  shares/sessions, WinRM/RDP/SSH/FTP service authentication, HTTP metadata
+  (curl/whatweb), FTP/SSH banners, SNMP walk/check output, and common nmap service
+  script findings for SSH host keys, FTP anonymous login, SNMP info, HTTP redirects,
+  and technology fingerprints. Continue with exploitation-card success signals,
+  privesc/pivot outputs, and more real-tool fixtures. Every parser must map output
+  to the narrowest fact and include anti-overfit tests.
 - **Better port-to-playbook gating.** The Orange AD pack now has a small exam-flow
   priority override for nmap → DC identify → anonymous LDAP → user enum. Extend
   that idea across web/privesc sibling packs without hardcoding box wins.
-- **Parser fixtures from real tools.** Use Forest and other lab outputs as golden
-  regressions, but never as recipes. Fixture names should vary so tests prove
-  shape recognition, not walkthrough memorization.
+- **Parser fixtures from real tools: FIRST CORPUS DONE.** `docs/PARSER_QA.md`
+  documents how parsers are written and judged. `tests/fixtures/parser/` now has
+  a manifest-driven fixture corpus covering nmap metadata, curl/whatweb HTTP
+  metadata, NetExec SSH/FTP auth, failed auth, SSH banner vs shell proof, SNMP
+  timeout, and FTP named-login edge cases. Continue adding anonymized Forest and
+  other lab outputs as golden regressions, but never as recipes. Fixture names
+  should vary so tests prove shape recognition, not walkthrough memorization.
 - **Service-specific next moves.** If `389` is open, prefer NetExec LDAP and
   ldapsearch. If `445` is open, prefer nxc SMB/null/guest/RID paths. If HTTP ports
   exist, unlock web enumeration once the web pack exists.
@@ -159,15 +166,23 @@ Export the remaining prior-obol lanes into packs using the AD converter as the
 template (`docs/SOURCES.md` §2). Order by OSCP value: `web` (23) and
 `linux-privesc`/`windows-privesc` next, since OSCP is not AD-only. Each pack must
 reuse the shared fact-kind namespace so cross-domain gating works (e.g. a web
-foothold producing `linux.shell` unlocks the privesc pack).
+foothold producing `foothold.linux` unlocks the privesc pack).
 
 - **`web` (23) — DONE.** `obol/packs/orange_web_2025_03.json` via
   `scripts/import_orange_web.js`; the planner merges packs (`pack.load_packs`), so
   an HTTP port unlocks web recon after the nmap spine. Fact kinds are remapped onto
   the shared namespace and kept to their narrowest claim. Recon parsers
   (content discovery, vhosts, nikto) landed; the exploitation cards remain
-  explain-only until their success-signal parsers exist. Next lanes:
-  `linux-privesc` / `windows-privesc`.
+  explain-only until their success-signal parsers exist.
+- **`linux-privesc` (12) and `windows-privesc` (10) — DONE.**
+  `obol/packs/orange_linux_privesc_2025_03.json` and
+  `obol/packs/orange_windows_privesc_2025_03.json` via
+  `scripts/import_orange_privesc.js`. A proven foothold unlocks OS-matched local
+  enum; parsed `privesc.*` lead facts unlock the specific abuse cards they justify;
+  admin/root/SYSTEM is recorded only from proof output. Privesc findings surface on
+  host pages, engagement Activity, reports, and the escalation phase of the graph.
+  Next pack lanes: `pivoting`, `cracking`, `shells`, `database`, and the remaining
+  support lanes.
 
 ## 4. OSCP report generation
 
@@ -289,9 +304,10 @@ The build sequence (each a reviewable PR):
   **listeners** (an async start-and-watch flow, not a credentialed login),
   tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic periodic
   probe loop (the manual `probe` exists).
-- **(b) Unlocks the privesc pack.** The `access.*`/`foothold.*` fact from (a) gates
+- **(b) Unlocks the privesc pack — DONE.** The `access.*`/`foothold.*` fact from (a) gates
   the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
-  login and privesc are two halves of one milestone.
+  login and privesc are two halves of one milestone. The first privesc build also
+  added proof-bound `privesc.*` lead parsers and host/engagement visibility.
 - **(c) Post-foothold host enum.** Once on the box, enumerate it (NICs, routes, ARP)
   through a non-interactive exec channel where creds allow, else guided-paste. A
   second interface records `host.multihomed` + the reachable subnet as a lead,
@@ -472,10 +488,14 @@ summary that links into it.
   falls back to an arbitrary domain when the credential has none. Fix: one node per
   distinct credential, and a cred→host edge only where a fact ties that credential
   to that host. Largely subsumed by §6(f) (the topology-map redesign).
-- **Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
+- ~~**Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
   overview`) so the CLI operator gets the same cross-host, category-organized
-  findings view the web Activity view added.
-- `run`'s "new facts" detail line is still sparse for port/service facts.
+  findings view the web Activity view added.~~ **DONE.** `obol findings` prints an
+  engagement-wide, category-grouped, host/domain-tagged findings roll-up with source
+  command lineage and optional redaction.
+- ~~`run`'s "new facts" detail line is still sparse for port/service facts.~~
+  **DONE.** CLI run feedback now uses compact fact summaries for ports, services,
+  web titles, shares, banners, users, redirects, and other common parser payloads.
 - Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
   ahead of roasting).
 - `obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its

@@ -118,6 +118,28 @@ def test_nxc_winrm_success_is_foothold_not_admin_without_pwn3d():
     assert "access.system" not in kinds
 
 
+def test_nxc_ssh_and_ftp_auth_validate_services_without_shell_or_admin():
+    ws = _workspace()
+    action = _action("password-spray")
+    out = """
+SSH         10.10.10.10     22     LINUX01      [+] corp.local\\svc-audit:Spring2026!
+FTP         10.10.10.10     21     FTP01        [+] corp.local\\svc-audit:Spring2026!
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc ssh 10.10.10.10 -u svc-audit -p 'Spring2026!'",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"ssh.reachable", "ftp.reachable", "ssh.authenticated", "ftp.authenticated", "credential.available"} <= kinds
+    assert "foothold.linux" not in kinds
+    assert "access.shell" not in kinds
+    assert "access.admin" not in kinds
+
+
 def test_nxc_failure_records_refuted_validation_without_credential():
     ws = _workspace()
     action = _action("password-spray")
@@ -199,3 +221,7 @@ def test_new_fact_labels_are_friendly():
     assert friendly("ldap.authenticated") == "authenticated LDAP access"
     assert friendly("winrm.authenticated") == "authenticated WinRM access"
     assert friendly("credential.validation") == "credential validation evidence"
+    assert friendly("ssh.reachable") == "SSH is reachable"
+    assert friendly("ftp.anonymous_login") == "anonymous FTP login"
+    assert friendly("snmp.info") == "SNMP system info"
+    assert friendly("web.tech") == "web technology fingerprints"

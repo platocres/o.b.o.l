@@ -1,0 +1,203 @@
+{
+  "name": "obol_local_pivot_2026_09",
+  "description": "Post-foothold host and network enumeration for pivot-candidate discovery. Not Orange-derived.",
+  "source": {
+    "name": "O.B.O.L local pivot methodology",
+    "license": "project",
+    "notes": "Small OS-aware local commands run through existing SSH/WinRM proof channels after access is proven."
+  },
+  "actions": [
+    {
+      "id": "local-linux-interfaces",
+      "title": "Enumerate Linux interfaces",
+      "tool": "sshpass",
+      "priority": 76,
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
+      ],
+      "os": [
+        "linux"
+      ],
+      "produces": [
+        "scan.local.interfaces"
+      ],
+      "hypothesis": "A Linux foothold can expose additional interfaces or subnets that may become pivot candidates.",
+      "commands": [
+        {
+          "tool": "sshpass",
+          "note": "Use the validated plaintext credential to run a non-interactive interface check over SSH.",
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 {{user}}@{{target}} ip -o addr show"
+        }
+      ]
+    },
+    {
+      "id": "local-linux-routes",
+      "title": "Enumerate Linux routes",
+      "tool": "sshpass",
+      "priority": 75,
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
+      ],
+      "os": [
+        "linux"
+      ],
+      "produces": [
+        "scan.local.routes"
+      ],
+      "hypothesis": "Routes from a foothold identify adjacent networks worth validating before building a tunnel.",
+      "commands": [
+        {
+          "tool": "sshpass",
+          "note": "Collect route table evidence without claiming the route is reachable through a working pivot yet.",
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 {{user}}@{{target}} ip route"
+        }
+      ]
+    },
+    {
+      "id": "local-linux-neighbors",
+      "title": "Enumerate Linux ARP neighbors",
+      "tool": "sshpass",
+      "priority": 70,
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
+      ],
+      "os": [
+        "linux"
+      ],
+      "produces": [
+        "scan.local.neighbors"
+      ],
+      "hypothesis": "Neighbor cache entries are weak but useful hints for hosts near the foothold.",
+      "commands": [
+        {
+          "tool": "sshpass",
+          "note": "Record observed neighbors as host-scoped hints only.",
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 {{user}}@{{target}} ip neigh show"
+        }
+      ]
+    },
+    {
+      "id": "local-linux-dns",
+      "title": "Enumerate Linux DNS servers",
+      "tool": "sshpass",
+      "priority": 68,
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
+      ],
+      "os": [
+        "linux"
+      ],
+      "produces": [
+        "scan.local.dns"
+      ],
+      "hypothesis": "Resolver configuration can identify internal DNS infrastructure for follow-up enumeration.",
+      "commands": [
+        {
+          "tool": "sshpass",
+          "note": "Read resolver configuration through the existing non-interactive SSH channel.",
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 {{user}}@{{target}} cat /etc/resolv.conf"
+        }
+      ]
+    },
+    {
+      "id": "local-windows-interfaces",
+      "title": "Enumerate Windows interfaces",
+      "tool": "nxc",
+      "priority": 76,
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
+      ],
+      "os": [
+        "windows"
+      ],
+      "produces": [
+        "scan.local.interfaces"
+      ],
+      "hypothesis": "A Windows WinRM foothold can expose additional NICs, DNS servers, or subnets that may become pivot candidates.",
+      "commands": [
+        {
+          "tool": "nxc",
+          "note": "Use WinRM exec through NetExec so output is captured and parsed like every other run.",
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -x \"ipconfig /all\""
+        }
+      ]
+    },
+    {
+      "id": "local-windows-routes",
+      "title": "Enumerate Windows routes",
+      "tool": "nxc",
+      "priority": 75,
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
+      ],
+      "os": [
+        "windows"
+      ],
+      "produces": [
+        "scan.local.routes"
+      ],
+      "hypothesis": "The Windows route table can reveal internal subnets before any tunnel exists.",
+      "commands": [
+        {
+          "tool": "nxc",
+          "note": "Collect route evidence only; a route does not prove a working tunnel.",
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -x \"route print\""
+        }
+      ]
+    },
+    {
+      "id": "local-windows-neighbors",
+      "title": "Enumerate Windows ARP neighbors",
+      "tool": "nxc",
+      "priority": 70,
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
+      ],
+      "os": [
+        "windows"
+      ],
+      "produces": [
+        "scan.local.neighbors"
+      ],
+      "hypothesis": "ARP cache entries can identify nearby internal hosts to validate through a later tunnel.",
+      "commands": [
+        {
+          "tool": "nxc",
+          "note": "Record neighbor hints without treating them as discovered targets.",
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -x \"arp -a\""
+        }
+      ]
+    },
+    {
+      "id": "local-windows-listeners",
+      "title": "Enumerate Windows listening sockets",
+      "tool": "nxc",
+      "priority": 66,
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
+      ],
+      "os": [
+        "windows"
+      ],
+      "produces": [
+        "scan.local.listeners"
+      ],
+      "hypothesis": "Listening sockets give local service context and can help pick tunnel/port-forward targets later.",
+      "commands": [
+        {
+          "tool": "nxc",
+          "note": "Capture local listener evidence for later route-aware pivot planning.",
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -x \"netstat -ano\""
+        }
+      ]
+    }
+  ]
+}

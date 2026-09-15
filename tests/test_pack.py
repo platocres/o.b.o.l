@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from obol.facts import Fact, FactSet, ProofState
-from obol.pack import load_pack, next_actions, blocked_actions, apply_action
+from obol.pack import Action, load_pack, next_actions, blocked_actions, apply_action
 from obol.seed import seed_forest
 from obol.workspace import Workspace
 
@@ -51,6 +51,28 @@ def test_dcsync_is_blocked_until_privilege():
     next_ids = {a.id for a in next_actions(facts)}
     assert "dcsync" in blocked_ids
     assert "dcsync" not in next_ids
+
+
+def test_os_specific_actions_are_filtered_only_after_os_is_known():
+    pack = [
+        Action(id="windows-only", title="Windows only", requires_all=["target.configured"], os=["windows"], priority=100),
+        Action(id="linux-only", title="Linux only", requires_all=["target.configured"], os=["linux"], priority=90),
+        Action(id="generic", title="Generic", requires_all=["target.configured"], priority=80),
+    ]
+    unknown = FactSet([Fact("target.configured", "host:10.10.10.10")])
+    assert {a.id for a in next_actions(unknown, pack)} == {"windows-only", "linux-only", "generic"}
+
+    linux = FactSet([
+        Fact("target.configured", "host:10.10.10.10"),
+        Fact("host.os_family", "host:10.10.10.10", {"family": "linux"}),
+    ])
+    assert {a.id for a in next_actions(linux, pack)} == {"linux-only", "generic"}
+
+    windows = FactSet([
+        Fact("target.configured", "host:10.10.10.10"),
+        Fact("host.os_family", "host:10.10.10.10", {"family": "windows"}),
+    ])
+    assert {a.id for a in next_actions(windows, pack)} == {"windows-only", "generic"}
 
 
 def test_forest_seed_unlocks_anonymous_ldap():

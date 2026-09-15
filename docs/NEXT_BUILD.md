@@ -103,19 +103,92 @@ surfaces** (report, findings roll-up, ledger, sessions, run outputs) — redacti
 opt-in (report "redact secrets" toggle, `obol report --redact`, `WEB_SHOW_SECRETS`).
 The shareable debug package stays redacted by default.
 
+## Shipped: Parser Coverage v2 + terminal findings roll-up
+
+The evidence engine now recognizes more of the safe, high-signal baseline output
+operators see immediately after nmap/Quick Start:
+
+- nmap service/script output now lands proof-bound reachability and metadata facts
+  for SSH, FTP, RDP, DNS, SNMP, HTTP redirects/generators, SSH host keys, SNMP
+  system info, and anonymous FTP.
+- NetExec auth parsing now covers SSH/FTP/RDP as service authentication without
+  overclaiming shells, admin, or footholds. WinRM/RDP still use the existing access
+  proof rules; SSH only becomes a Linux foothold when command output proves a shell
+  (`uid=`/`id`).
+- curl/whatweb output now records HTTP responses, redirects, server headers, titles,
+  and web technology fingerprints as context only.
+- SNMP walk/check output records reachable SNMP, community proof, and system info;
+  FTP/SSH banners land as banner facts.
+- CLI run feedback now prints compact fact details, and `obol findings` provides
+  terminal parity with the web Activity findings roll-up: category-grouped,
+  host/domain-tagged findings with evidence source lines and optional redaction.
+
+Boundary kept: these parsers produce context, reachability, service authentication,
+or candidate material only. They do not invent vulnerabilities, credentials,
+footholds, admin, or loot from banner/metadata output.
+
+## Shipped: Parser QA fixture corpus v1
+
+Parser behavior now has a checked-in QA spine:
+
+- `docs/PARSER_QA.md` documents how parsers are created, what they may claim, what
+  they must not claim, and how fixture confidence should be interpreted.
+- `tests/fixtures/parser/manifest.json` defines positive, negative, and
+  anti-overclaim cases over anonymized, real-shaped outputs.
+- `tests/test_parser_fixtures.py` runs every fixture through `parse_action_output`
+  and asserts expected fact kinds, selected payload values, source lineage, refuted
+  failures, and forbidden higher-value claims.
+- The first corpus covers nmap service/script metadata, curl/whatweb HTTP
+  metadata, NetExec SSH/FTP auth, failed auth, SSH banner vs shell proof, SNMP
+  timeout, and FTP named-login edge cases.
+
+The fixture suite also caught and fixed an nmap SNMP parser gap for `|_` final
+script lines, which is exactly the kind of regression this corpus is meant to
+surface.
+
+## Shipped: Host OS awareness + changelog discipline
+
+Enumeration now records OS evidence as facts instead of leaving OS as an unused
+target field. Parsers emit `host.os_hint` for clues and `host.os_family` only from
+strong, non-conflicting evidence, such as nmap/NetExec OS strings, SNMP
+descriptions, WinRM/RDP/SSH proof output, or Penelope shell metadata. Unknown OS
+stays permissive; once a target is proven Linux or Windows, wrong-platform actions
+are filtered out of next moves and tool palettes. The OS family is shown in terminal
+overview, web target cards, target overview, engagement map subtitles, Useful
+facts, and reports.
+
+The repo now has a backfilled `CHANGELOG.md`, `AGENTS.md` directs agents to read
+and update it, and the test suite includes a changelog enforcement check for
+meaningful code/docs changes.
+
+## Current build: Post-foothold privesc packs v1
+
+Linux and Windows privilege-escalation lanes now load as sibling Orange-derived
+packs. A proven foothold unlocks the OS-matched local enumeration card; parsed
+local enum facts (`privesc.sudo_rights`, `privesc.suid_candidate`,
+`privesc.capability`, `privesc.windows_privilege`,
+`privesc.always_install_elevated`, weak service path facts, and related leads)
+unlock the specific abuse cards they justify. The packs stay proof-bound: lead
+facts do not become admin/root/SYSTEM, and privileged access is recorded only when
+command output proves `uid=0`/root or `nt authority\system`.
+
+Privesc facts are first-class findings. They appear in each host's Useful Facts and
+Findings tables, in the engagement Activity roll-up under **Privilege escalation**,
+in reports, and in the path graph's escalation phase.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 
-- **Parser coverage (ROADMAP item 1, TOP PRIORITY).** The main gap: `run` only
-  produces facts where a parser exists. Widen to SMB shares/sessions, WinRM
-  validation, HTTP enum, FTP/SSH/SNMP banners, and common NSE findings — each mapped
-  to the narrowest fact with anti-overfit tests.
-- **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
-  interlock note is **item 3 privesc packs** (unlocked by the access fact), then
-  post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware
-  runner (auto-proxychains for SOCKS, transparent for ligolo) → auto-extend scope →
-  through-tunnel sweep (recursion + health proof) → topology map.
+- **Parser coverage (ROADMAP item 1, still important).** The broad v2 baseline is
+  shipped, and the first QA fixture corpus is in place. Continue with more real
+  fixtures, exploitation-card success signals, privesc/pivot outputs, and
+  action-specific parsers for the remaining Orange AD branches.
+- **Pivoting continues (ROADMAP §6 c–f).** §6(a) sessions and item 3 privesc packs
+  shipped. Next is post-foothold host/network enum (`host.multihomed`) → one-click
+  tunnels + route-aware runner (auto-proxychains for SOCKS, transparent for ligolo)
+  → auto-extend scope → through-tunnel sweep (recursion + health proof) → topology
+  map.
 - **Engagement profile & flag awareness (ROADMAP §7).** Platform/exam type + per-
   target `machine_type` + proof-bound flag capture. Interlocks with §6 and item 3
   (see the ROADMAP §6 interlock note). Mines Pentest Companion (`docs/SOURCES.md §5`).
@@ -123,8 +196,8 @@ Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
   One-click upload/staging to a foothold, a Kali material cache (locate/cache/upload),
   and one-click download of missing items. Deferred pending a design conversation.
 - **Remaining found-items** in ROADMAP "Known smaller issues": the engagement-map
-  credential fix, terminal parity for the 0e findings roll-up, and an engagement-wide
-  redact switch for the findings/ledger surfaces.
+  credential fix and an engagement-wide redact switch for the findings/ledger
+  surfaces.
 
 ## 1. Playbook data model and dry-run runner — DONE
 

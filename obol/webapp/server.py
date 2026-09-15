@@ -195,7 +195,9 @@ def _parser_status(action, command: str) -> dict:
         any(f" {name} " in padded for name in (
             "nmap", "nxc", "ldapsearch", "smbclient", "smbmap", "rpcclient",
             "enum4linux", "hashcat", "john", "penelope", "certipy", "pywhisker",
-            "feroxbuster", "ffuf", "nikto", "dirb", "gobuster",
+            "feroxbuster", "ffuf", "nikto", "dirb", "gobuster", "whatweb",
+            "curl", "snmpwalk", "snmp-check", "onesixtyone", "ftp", "lftp",
+            "nc", "ncat", "telnet",
         ))
         or any(marker in lowered for marker in (
             "getnpusers", "getuserspns", "secretsdump", "bloodhound-python",
@@ -423,6 +425,7 @@ CATEGORY_TITLE = {
     "ad": "Directory / AD",
     "credential": "Credentials & hashes",
     "access": "Access",
+    "privesc": "Privilege escalation",
     "loot": "Loot",
     "config": "Config / vuln",
     "web": "Web",
@@ -554,7 +557,7 @@ def _target_fact_summary(tf) -> list[dict]:
         key=lambda f: (f.created_at, f.kind),
     )
     sections = [
-        ("target", "Target", lambda k: k == "target.configured" or k == "host.up"),
+        ("target", "Target", lambda k: k in {"target.configured", "host.up", "host.os_family", "host.os_hint"}),
         ("network", "Network & services",
          lambda k: k.startswith("port:") or k.startswith("scan.") or k.startswith("service.")
          or k in {"ldap.reachable", "smb.reachable", "kerberos.reachable", "winrm.reachable", "http.reachable"}),
@@ -562,6 +565,8 @@ def _target_fact_summary(tf) -> list[dict]:
         ("credentials", "Credentials & hashes",
          lambda k: k.startswith("credential.") or k.startswith("hash.") or k.startswith("kerberos.")),
         ("access", "Access", lambda k: k.startswith("access.") or k.startswith("foothold.")),
+        ("privesc", "Privilege escalation",
+         lambda k: k.startswith("privesc.") or k in {"host.kernel", "host.arch"}),
         ("web", "Web leads",
          lambda k: k.startswith("web.") or k in {"db.creds", "exploit.candidate", "cloud.aws_access"}),
         ("loot", "Loot / review",

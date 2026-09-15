@@ -40,6 +40,9 @@ _ACCESS_LADDER: list[tuple[str, tuple[str, ...]]] = [
                           "credential.ntlm_hash")),
     ("Foothold", ("foothold.windows", "foothold.linux", "access.shell",
                   "winrm.authenticated", "foothold.webshell")),
+    ("Privesc leads", ("privesc.leads", "privesc.sudo_rights",
+                       "privesc.windows_privilege", "privesc.suid_candidate",
+                       "privesc.capability")),
     ("Privileged access", ("access.admin", "access.system")),
     ("Domain / loot", ("loot.ntds", "hash.krbtgt", "persistence.domain")),
 ]
@@ -79,9 +82,10 @@ _CATEGORY_ORDER = {
     "ad": 3,
     "credential": 4,
     "access": 5,
-    "loot": 6,
-    "config": 7,
-    "web": 8,
+    "privesc": 6,
+    "loot": 7,
+    "config": 8,
+    "web": 9,
     "other": 99,
 }
 
@@ -100,7 +104,8 @@ def _fact_category(kind: str) -> str:
         return "target"
     if kind.startswith("scan."):
         return "scan"
-    if kind.startswith(("service.", "ldap.", "smb.", "winrm.", "kerberos.", "http.")):
+    if kind.startswith(("service.", "ldap.", "smb.", "winrm.", "kerberos.", "http.",
+                        "rdp.", "ssh.", "ftp.", "snmp.", "dns.")):
         return "service"
     if kind.startswith(("ad.", "hash.", "kerberos.")):
         return "ad"
@@ -108,9 +113,11 @@ def _fact_category(kind: str) -> str:
         return "credential"
     if kind.startswith(("access.", "foothold.")):
         return "access"
+    if kind.startswith("privesc."):
+        return "privesc"
     if kind.startswith("loot."):
         return "loot"
-    if kind.startswith(("config.", "vuln.")):
+    if kind.startswith(("config.", "vuln.", "exploit.")):
         return "config"
     if kind.startswith("web."):
         return "web"
@@ -317,6 +324,8 @@ def _render_targets(ws: Workspace, *, include_secrets: bool) -> list[str]:
         lines.append(f"### {t.get('label') or host} (`{host}`)")
         lines.append("")
         lines.append(f"- Access: {target_access_level(tf)} · phase: {target_phase(tf)}")
+        if t.get("os"):
+            lines.append(f"- OS family: {t['os']}")
         ports = _target_open_ports([f for f in tf.facts if f.scope == f'host:{host}'])
         if ports:
             lines.append(f"- Open ports: {', '.join(ports[:24])}")

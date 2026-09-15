@@ -1,0 +1,7 @@
+HTTP/1.1 302 Found
+Server: nginx/1.24.0
+X-Powered-By: PHP/8.2.12
+Location: /login
+Content-Type: text/html; charset=UTF-8
+
+http://10.10.10.10 [302 Found] Bootstrap[5.3.2], Country[RESERVED][ZZ], HTTPServer[nginx/1.24.0], IP[10.10.10.10], PHP[8.2.12], RedirectLocation[/login], Title[Operator Console]
