@@ -176,14 +176,36 @@ Privesc facts are first-class findings. They appear in each host's Useful Facts 
 Findings tables, in the engagement Activity roll-up under **Privilege escalation**,
 in reports, and in the path graph's escalation phase.
 
+## Shipped: Parser Coverage + Fixture Corpus v3
+
+The parser QA spine now covers higher-value, post-baseline output shapes without
+weakening proof boundaries:
+
+- NetExec SAM dumps and secretsdump/NTDS output land `hash.ntlm`,
+  `credential.candidate`, `hash.krbtgt`, and `loot.ntds` only when the transcript
+  supports those exact claims; they never become plaintext credentials or access.
+- BloodHound collection and BloodHound path analysis are separated: a collection
+  archive proves `ad.graph.collected`, while explicit path-analysis text proves
+  `ad.attack_paths`.
+- SQLMap output can now prove confirmed SQLi, database names/tables, database
+  credential-material candidates, and SQLMap webshell context. It still does not
+  prove OS privilege, lateral access, or validated credentials.
+- Exposed Git recovery (`/.git/HEAD` / `git-dumper`) records `web.source` and
+  source-code secret candidates without converting a found string into a working
+  credential.
+- The fixture manifest adds real-shaped positive and anti-overclaim cases for all
+  of the above plus Linux/Windows privesc enum leads.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 
-- **Parser coverage (ROADMAP item 1, still important).** The broad v2 baseline is
-  shipped, and the first QA fixture corpus is in place. Continue with more real
-  fixtures, exploitation-card success signals, privesc/pivot outputs, and
-  action-specific parsers for the remaining Orange AD branches.
+- **Parser coverage (ROADMAP item 1, still important).** v3 covers the biggest
+  post-baseline gaps: NXC/SAM/NTDS material, BloodHound collection vs. path
+  analysis, SQLMap success signals, git-dumper source recovery, and privesc leads.
+  Continue with more real fixtures from operator runs, AD abuse-card success
+  signals, tunnel/proxy failure transcripts, and the remaining Orange AD support
+  branches.
 - **Pivoting continues (ROADMAP §6 c–f).** §6(a) sessions and item 3 privesc packs
   shipped. Next is post-foothold host/network enum (`host.multihomed`) → one-click
   tunnels + route-aware runner (auto-proxychains for SOCKS, transparent for ligolo)

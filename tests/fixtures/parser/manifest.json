@@ -254,6 +254,243 @@
         "ftp.anonymous_login",
         "credential.available"
       ]
+    },
+    {
+      "id": "nxc_sam_dump_material_not_access",
+      "tool": "netexec",
+      "action_id": "dump-secrets",
+      "domain": "corp.local",
+      "command": "nxc smb 10.10.10.10 -u localadmin -p 'LocalAdmin2026!' --sam",
+      "stdout": "outputs/nxc_sam_dump_material_not_access.txt",
+      "expected_supported_kinds": [
+        "smb.reachable",
+        "host.os_hint",
+        "host.os_family",
+        "hash.ntlm",
+        "credential.candidate"
+      ],
+      "expected_facts": [
+        {
+          "kind": "hash.ntlm",
+          "scope": "domain:corp.local",
+          "value_contains": {
+            "count": 2,
+            "entries": [
+              {"user": "Administrator", "nthash": "8846f7eaee8fb117ad06bdd830b7586c"},
+              {"user": "localuser", "nthash": "6f4b6612125fb3a0daecd2799dfd6f5f"}
+            ]
+          }
+        },
+        {
+          "kind": "credential.candidate",
+          "value_contains": {"kind": "ntlm_hash", "count": 2}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "loot.ntds",
+        "hash.krbtgt",
+        "credential.available",
+        "credential.plaintext"
+      ]
+    },
+    {
+      "id": "secretsdump_ntds_domain_loot",
+      "tool": "secretsdump",
+      "action_id": "dcsync",
+      "domain": "corp.local",
+      "command": "impacket-secretsdump 'corp.local/dumpsvc:Passw0rd!'@10.10.10.10 -just-dc",
+      "stdout": "outputs/secretsdump_ntds_domain_loot.txt",
+      "expected_supported_kinds": [
+        "hash.ntlm",
+        "hash.krbtgt",
+        "loot.ntds",
+        "credential.candidate"
+      ],
+      "expected_facts": [
+        {
+          "kind": "hash.ntlm",
+          "scope": "domain:corp.local",
+          "value_contains": {
+            "count": 3,
+            "entries": [
+              {"user": "Administrator"},
+              {"user": "krbtgt"},
+              {"user": "svc-backup"}
+            ]
+          }
+        },
+        {
+          "kind": "hash.krbtgt",
+          "value_contains": {"nthash": "1a59bd44fdb8f9f4a3f8c9d2e5b7a6c1"}
+        },
+        {
+          "kind": "loot.ntds",
+          "value_contains": {"count": 3, "method": "credential-dump"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext"
+      ],
+      "allow_default_forbidden_supported_kinds": [
+        "loot.ntds"
+      ]
+    },
+    {
+      "id": "bloodhound_collection_zip_context_only",
+      "tool": "bloodhound-python",
+      "action_id": "bloodhound-collect",
+      "domain": "corp.local",
+      "command": "bloodhound-python -d corp.local -u svc-audit -p 'Spring2026!' -ns 10.10.10.10 -c All --zip",
+      "stdout": "outputs/bloodhound_collection_zip_context_only.txt",
+      "expected_supported_kinds": [
+        "ad.graph.collected"
+      ],
+      "expected_facts": [
+        {
+          "kind": "ad.graph.collected",
+          "scope": "domain:corp.local",
+          "value_contains": {"archives": ["20260915081200_bloodhound.zip"]}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "ad.attack_paths",
+        "credential.available"
+      ]
+    },
+    {
+      "id": "bloodhound_analysis_attack_path_only",
+      "tool": "bloodhound",
+      "action_id": "bloodhound-collect",
+      "domain": "corp.local",
+      "command": "bloodhound --analysis shortest-paths",
+      "stdout": "outputs/bloodhound_analysis_attack_path_only.txt",
+      "expected_supported_kinds": [
+        "ad.attack_paths"
+      ],
+      "forbidden_supported_kinds": [
+        "ad.graph.collected",
+        "credential.available"
+      ]
+    },
+    {
+      "id": "sqlmap_database_and_webshell_context",
+      "tool": "sqlmap",
+      "action_id": "sqlmap-automation",
+      "command": "sqlmap -r request.txt --batch --dbs --os-shell",
+      "stdout": "outputs/sqlmap_database_and_webshell_context.txt",
+      "expected_supported_kinds": [
+        "web.sqli_confirmed",
+        "db.databases",
+        "db.tables",
+        "db.creds",
+        "credential.candidate",
+        "foothold.webshell"
+      ],
+      "expected_facts": [
+        {
+          "kind": "db.databases",
+          "value_contains": {
+            "dbms": "MySQL >= 5.0",
+            "databases": ["appdb", "information_schema"]
+          }
+        },
+        {
+          "kind": "db.creds",
+          "value_contains": {
+            "credential_columns": ["password", "username"],
+            "tables": [{"database": "appdb", "table": "users"}]
+          }
+        },
+        {
+          "kind": "credential.candidate",
+          "value_contains": {"kind": "database_dump_secret"}
+        },
+        {
+          "kind": "foothold.webshell",
+          "value_contains": {"tool": "sqlmap", "method": "os-shell"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "access.admin",
+        "access.system",
+        "foothold.windows",
+        "foothold.linux"
+      ]
+    },
+    {
+      "id": "git_dumper_source_candidate_secret",
+      "tool": "git-dumper",
+      "action_id": "git-exposed",
+      "command": "git-dumper http://10.10.10.10/.git/ gitloot && grep -ri 'pass\\|key\\|secret' gitloot",
+      "stdout": "outputs/git_dumper_source_candidate_secret.txt",
+      "expected_supported_kinds": [
+        "web.source",
+        "credential.candidate"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.source",
+          "value_contains": {"kind": "git", "tool": "git-dumper"}
+        },
+        {
+          "kind": "credential.candidate",
+          "value_contains": {"kind": "source_secret", "count": 2}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "web.authenticated"
+      ]
+    },
+    {
+      "id": "linux_privesc_fixture_leads_only",
+      "tool": "linpeas",
+      "action_id": "linux-enum",
+      "command": "id; uname -a; sudo -l; find / -perm -4000 2>/dev/null; getcap -r / 2>/dev/null",
+      "stdout": "outputs/linux_privesc_fixture_leads_only.txt",
+      "expected_supported_kinds": [
+        "host.kernel",
+        "host.arch",
+        "privesc.leads",
+        "privesc.sudo_rights",
+        "privesc.suid_candidate",
+        "privesc.capability",
+        "privesc.passwd_writable",
+        "privesc.nfs_no_root_squash",
+        "privesc.lxd_group",
+        "privesc.docker_group"
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "access.system"
+      ]
+    },
+    {
+      "id": "windows_privesc_fixture_leads_only",
+      "tool": "winpeas",
+      "action_id": "windows-enum",
+      "command": "whoami /priv && systeminfo && reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated",
+      "stdout": "outputs/windows_privesc_fixture_leads_only.txt",
+      "expected_supported_kinds": [
+        "host.os_family",
+        "host.kernel",
+        "host.arch",
+        "privesc.leads",
+        "privesc.windows_privilege",
+        "privesc.always_install_elevated",
+        "privesc.unquoted_service_path",
+        "privesc.weak_service_permission",
+        "privesc.stored_credentials",
+        "credential.candidate"
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "access.system"
+      ]
     }
   ]
 }

@@ -7,6 +7,16 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **Parser Coverage + Fixture Corpus v3**: SQLMap output now records
+  confirmed SQL injection, database names/tables, database credential-material
+  candidates, and SQLMap webshell context without claiming OS admin/root/SYSTEM or
+  validated credentials; exposed `.git`/`git-dumper` output now records `web.source`
+  plus source-code secret candidates without converting them into usable credentials.
+  The manifest-driven parser corpus now includes real-shaped fixtures for NetExec
+  SAM dumps, secretsdump/NTDS domain loot, BloodHound collection vs. attack-path
+  analysis, SQLMap database/webshell output, git-dumper source recovery, and
+  Linux/Windows privesc enum leads. `db.databases` / `db.tables` facts have friendly
+  labels and report grouping so database evidence surfaces cleanly.
 - Completed the pivoting milestone (§6d/e/f) on top of the staging layer:
   - **Auto-tunnel cascade (§6d).** `tunnels.auto_tunnel` walks a feasibility-ordered
     cascade (ligolo → sshuttle → chisel → ssh `-D` → ssh `-L` → native `netsh

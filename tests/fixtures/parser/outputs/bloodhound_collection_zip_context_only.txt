@@ -1,0 +1,4 @@
+INFO: Found AD domain: corp.local
+INFO: Connecting to LDAP server: dc01.corp.local
+INFO: Compressing output into 20260915081200_bloodhound.zip
+INFO: Done in 00M 14S
