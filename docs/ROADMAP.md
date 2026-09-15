@@ -142,9 +142,13 @@ Next work should widen this carefully:
 - **Better port-to-playbook gating.** The Orange AD pack now has a small exam-flow
   priority override for nmap → DC identify → anonymous LDAP → user enum. Extend
   that idea across web/privesc sibling packs without hardcoding box wins.
-- **Parser fixtures from real tools.** Use Forest and other lab outputs as golden
-  regressions, but never as recipes. Fixture names should vary so tests prove
-  shape recognition, not walkthrough memorization.
+- **Parser fixtures from real tools: FIRST CORPUS DONE.** `docs/PARSER_QA.md`
+  documents how parsers are written and judged. `tests/fixtures/parser/` now has
+  a manifest-driven fixture corpus covering nmap metadata, curl/whatweb HTTP
+  metadata, NetExec SSH/FTP auth, failed auth, SSH banner vs shell proof, SNMP
+  timeout, and FTP named-login edge cases. Continue adding anonymized Forest and
+  other lab outputs as golden regressions, but never as recipes. Fixture names
+  should vary so tests prove shape recognition, not walkthrough memorization.
 - **Service-specific next moves.** If `389` is open, prefer NetExec LDAP and
   ldapsearch. If `445` is open, prefer nxc SMB/null/guest/RID paths. If HTTP ports
   exist, unlock web enumeration once the web pack exists.

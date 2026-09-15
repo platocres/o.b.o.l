@@ -105,7 +105,7 @@ _NMAP_SSH_HOSTKEY_RE = re.compile(
     r"^\|_?\s+(?P<bits>\d{3,5})\s+(?P<fingerprint>[0-9a-f:]{16,})\s+\((?P<kind>[^)]+)\)",
     re.IGNORECASE | re.MULTILINE,
 )
-_NMAP_SNMP_FIELD_RE = re.compile(r"^\|\s*(?P<key>enterprise|name|description|location|contact):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_NMAP_SNMP_FIELD_RE = re.compile(r"^\|_?\s*(?P<key>enterprise|name|description|location|contact):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
 _NXC_SIGNING_RE = re.compile(r"\(signing:(?P<enabled>True|False)\)", re.IGNORECASE)
 _NXC_SMBV1_RE = re.compile(r"\(SMBv1:(?P<enabled>True|False)\)", re.IGNORECASE)
 

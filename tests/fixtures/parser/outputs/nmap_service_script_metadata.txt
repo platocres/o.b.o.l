@@ -1,0 +1,22 @@
+Starting Nmap 7.95 ( https://nmap.org ) at 2026-09-14 23:00 UTC
+Nmap scan report for 10.10.10.10
+Host is up (0.039s latency).
+PORT     STATE SERVICE       VERSION
+21/tcp   open  ftp           vsftpd 3.0.3
+22/tcp   open  ssh           OpenSSH 8.9p1 Ubuntu 3ubuntu0.10
+53/udp   open  domain        ISC BIND 9.18
+80/tcp   open  http          nginx 1.24.0
+161/udp  open  snmp          SNMPv2c server
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| ssh-hostkey:
+|   256 aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99 (ECDSA)
+|_  256 11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00 (ED25519)
+|_http-title: Did not follow redirect to http://ops-portal.lab/login
+|_http-generator: WordPress 6.4.3
+| snmp-info:
+|   enterprise: net-snmp
+|   name: edge-router-02
+|_  description: Linux edge-router-02 5.15
+Service detection performed. Please report any incorrect results.
+Nmap done: 1 IP address (1 host up) scanned in 28.44 seconds
