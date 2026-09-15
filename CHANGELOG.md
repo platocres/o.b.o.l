@@ -38,11 +38,25 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   overview, engagement map subtitles, Useful facts, and generated reports.
 - Added changelog discipline: `AGENTS.md` points agents here, and the test suite
   checks that meaningful repo changes include a `CHANGELOG.md` update.
+- Added pass-the-hash logins to the sessions layer: a dumped SAM/NTDS NT hash
+  (`hash.ntlm` entries) or a validated credential carrying an `nthash` now logs in
+  over WinRM (`nxc winrm -H` proof → `evil-winrm -H` handoff) and RDP via Restricted
+  Admin, with no cracking. `eligible_sessions`/`open_session` auto-pick a password
+  when one exists and otherwise fall back to pass-the-hash, preferring an
+  Administrator hash and skipping machine accounts and `krbtgt`.
+- Added `obol login --method password|pth` and a web login `method` so the operator
+  can force either auth method; the web Access & sessions card surfaces
+  "pass-the-hash".
 
 ### Changed
 
 - Local privilege escalation leads now unlock their matching abuse cards without
   claiming admin/root/SYSTEM unless command output explicitly proves it.
+- Validated-credential recording is now hash-aware: a `user:<hash>` NetExec auth
+  line or an `evil-winrm -H` login is recorded as an `nthash` (`method: pth`) rather
+  than mislabeled as a plaintext password, and the chosen credential is pinned into
+  session proof/login commands via a template `context` override so the exact hash
+  is used instead of whichever credential sorts first.
 - Parser fixture expectations now include OS facts where the existing transcripts
   already contain strong OS evidence.
 
