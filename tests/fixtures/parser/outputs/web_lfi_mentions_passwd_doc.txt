@@ -1,0 +1,3 @@
+<html><body><h2>Security tips</h2>
+<p>Never expose /etc/passwd or allow ../../ path traversal in the page parameter.</p>
+<p>The root account should be protected.</p></body></html>

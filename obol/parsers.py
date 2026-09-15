@@ -11,6 +11,7 @@ helpers, so keeping them together prevents that discipline from drifting apart.
 """
 from __future__ import annotations
 
+import base64
 import re
 import shlex
 
@@ -168,6 +169,51 @@ _SOURCE_SECRET_RE = re.compile(
     r"\b\s*[:=]\s*(?P<value>[^\s\"']{4,}|\"[^\"]{4,}\"|'[^']{4,}')",
     re.IGNORECASE,
 )
+# Web exploitation success-signal shapes (manual/curl-driven cards). These are
+# deliberately tied to a proven output shape, never a mere reflected input: an
+# LFI proves a file was read, a command-injection proves a command ran, a manual
+# SQLi proves a database error surfaced. None of them promote to a foothold, an
+# interactive shell, or a validated credential by themselves.
+_LFI_PASSWD_RE = re.compile(r"^\s*root:[^:\n]*:0:0:[^:\n]*:[^:\n]*:", re.MULTILINE)
+_LFI_PASSWD_SECOND_RE = re.compile(
+    r"^\s*(?:daemon|bin|sys|sync|games|nobody|www-data|sshd|mail|proxy):[^:\n]*:\d+:\d+:",
+    re.MULTILINE,
+)
+_LFI_WIN_INI_RE = re.compile(
+    r"\[(?:extensions|fonts|mci extensions|files|mail)\]|;\s*for 16-bit app support|\[boot loader\]",
+    re.IGNORECASE,
+)
+_LFI_FILE_PARAM_RE = re.compile(r"(?:resource=|file://|=)(?P<path>/[A-Za-z0-9_./-]+|[A-Za-z]:\\[^\s'\"&]+)")
+_B64_TOKEN_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+_CMDI_UID_RE = re.compile(r"\buid=\d+\([^)\n]+\)\s+gid=\d+\([^)\n]+\)")
+_CMDI_WIN_RE = re.compile(r"\bnt authority\\+system\b|\bMicrosoft Windows \[Version\b", re.IGNORECASE)
+_SQL_ERROR_RE = re.compile(
+    r"You have an error in your SQL syntax"
+    r"|Warning:\s*mysqli?_\w+\(\)"
+    r"|supplied argument is not a valid MySQL"
+    r"|SQL syntax.*?(?:MariaDB|MySQL) server"
+    r"|Unclosed quotation mark after the character string"
+    r"|quoted string not properly terminated"
+    r"|Incorrect syntax near"
+    r"|Microsoft OLE DB Provider for (?:ODBC Drivers|SQL Server)"
+    r"|System\.Data\.SqlClient\.SqlException"
+    r"|Unknown column '[^']+' in 'where clause'"
+    r"|ORA-\d{5}"
+    r"|PostgreSQL query failed|pg_query\(\)|pg_exec\(\)"
+    r"|SQLSTATE\[\w+\]"
+    r"|java\.sql\.SQLException"
+    r"|SQLite3?::(?:query|exec)|near \".+?\": syntax error",
+    re.IGNORECASE,
+)
+_IMDS_MARKER_RE = re.compile(
+    r"\b(?:ami-id|instance-id|instance-action|iam/security-credentials|meta-data/|"
+    r"security-credentials|placement/availability-zone|block-device-mapping|"
+    r"public-keys/|reservation-id)\b",
+    re.IGNORECASE,
+)
+_AWS_KEY_RE = re.compile(r'"AccessKeyId"\s*:\s*"(?P<akid>(?:AKIA|ASIA)[A-Z0-9]{8,})"')
+_AWS_SECRET_RE = re.compile(r'"SecretAccessKey"\s*:\s*"(?P<secret>[^"\n]{8,})"')
+_AWS_TOKEN_RE = re.compile(r'"Token"\s*:\s*"(?P<token>[^"\n]{16,})"')
 _NIKTO_NOISE_PREFIXES = (
     "target ip", "target hostname", "target port", "start time", "end time",
     "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
@@ -235,6 +281,16 @@ _LINUX_PRIVESC_ACTION_IDS = {
     "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
 }
 _WINDOWS_PRIVESC_ACTION_IDS = _PRIVESC_ACTION_IDS - _LINUX_PRIVESC_ACTION_IDS
+# Web exploitation cards that a success-signal parser interprets. Gating on the
+# action id (not just curl in the command) keeps generic web reads from being
+# misread as confirmed exploitation.
+_WEB_LFI_ACTION_IDS = {"lfi-probe", "xxe"}
+_WEB_CMDI_ACTION_IDS = {"command-injection", "ssti", "web-shells", "file-upload", "verb-tampering"}
+_WEB_SQLI_ACTION_IDS = {"sqli-basics"}
+_WEB_SSRF_ACTION_IDS = {"ssrf", "xxe"}
+_WEB_EXPLOIT_ACTION_IDS = (
+    _WEB_LFI_ACTION_IDS | _WEB_CMDI_ACTION_IDS | _WEB_SQLI_ACTION_IDS | _WEB_SSRF_ACTION_IDS
+)
 _AD_ABUSE_ACTION_IDS = {
     "bloodyad-acl", "ad-acl-abuse", "delegation-abuse", "getst-impersonation",
     "gmsa-read", "laps-read", "ticket-reuse", "kerberos-tickets",
@@ -657,6 +713,8 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
         _parse_git_source(text, ws, command, source, facts)
     if "nikto" in lowered_command:
         _parse_nikto(text, ws, source, facts)
+    if action.id in _WEB_EXPLOIT_ACTION_IDS:
+        _parse_web_exploit_output(action.id, text, ws, command, source, facts)
     if "whatweb" in lowered_command or "curl" in lowered_command:
         _parse_http_metadata(text, ws, source, facts)
     if any(tool in lowered_command for tool in ("snmpwalk", "snmp-check", "onesixtyone")):
@@ -2573,3 +2631,249 @@ def _parse_nikto(text: str, ws: Workspace, source: str, facts: list[Fact]) -> No
             source,
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# manual web exploitation success signals
+# --------------------------------------------------------------------------- #
+def _parse_web_exploit_output(
+    action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]
+) -> None:
+    """Success-signal parsers for the manual web-exploitation cards.
+
+    OSCP forbids automated exploiters (sqlmap et al.), so these cards are driven
+    by hand with curl. Each sub-parser recognizes a *proven output shape* and maps
+    it to the narrowest ``web.*`` fact: a reflected payload, a mention of a
+    sensitive path, or a plain ``200`` is never enough. An LFI needs file content,
+    a command injection needs command output, a manual SQLi needs a database
+    error, an SSRF needs internal content. None of these promote to a foothold, an
+    interactive shell, or a validated credential — web command execution is not a
+    caught shell, and a disclosed ``/etc/passwd`` carries no plaintext password.
+    """
+    if not text.strip():
+        return
+    if action_id in _WEB_LFI_ACTION_IDS:
+        _parse_web_lfi(action_id, text, ws, command, source, facts)
+    if action_id in _WEB_CMDI_ACTION_IDS:
+        _parse_web_cmdi(action_id, text, ws, command, source, facts)
+    if action_id in _WEB_SQLI_ACTION_IDS:
+        _parse_web_sqli_manual(text, ws, source, facts)
+    if action_id in _WEB_SSRF_ACTION_IDS:
+        _parse_web_ssrf(action_id, text, ws, command, source, facts)
+
+
+def _php_filter_source(text: str) -> bytes:
+    """Return the decoded bytes of a base64 blob that looks like PHP source.
+
+    The ``php://filter/convert.base64-encode`` LFI trick returns a page's source
+    base64-encoded. Proof is the decoded bytes containing a PHP open tag, not the
+    mere presence of a base64-looking string.
+    """
+    for token in sorted(set(_B64_TOKEN_RE.findall(text)), key=len, reverse=True):
+        pad = "=" * (-len(token) % 4)
+        try:
+            decoded = base64.b64decode(token + pad, validate=True)
+        except Exception:
+            continue
+        if b"<?php" in decoded or b"<?=" in decoded:
+            return decoded
+    return b""
+
+
+def _parse_web_lfi(
+    action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]
+) -> None:
+    host = f"host:{ws.target}"
+    method = "xxe" if action_id == "xxe" else "path_traversal"
+    files_read: list[str] = []
+    os_family = ""
+
+    passwd_head = _LFI_PASSWD_RE.search(text)
+    if passwd_head and _LFI_PASSWD_SECOND_RE.search(text):
+        os_family = "linux"
+        files_read.append("/etc/passwd")
+        # A confirmed LFI is the lfi-probe card's own claim; XXE file disclosure is
+        # recorded as loot.files (its declared produce), not an LFI confirmation.
+        if action_id == "lfi-probe":
+            _add(
+                facts,
+                Fact(
+                    "web.lfi_confirmed",
+                    host,
+                    {"file": "/etc/passwd", "os": "linux", "method": method,
+                     "evidence": _line_for_match(text, passwd_head)},
+                    ProofState.SUPPORTED,
+                    source,
+                ),
+            )
+
+    win = _LFI_WIN_INI_RE.search(text)
+    if win:
+        os_family = os_family or "windows"
+        param = _LFI_FILE_PARAM_RE.search(command)
+        win_file = param.group("path") if param else "windows_system_file"
+        files_read.append(win_file)
+        if action_id == "lfi-probe":
+            _add(
+                facts,
+                Fact(
+                    "web.lfi_confirmed",
+                    host,
+                    {"file": win_file, "os": "windows", "method": method,
+                     "evidence": _line_for_match(text, win)},
+                    ProofState.SUPPORTED,
+                    source,
+                ),
+            )
+
+    lowered_command = command.lower()
+    if "php://filter" in lowered_command or "convert.base64" in lowered_command:
+        decoded = _php_filter_source(text)
+        if decoded:
+            param = _LFI_FILE_PARAM_RE.search(command)
+            resource = param.group("path") if param else "php_source"
+            files_read.append(resource)
+            if action_id == "lfi-probe":
+                _add(
+                    facts,
+                    Fact(
+                        "web.lfi_confirmed",
+                        host,
+                        {"file": resource, "method": "php_filter", "kind": "php_source"},
+                        ProofState.SUPPORTED,
+                        source,
+                    ),
+                )
+            # Recovered application source is source disclosure, like an exposed
+            # .git tree — candidate material, never a validated credential.
+            _add(facts, Fact("web.source", host, {"kind": "php", "via": method}, ProofState.SUPPORTED, source))
+
+    if files_read:
+        _add(
+            facts,
+            Fact(
+                "loot.files",
+                host,
+                {"files": sorted(set(files_read)), "via": method, "tool": "web"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    if os_family:
+        _add_os_observation(
+            facts, ws, source, family=os_family,
+            evidence=_line_for_match(text, passwd_head or win) if (passwd_head or win) else os_family,
+            confidence="medium", tool=f"web-{action_id}", promote=False,
+        )
+
+
+def _parse_web_cmdi(
+    action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]
+) -> None:
+    host = f"host:{ws.target}"
+    method = {
+        "command-injection": "os_command_injection",
+        "ssti": "template_injection",
+        "web-shells": "web_shell",
+        "file-upload": "uploaded_web_shell",
+    }.get(action_id, action_id)
+
+    uid = _CMDI_UID_RE.search(text)
+    win = _CMDI_WIN_RE.search(text)
+    if not uid and not win:
+        return
+    os_family = "linux" if uid else "windows"
+    evidence = _line_for_match(text, uid or win)
+    _add(
+        facts,
+        Fact(
+            "web.cmdi_confirmed",
+            host,
+            {"os": os_family, "method": method, "evidence": evidence},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )
+    # The uploaded shell answering a command proves the upload landed AND executes.
+    if action_id == "file-upload":
+        _add(
+            facts,
+            Fact(
+                "web.upload_confirmed",
+                host,
+                {"method": "executable_upload", "evidence": evidence},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    _add_os_observation(
+        facts, ws, source, family=os_family, evidence=evidence,
+        confidence="medium", tool=f"web-{action_id}", promote=False,
+    )
+
+
+def _sql_dbms_from_error(text: str) -> str:
+    lowered = text.lower()
+    if "mariadb" in lowered:
+        return "MariaDB"
+    if "mysql" in lowered or "mysqli" in lowered:
+        return "MySQL"
+    if re.search(r"\bORA-\d{5}\b", text):
+        return "Oracle"
+    if "postgresql" in lowered or "pg_query" in lowered or "pg_exec" in lowered:
+        return "PostgreSQL"
+    if "sql server" in lowered or "system.data.sqlclient" in lowered or "incorrect syntax near" in lowered:
+        return "Microsoft SQL Server"
+    if "sqlite" in lowered:
+        return "SQLite"
+    return ""
+
+
+def _parse_web_sqli_manual(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """Manual (curl) SQLi confirmation from a database error signature.
+
+    OSCP disallows sqlmap, so manual injection is confirmed by the DBMS error the
+    injected quote/UNION provokes. That error proves an injectable parameter — it
+    does not dump the database, recover a credential, or grant a shell.
+    """
+    match = _SQL_ERROR_RE.search(text)
+    if not match:
+        return
+    value = {"tool": "manual", "method": "error_based", "evidence": _line_for_match(text, match)}
+    dbms = _sql_dbms_from_error(text)
+    if dbms:
+        value["dbms"] = dbms
+    _add(facts, Fact("web.sqli_confirmed", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+
+def _parse_web_ssrf(
+    action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]
+) -> None:
+    host = f"host:{ws.target}"
+    imds = _IMDS_MARKER_RE.search(text)
+    akid = _AWS_KEY_RE.search(text)
+    secret = _AWS_SECRET_RE.search(text)
+    if not imds and not akid:
+        return
+    value = {"method": "xxe" if action_id == "xxe" else "ssrf"}
+    if imds:
+        value["target"] = "cloud_metadata"
+        value["evidence"] = _line_for_match(text, imds)
+    else:
+        value["target"] = "cloud_metadata"
+        value["evidence"] = _line_for_match(text, akid)
+    _add(facts, Fact("web.ssrf_confirmed", host, value, ProofState.SUPPORTED, source))
+
+    # Leaked cloud keys are credential *material* until a signed request validates
+    # them — never a validated credential or proven cloud access from the read alone.
+    if akid and secret:
+        cred = {
+            "kind": "aws_sts_credentials",
+            "access_key_id": akid.group("akid"),
+            "secret_access_key": secret.group("secret"),
+            "via": value["method"],
+        }
+        token = _AWS_TOKEN_RE.search(text)
+        if token:
+            cred["session_token"] = token.group("token")
+        _add(facts, Fact("credential.candidate", host, cred, ProofState.SUPPORTED, source))
