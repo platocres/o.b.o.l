@@ -1,0 +1,234 @@
+{
+  "version": 1,
+  "description": "Golden parser fixtures for representative, anonymized tool-output shapes. Each case must prove expected narrow facts and forbid unsafe overclaims.",
+  "defaults": {
+    "target": "10.10.10.10",
+    "forbidden_supported_kinds": [
+      "access.admin",
+      "access.system",
+      "access.shell",
+      "credential.admin",
+      "foothold.linux",
+      "foothold.windows",
+      "loot.ntds",
+      "vuln.candidates"
+    ]
+  },
+  "cases": [
+    {
+      "id": "nmap_service_script_metadata",
+      "tool": "nmap",
+      "action_id": "nmap-version-scripts",
+      "command": "nmap -Pn -sC -sV -sU -p T:21,22,80,3389,U:53,161 -oN nmap-version.txt 10.10.10.10",
+      "stdout": "outputs/nmap_service_script_metadata.txt",
+      "expected_supported_kinds": [
+        "host.up",
+        "scan.nmap.version",
+        "scan.nmap.udp",
+        "ports.open",
+        "ftp.reachable",
+        "ftp.anonymous_login",
+        "ssh.reachable",
+        "ssh.hostkey",
+        "dns.reachable",
+        "snmp.reachable",
+        "snmp.info",
+        "host.hostname",
+        "http.reachable",
+        "http.redirect",
+        "web.tech",
+        "rdp.reachable"
+      ],
+      "expected_facts": [
+        {
+          "kind": "ports.open",
+          "value_contains": {"ports": [21, 22, 53, 80, 161, 3389]}
+        },
+        {
+          "kind": "snmp.info",
+          "value_contains": {"name": "edge-router-02", "description": "Linux edge-router-02 5.15"}
+        },
+        {
+          "kind": "ssh.hostkey",
+          "value_contains": {
+            "count": 2,
+            "keys": [
+              {"bits": 256, "type": "ECDSA"},
+              {"bits": 256, "type": "ED25519"}
+            ]
+          }
+        },
+        {
+          "kind": "http.redirect",
+          "value_contains": {"locations": ["http://ops-portal.lab/login"]}
+        },
+        {
+          "kind": "web.tech",
+          "value_contains": {"items": [{"name": "generator", "value": "WordPress 6.4.3"}]}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "web.authenticated"
+      ]
+    },
+    {
+      "id": "http_curl_whatweb_metadata",
+      "tool": "curl+whatweb",
+      "action_id": "web-tech-fingerprint",
+      "command": "curl -i http://10.10.10.10 && whatweb http://10.10.10.10",
+      "stdout": "outputs/http_curl_whatweb_metadata.txt",
+      "expected_supported_kinds": [
+        "http.reachable",
+        "http.response",
+        "http.redirect",
+        "web.server",
+        "web.title",
+        "web.tech"
+      ],
+      "expected_facts": [
+        {
+          "kind": "http.response",
+          "value_contains": {"responses": [{"status": 302, "reason": "Found"}]}
+        },
+        {
+          "kind": "web.server",
+          "value_contains": {"headers": ["nginx/1.24.0"]}
+        },
+        {
+          "kind": "web.title",
+          "value_contains": {"titles": ["Operator Console"]}
+        },
+        {
+          "kind": "web.tech",
+          "value_contains": {
+            "items": [
+              {"name": "x-powered-by", "value": "PHP/8.2.12"},
+              {"name": "Bootstrap", "value": "5.3.2"}
+            ]
+          }
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "web.authenticated",
+        "web.upload_confirmed",
+        "web.lfi_confirmed"
+      ]
+    },
+    {
+      "id": "nxc_ssh_ftp_auth_context_only",
+      "tool": "netexec",
+      "action_id": "password-spray",
+      "domain": "corp.local",
+      "command": "nxc ssh 10.10.10.10 -u svc-audit -p 'Spring2026!' && nxc ftp 10.10.10.10 -u svc-audit -p 'Spring2026!'",
+      "stdout": "outputs/nxc_ssh_ftp_auth_context_only.txt",
+      "expected_supported_kinds": [
+        "ssh.reachable",
+        "ftp.reachable",
+        "ssh.authenticated",
+        "ftp.authenticated",
+        "credential.available"
+      ],
+      "expected_facts": [
+        {
+          "kind": "credential.available",
+          "scope": "domain:corp.local",
+          "value_contains": {"user": "svc-audit", "password": "Spring2026!", "domain": "corp.local", "method": "nxc"}
+        },
+        {
+          "kind": "ssh.authenticated",
+          "value_contains": {"user": "svc-audit", "service": "ssh"}
+        },
+        {
+          "kind": "ftp.authenticated",
+          "value_contains": {"user": "svc-audit", "service": "ftp"}
+        }
+      ]
+    },
+    {
+      "id": "nxc_failed_login_refutes_validation",
+      "tool": "netexec",
+      "action_id": "password-spray",
+      "domain": "corp.local",
+      "command": "nxc smb 10.10.10.10 -u svc-audit -p WrongPassword",
+      "stdout": "outputs/nxc_failed_login_refutes_validation.txt",
+      "expected_supported_kinds": [
+        "smb.reachable"
+      ],
+      "expected_refuted_kinds": [
+        "credential.validation"
+      ],
+      "expected_facts": [
+        {
+          "kind": "credential.validation",
+          "state": "refuted",
+          "value_contains": {"reason": "logon_failure"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "smb.authenticated"
+      ]
+    },
+    {
+      "id": "ssh_banner_no_shell",
+      "tool": "nc",
+      "action_id": "nmap-version-scripts",
+      "command": "nc -nv 10.10.10.10 22",
+      "stdout": "outputs/ssh_banner_no_shell.txt",
+      "expected_supported_kinds": [
+        "ssh.reachable",
+        "ssh.banner"
+      ]
+    },
+    {
+      "id": "ssh_id_proves_linux_shell",
+      "tool": "ssh",
+      "action_id": "ssh-shell-check",
+      "command": "ssh appuser@10.10.10.10 id",
+      "stdout": "outputs/ssh_id_proves_linux_shell.txt",
+      "expected_supported_kinds": [
+        "access.shell",
+        "foothold.linux"
+      ],
+      "expected_facts": [
+        {
+          "kind": "foothold.linux",
+          "value_contains": {"service": "ssh", "identity": "appuser"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin"
+      ],
+      "allow_default_forbidden_supported_kinds": [
+        "access.shell",
+        "foothold.linux"
+      ]
+    },
+    {
+      "id": "snmp_timeout_no_facts",
+      "tool": "snmpwalk",
+      "action_id": "snmp-enum",
+      "command": "snmpwalk -v2c -c public 10.10.10.10 1.3.6.1.2.1.1",
+      "stdout": "outputs/snmp_timeout_no_facts.txt",
+      "expected_fact_count": 0
+    },
+    {
+      "id": "ftp_named_login_not_anonymous",
+      "tool": "ftp",
+      "action_id": "ftp-login-check",
+      "command": "ftp -n 10.10.10.10",
+      "stdout": "outputs/ftp_named_login_not_anonymous.txt",
+      "expected_supported_kinds": [
+        "ftp.reachable",
+        "ftp.banner"
+      ],
+      "forbidden_supported_kinds": [
+        "ftp.anonymous_login",
+        "credential.available"
+      ]
+    }
+  ]
+}

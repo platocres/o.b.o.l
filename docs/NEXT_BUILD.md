@@ -127,14 +127,33 @@ Boundary kept: these parsers produce context, reachability, service authenticati
 or candidate material only. They do not invent vulnerabilities, credentials,
 footholds, admin, or loot from banner/metadata output.
 
+## Shipped: Parser QA fixture corpus v1
+
+Parser behavior now has a checked-in QA spine:
+
+- `docs/PARSER_QA.md` documents how parsers are created, what they may claim, what
+  they must not claim, and how fixture confidence should be interpreted.
+- `tests/fixtures/parser/manifest.json` defines positive, negative, and
+  anti-overclaim cases over anonymized, real-shaped outputs.
+- `tests/test_parser_fixtures.py` runs every fixture through `parse_action_output`
+  and asserts expected fact kinds, selected payload values, source lineage, refuted
+  failures, and forbidden higher-value claims.
+- The first corpus covers nmap service/script metadata, curl/whatweb HTTP
+  metadata, NetExec SSH/FTP auth, failed auth, SSH banner vs shell proof, SNMP
+  timeout, and FTP named-login edge cases.
+
+The fixture suite also caught and fixed an nmap SNMP parser gap for `|_` final
+script lines, which is exactly the kind of regression this corpus is meant to
+surface.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 
 - **Parser coverage (ROADMAP item 1, still important).** The broad v2 baseline is
-  shipped. Continue with exploitation-card success signals, privesc/pivot outputs,
-  more real-tool fixtures, and action-specific parsers for the remaining Orange AD
-  branches.
+  shipped, and the first QA fixture corpus is in place. Continue with more real
+  fixtures, exploitation-card success signals, privesc/pivot outputs, and
+  action-specific parsers for the remaining Orange AD branches.
 - **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
   interlock note is **item 3 privesc packs** (unlocked by the access fact), then
   post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware

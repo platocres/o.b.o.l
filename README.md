@@ -157,6 +157,9 @@ facts for SSH, FTP, RDP, DNS, SNMP, HTTP metadata, service authentication, banne
 host keys, anonymous FTP, and web technology fingerprints. The terminal also has
 `obol findings`, an engagement-wide roll-up matching the web Activity findings view:
 category-grouped, host/domain-tagged findings with evidence source lines.
+Parser behavior is now fixture-backed by `tests/fixtures/parser/` and documented in
+[`docs/PARSER_QA.md`](docs/PARSER_QA.md), including the rule-writing contract,
+coverage matrix, and anti-overclaim test expectations.
 
 **Playbooks** bundle a flow into one deliberate move: a playbook is a named,
 ordered list of pack actions stored as data. `obol playbook ad-recon` (or

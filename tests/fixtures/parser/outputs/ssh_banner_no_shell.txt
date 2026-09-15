@@ -1,0 +1,2 @@
+Ncat: Connected to 10.10.10.10:22.
+SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10
