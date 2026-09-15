@@ -61,23 +61,41 @@ default via 10.10.10.1 dev eth0
     assert "tunnel.up" not in kinds
 
 
+def test_single_route_table_subnet_does_not_become_pivot_candidate(tmp_path):
+    ws = _workspace(tmp_path)
+    action = _action("local-linux-routes")
+    output = """
+default via 10.10.10.1 dev eth0
+10.10.10.0/24 dev eth0 proto kernel scope link src 10.10.10.5
+"""
+
+    facts = parse_local_enum_output(action, ws, action.command, output, source="ip route")
+    kinds = {f.kind for f in facts}
+
+    assert "scan.local.routes" in kinds
+    assert "host.route" in kinds
+    assert "network.subnet_candidate" in kinds
+    assert "pivot.candidate" not in kinds
+    assert "host.multihomed" not in kinds
+
+
 def test_windows_ipconfig_parses_interfaces_dns_and_multihomed_candidate(tmp_path):
     ws = _workspace(tmp_path)
     action = _action("local-windows-interfaces")
     output = """
-Windows IP Configuration
-
-Ethernet adapter Ethernet0:
-   Connection-specific DNS Suffix  . : htb.local
-   IPv4 Address. . . . . . . . . . . : 10.10.10.20(Preferred)
-   Subnet Mask . . . . . . . . . . . : 255.255.255.0
-   Default Gateway . . . . . . . . . : 10.10.10.1
-   DNS Servers . . . . . . . . . . . : 10.10.10.2
-                                       10.10.10.3
-
-Ethernet adapter Ethernet1:
-   IPv4 Address. . . . . . . . . . . : 192.168.56.22(Preferred)
-   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+WINRM 10.10.10.20 5985 HOST Windows IP Configuration
+WINRM 10.10.10.20 5985 HOST 
+WINRM 10.10.10.20 5985 HOST Ethernet adapter Ethernet0:
+WINRM 10.10.10.20 5985 HOST    Connection-specific DNS Suffix  . : htb.local
+WINRM 10.10.10.20 5985 HOST    IPv4 Address. . . . . . . . . . . : 10.10.10.20(Preferred)
+WINRM 10.10.10.20 5985 HOST    Subnet Mask . . . . . . . . . . . : 255.255.255.0
+WINRM 10.10.10.20 5985 HOST    Default Gateway . . . . . . . . . : 10.10.10.1
+WINRM 10.10.10.20 5985 HOST    DNS Servers . . . . . . . . . . . : 10.10.10.2
+WINRM 10.10.10.20 5985 HOST                                        10.10.10.3
+WINRM 10.10.10.20 5985 HOST 
+WINRM 10.10.10.20 5985 HOST Ethernet adapter Ethernet1:
+WINRM 10.10.10.20 5985 HOST    IPv4 Address. . . . . . . . . . . : 192.168.56.22(Preferred)
+WINRM 10.10.10.20 5985 HOST    Subnet Mask . . . . . . . . . . . : 255.255.255.0
 """
 
     facts = parse_local_enum_output(action, ws, action.command, output, source="ipconfig /all")
