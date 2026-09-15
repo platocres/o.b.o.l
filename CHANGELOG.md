@@ -40,6 +40,18 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   web endpoints `GET /api/stage/channels`, `POST /api/run/stage`, `GET /api/staged`,
   `DELETE /api/staged`. This is the minimum §8 spine that unblocks the §6(d)/(e)
   auto-tunnel cascade's "stage the chisel/ligolo binary" step.
+- Added **enum run-and-rank** (§8, third slice): `obol/enumrun.py` stages a read-only
+  enumeration tool (linPEAS/winPEAS/LinEnum/linux-exploit-suggester) onto a foothold
+  and runs it over the proven exec channel behind one action. Two proof-bound outputs:
+  the existing `privesc.*` **lead** parsers fire on the tool's output (the run uses the
+  `linux-enum`/`windows-enum` action id, so sudo rights, SUID, capabilities, and
+  dangerous Windows privileges are extracted through the one parser pipeline), and a
+  ranked `enum.findings` fact records the lines the tool itself flagged (known-exploit
+  names, probability markers, credential hints) — **candidate leads, never proof**.
+  A tool-agnostic highlight ranker (`extract_highlights`) strips ANSI, scores each line
+  by its strongest signal, dedupes, and returns the top findings. PowerUp and other
+  interactive tools are staged + guided, not auto-run. `obol enum <tool> [host]` and
+  web `GET /api/enum/tools`, `POST /api/run/enum`.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

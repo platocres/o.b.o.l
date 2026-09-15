@@ -12,7 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, provision, quickstart, service, sessions, staging, tunnels
+from . import (__version__, board, discovery, enumrun, library, provision, quickstart,
+               service, sessions, staging, tunnels)
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -1028,6 +1029,35 @@ def cmd_staged(args) -> None:
               f"{sf['status']:<9} {sf['remote_path']}")
 
 
+def cmd_enum(args) -> None:
+    """Stage and run a read-only enum tool (linpeas/winpeas) on a foothold, then rank
+    the promising findings."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"$ staging + running {args.tool} on {host} …")
+    try:
+        res = enumrun.run_enum(ws, host, args.tool)
+    except (enumrun.EnumError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if res.get("guided"):
+        print(f"{board.SYM_OK} staged {args.tool} at {res['remote_path']}. Run it interactively:")
+        print(f"   $ {res['run_command']}")
+        return
+    print(f"{board.SYM_OK} ran {args.tool} ({res['remote_path']}, via {res['channel']})")
+    if res["privesc_leads"]:
+        print(f"\nprivesc leads: {', '.join(res['privesc_leads'])}")
+    if res["highlights"]:
+        print(f"\ntop findings ({len(res['highlights'])}):")
+        for h in res["highlights"][:15]:
+            print(f"  [{h['signal']}] {h['line'][:110]}")
+    if not res["privesc_leads"] and not res["highlights"]:
+        print("no ranked findings — review the raw run output under .obol/runs/.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1197,6 +1227,10 @@ try:
     pstage.add_argument("--remote-dir", default="", dest="remote_dir", help="destination directory on the target")
     pstage.add_argument("--dry-run", action="store_true", help="show the channel cascade and commands without transferring")
     pstage.set_defaults(func=cmd_stage)
+    penum = sub.add_parser("enum", help="stage + run a read-only enum tool (linpeas/winpeas) and rank findings")
+    penum.add_argument("tool", choices=list(enumrun.ENUM_TOOLS.keys()), help="enum tool")
+    penum.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    penum.set_defaults(func=cmd_enum)
     sub.add_parser("staged", help="list material staged onto footholds").set_defaults(func=cmd_staged, staged_cmd="list")
     pstaged = sub.add_parser("unstage", help="remove a staged-material record (does not delete the file on the target)")
     pstaged.add_argument("id", help="staged record id (see `obol staged`)")

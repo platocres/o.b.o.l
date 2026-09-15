@@ -36,9 +36,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import (board, bloodhound, discovery, library, provision as material_cache,
-                sessions as session_layer, staging as staging_layer, tools as tool_inventory,
-                tunnels as tunnel_layer)
+from .. import (board, bloodhound, discovery, enumrun as enum_layer, library,
+                provision as material_cache, sessions as session_layer,
+                staging as staging_layer, tools as tool_inventory, tunnels as tunnel_layer)
 from ..sessions import SessionError
 from ..tunnels import TunnelError
 from ..graph import (
@@ -1445,6 +1445,31 @@ def create_app(base, *, token: Optional[str] = None):
     def api_staged(host: str = Query("")):
         ws = active()
         return {"staged": ws.staged_for(host) if host else ws.staged}
+
+    # ── enum run-and-rank (stage + run linpeas/winpeas, rank findings) ─────────
+    @app.get("/api/enum/tools")
+    def api_enum_tools(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "tools": enum_layer.eligible_enum(ws, host)}
+
+    @app.post("/api/run/enum")
+    def api_run_enum(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        tool = (payload or {}).get("tool", "")
+        if not host or not tool:
+            raise HTTPException(422, "host and tool are required")
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = enum_layer.run_enum(ws, host, tool, surface="web")
+            except enum_layer.EnumError as exc:
+                raise HTTPException(400, str(exc))
+            except ActionError as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
 
     @app.delete("/api/staged")
     def api_staged_rm(id: str = Query(...)):
