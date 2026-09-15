@@ -146,6 +146,24 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
                     str(tf.values("host.os_family")).lower() else "linux"},
         ))
 
+    # 2c) fingerprint-matched remote/kernel exploits (§15b) — a candidate lead from a
+    #     service/version/OS/web fingerprint. Offered as `exploit`-kind moves so the
+    #     autonomy policy keeps them manual (craft + hand off; never auto-fired — a remote
+    #     exploit IS exploitation). Ranked by probability via frontier priority.
+    from . import vulnmatch
+    _prob_prio = {"high": 64, "medium": 58, "low": 52}
+    for c in vulnmatch.match_exploits(ws, host):
+        moves.append(Move(
+            kind="exploit", id=f"exploit:vuln:{c['key']}",
+            label=f"{c['name']} — probable ({c['probability']})",
+            phase="escalate" if c["kind"] == "privesc" else "access",
+            ready=True, priority=_prob_prio.get(c["probability"], 55),
+            autonomy=autonomy.PRIMITIVE_TIER["exploit"],
+            detail={"key": f"vuln:{c['key']}", "vuln": c["key"], "cve": c["cve"],
+                    "probability": c["probability"], "material": c["material"],
+                    "lead": c["cve"] or c["key"]},
+        ))
+
     # Escalate/pivot primitives are post-foothold by nature. `eligible_exploits` and
     # `eligible_tunnels` already self-gate on a foothold; `eligible_enum` is permissive
     # (it lists OS tools as not-ready pre-foothold), so gate all three here on a proven

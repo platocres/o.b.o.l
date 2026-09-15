@@ -110,6 +110,16 @@ REGISTRY: list[Material] = [
              purpose="pkexec local root; operator supplies a vetted build/source",
              bins=["PwnKit", "pwnkit"], license="various", source="various",
              note="Public PoCs vary; supply a source/binary you trust via an override."),
+    Material("dirtycow", "DirtyCow (CVE-2016-5195)", "Linux privesc", "linux", "manual",
+             purpose="copy-on-write race -> root on kernels < 4.8.3 (fingerprint-matched)",
+             bins=["dirtycow", "dcow", "cowroot"], license="various", source="various (dirtyc0w/pokemon)",
+             note="Many PoC variants (dirtyc0w.c, pokemon.c, dirtycow-mem.c). Supply a vetted "
+                  "source via `obol cache use dirtycow <path>`; compile on-target with gcc."),
+    Material("dirtypipe", "DirtyPipe (CVE-2022-0847)", "Linux privesc", "linux", "manual",
+             purpose="pipe page-cache write -> root on kernels 5.8 - 5.16.11 (fingerprint-matched)",
+             bins=["dirtypipe", "exploit-1", "exploit-2"], license="various",
+             source="AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits (and others)",
+             note="Supply a vetted source via `obol cache use dirtypipe <path>`; compile on-target."),
     # ── Windows enum (read-only) ──────────────────────────────────────────────
     Material("winpeas", "winPEAS (x64)", "Windows enum", "windows", "cache-binary", arch="amd64",
              purpose="Windows privilege-escalation enumeration",

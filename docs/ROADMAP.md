@@ -954,6 +954,19 @@ on the exam: an automated-*exploitation* tool, and obol *auto-firing* an exploit
   Unreleased changelog. `autonomy.decide` (reach × mode × override), profile-driven exam/
   lab/default modes, the two uncrossable exam invariants, visible/settable policy, and the
   invariant tests.
+- **(b-fingerprint) Fingerprint → probable-exploit matcher — DONE.** `obol/vulnmatch.py`
+  + `packs/known_exploits_2026_09.json` — matches a host's service/version/OS/web
+  fingerprint against a curated registry of ~20 exploits common in OSCP/HTB/THM/Vulnhub
+  environments (EternalBlue, SMBGhost, BlueKeep, Zerologon, PrintNightmare, vsftpd 2.3.4,
+  ProFTPD mod_copy, Samba usermap, Shellshock, Heartbleed, Drupalgeddon2, Struts2,
+  Log4Shell, Webmin, phpMyAdmin, Tomcat/Jenkins cross-refs, DirtyCow, DirtyPipe, Baron
+  Samedit). A match is a proof-bound **candidate lead** (`exploit.candidate`, never
+  confirmed-vulnerable). It flows through the same points any exploit does: a move
+  (`exploit:vuln:<key>`, `manual` — the exam floor never auto-fires it), dispatch craft
+  (stage material if any + fill the PoC/searchsploit command), the provision cache (DirtyCow/
+  DirtyPipe added), and it re-fingerprints automatically after each service scan
+  (`service.run_action` hook). `obol vulns [host]`, `GET /api/vulns`. Vendors no exploit
+  code (cites CVE/EDB). **Still TODO in (b):** `connect`/SMB-exec logins and a `stage`-as-move.
 - **(b) Getting-on-the-box moves — DONE (fingerprint matcher still TODO).** A `listener`
   move (local/auto, catch a reverse shell) offered on a code-exec path; `obol cred add`
   (+ `POST /api/cred` + a web Add-credential form) so a hand-found password/NT hash becomes

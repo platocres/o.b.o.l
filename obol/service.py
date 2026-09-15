@@ -138,6 +138,19 @@ def run_action(ws: Workspace, action: Action, *, command_index: int = 0,
             if ws.facts.add(fact):
                 added.append(fact)
         ws.apply_fact_enrichment(added)
+        # re-fingerprint the target from its refreshed facts: new service/version/OS
+        # evidence may match a known exploit → record proof-bound exploit.candidate leads
+        # (§15b). A version match is a candidate, never a confirmed vuln.
+        if added and ws.target:
+            try:
+                from . import vulnmatch
+                for k in vulnmatch.record_candidates(ws, ws.target):
+                    added.append(next((f for f in ws.facts.facts
+                                       if f.kind == "exploit.candidate"
+                                       and f.value.get("key") == k), None))
+                added = [f for f in added if f is not None]
+            except Exception:  # noqa: BLE001 — matching must never break a run
+                pass
 
     ledger = {"target": ws.target}
     ledger.update(ledger_extra or {})
