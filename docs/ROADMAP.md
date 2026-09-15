@@ -1,6 +1,73 @@
 # Roadmap & status
 
 Priority order. Item 1 is what the tool most needs to become usable on a live box.
+The **cruise-control spine** below is the organizing frame the numbered items add up to.
+
+## The cruise-control spine (North Star — read this first)
+
+**The goal.** Bring the reach of the sibling tool **Charon** (`docs/SOURCES.md §3`) —
+which drives a lab end to end from one button — into obol, but **with the operator in
+control and without Charon's brittleness** (Charon beat labs only by hard-coding around
+their walls, learned no universal lesson, and ended the run at any roadblock). obol
+automates the methodologically universal 80–90%, drives as far as the facts allow on each
+phase, and at every friction point hands the operator a staged, context-rich checkpoint —
+then **re-enters from whatever facts come back**, obol-parsed or operator-supplied. See
+`AGENTS.md` § North Star.
+
+This is an *organizing frame over what obol already is*, **not a second engine**: the
+fact-gated planner already always knows the best next move; cruise control gives that
+planner hands over the built primitives and an optional, governed foot on the gas. Three
+pillars:
+
+- **(I) Unify the move space.** Every built primitive — sessions/login (§6a), listeners
+  (§8), staging (§8), enum run-and-rank (§8), exploit craft (§8), tunnels (§6d) + the
+  through-tunnel sweep (§6e), flag/proof capture (§7) — becomes a first-class, fact-gated
+  *candidate move* in the one ranked frontier (`pack.next_actions` / a shared `service`
+  move enumerator), exactly as pack actions already are. Today those primitives live
+  *outside* the ranked "next" list, each with its own entrypoint; unifying them is the
+  **load-bearing PR** everything else rides on. This *is* the "typed step vocabulary" §12
+  reached for — but its home is the planner/frontier, not a playbook file.
+- **(II) Cruise control (`obol cruise`) — advance with a stop-contract.** A loop that
+  repeatedly takes the top-ranked move, runs it through the one shared scope-enforced
+  runner, re-parses, re-ranks, and continues **until a checkpoint**, in priority order:
+  **manual-required** (an OSCP-must-be-manual exploit — obol stages + crafts + hands off,
+  **never fires it**), **noisy/risky** (the existing `require_approval` gate, now a
+  pause), **ambiguous** (a genuine fork — surface and wait), **failure** (stop and
+  surface, unless exploit repair §13 is engaged), and **objective complete** (§7's
+  ladder — initial access → privesc → local → root flag + proof). The operator keeps a
+  foot on the brake: step, skip, take the wheel, or stop anytime. **Default autonomy
+  boundary:** cruise auto-drives recon/enum freely (Quick Start's existing safe-baseline
+  line) and everything past it (creds, access, escalate, loot) is checkpoint-gated by
+  default; the operator widens the leash per engagement, and §7's profile sets the
+  manual-exploit checkpoints automatically. Terminal `obol cruise` + a web toggle, full
+  parity. **Not** "autopilot": cruise control keeps forward motion while the operator's
+  hands stay near the wheel and disengages the instant they tap the brake.
+- **(III) Resumable handoff + external-action ingestion (the anti-brittleness pillar).**
+  The seam Charon lacked. When cruise stops stuck, the operator acts outside obol and
+  re-enters from facts:
+  - **Paste-and-parse (the primary path).** The operator pastes output from a command
+    they ran themselves (their own terminal, Burp, a browser) and obol runs it through the
+    **same `parse_action_output` pipeline** — identical proof-boundary discipline, just
+    evidence obol didn't generate. It lands in the ledger as a real run whose `source`
+    marks it externally executed, so the OSCP report stays complete across manual detours.
+  - **Operator-attested assertion (a clearly-marked escape hatch).** When there is no
+    parseable output, the operator asserts a fact directly. It stays the narrowest claim
+    and its `source` is tagged **operator-attested** (with the operator's note), so
+    reports/UI show which facts came from obol's runner vs. the operator's word. Same
+    `ProofState`; honest lineage. The last resort, not the encouraged path.
+  - Because facts are the one interface and the planner runs off facts, external work is
+    just "new facts arrived": the frontier re-ranks and cruise resumes.
+
+Non-negotiables (on top of the global ones): every cruise move is one real, inspectable,
+scope-gated, proof-bound command that writes the one store; cruise never fires a
+manual-required exploit or bypasses an approval gate; **no hard-coded lab wins**
+(`AGENTS.md` principle 10); operator-sourced facts are always visibly distinguished; obol
+never manufactures a fact or a proof artifact to keep a run moving; and there is
+**terminal parity for every capability** (no web-only cruise/ingest/assert).
+
+The near-term substrate below still matters — parser coverage (item 1) is what makes each
+move *real*, and §6/§7/§8 are the primitives cruise orchestrates. The numbered items keep
+their priority; cruise control is the frame they add up to.
 
 ## Done
 
@@ -445,6 +512,13 @@ For obol:
   shell / guided-paste channel (today it uses the SSH/WinRM proof channel), and the
   full per-target objective ladder (initial access → privesc → local → root) as a
   progress meter.
+- **The objective ladder is load-bearing (promoted).** The per-target ladder (initial
+  access → privesc → local → root, each with the proof requirement §14 attaches) is now
+  read by two consumers, so build it as the shared spine those two read — not as a
+  progress bar alone: it is **cruise control's goal function** (drive until root + proof;
+  spine pillar II's objective-complete checkpoint) and the **report's proof checklist**
+  (§14's pre-submission validator). Each rung carries its milestone fact and, in a
+  proof-gated profile, whether its OSCP-compliant proof exists.
 
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).
@@ -620,7 +694,24 @@ data, not planner branching; one runner, one store, one scope gate; guided
 one-command-at-a-time manual exploitation, never an automated one-click chain;
 success is a proof-bound fact from real output, never a card that only renders.
 
-## 12. Phase playbooks & runbooks (one-click, context-suggested, fully selectable)
+## 12. Named runbooks — a convenience over the cruise-control frontier (refolded)
+
+> **Refolded under the cruise-control spine (top of this file).** This section was
+> originally framed to make "playbook / runbook" the **headline** for automation. That
+> role now belongs to **cruise control** (spine pillar II) driving the **unified move
+> frontier** (spine pillar I). A curated, named recipe is a *parallel* structure sitting
+> next to the planner — exactly the thing that kept raising "is this a second engine?".
+> So named runbooks survive only as a **convenience**: a saved, named shortcut that seeds
+> a batch of moves into the same frontier and the same `obol cruise` loop, with the same
+> stop-contract and per-step approval — never a separate orchestrator. Two specific
+> re-homings: the **typed-step vocabulary** this section proposed (model decision 1) is
+> now spine pillar I (it lives in the planner/`service`, not a playbook file), and
+> **context suggestion/ranking** (12c) is just the frontier ranking the operator already
+> gets from `obol next` — a runbook is "suggested" when the moves it seeds are on-flow.
+> What remains genuinely worth building from the sequence below is the operator-facing
+> convenience: one-click **run-all** honoring approval + precondition-skip (12a), a
+> browsable **all-runbooks section** with terminal parity (12d), and **operator-authored
+> runbooks as data** (12e). Read the rest as historical design detail, now subordinate.
 
 Today a playbook is a hand-written, ordered list of *pack action ids* run **one step
 at a time** (`obol/playbook.py`, `obol/playbooks/*.json`; two ship, both recon). The
@@ -709,6 +800,69 @@ gate; a step delegates to an existing proof-bound primitive and never invents fa
 per-step approval survives run-all; suggestion never *hides* a playbook (all stay
 selectable — the ranking orders, it does not gate); and the dedicated section keeps the
 lean Overview lean (progressive disclosure — the full library lives in its own view).
+
+## 13. Automatic exploit repair (bounded, operator-approved, proof-bound)
+
+Charon could stage, run, **and repair** an exploit that didn't work on the first try;
+that repair capability is real lab-speed value, but "repair any exploit" is also where
+Charon sprawled. obol's version is tightly bounded and honest:
+
+- **Detect** a failed exploit run by classifying the captured runner output obol already
+  saves under `.obol/runs/` — a compile error, a Python 2/3 traceback, an `LHOST`/`LPORT`
+  or target-URL/param mismatch, an architecture mismatch, a connection refused.
+- **Propose bounded, known repairs from data** — a repair table (fix the interpreter,
+  patch `LHOST`/`LPORT`/target/params from workspace facts, recompile with the right
+  flags/arch, replace a hard-coded IP) — **never** open-ended code generation, and never a
+  silent network fetch of a new exploit.
+- **Show the diff, re-stage, and re-offer.** The operator approves the repair; obol never
+  silently rewrites and fires. In OSCP mode this stays a **preparation** assist — it hands
+  the operator a working, staged exploit to run by hand — never an auto-fire. A repair is
+  a *checkpoint* in cruise control (spine pillar II), not a hidden retry.
+
+Interlocks: §8 (the staging/exploit-craft tier is what gets repaired), the cruise
+stop-contract (a failure checkpoint routes here when repair is engaged), §7 (an OSCP
+profile keeps repair to preparation-only). Non-negotiables: repairs are **data**, not
+planner branching; obol proposes and the operator approves; success is still a
+proof-bound fact from real output; no hard-coded lab wins (`AGENTS.md` principle 10).
+
+## 14. Report proof & screenshot handling (OSCP-compliant evidence)
+
+OffSec has specific proof rules — most notably a `local.txt`/`proof.txt` screenshot must
+show the **flag contents and a host-identity command (`ip a` / `ipconfig`) in the same
+capture**, taken at the compromise milestones per host. obol should treat proof as
+first-class, driven by the engagement profile (§7) as **data**, not a one-off UI feature:
+
+- **Proof requirements as profile data.** Each profile carries *what* a valid proof must
+  contain and *when* it is required (OSCP: flag + host identity in one capture, at initial
+  access and root; HTB/CTF: looser or none) — the same table (`obol/profile.py`) that
+  already holds flag names/formats (§7).
+- **obol-generated compliant proof.** For a flag obol captures itself (§7 flag hunt), run
+  the **combined** identity+flag command over the foothold proof channel
+  (`ip a && cat /root/proof.txt`, `ipconfig && type proof.txt`) so the single captured
+  block *is* the OSCP proof text, carrying the command + timestamp lineage obol already
+  records.
+- **Operator screenshots — attach, guide, validate.** A screenshot is another evidence
+  form of an operator-sourced fact (the same shape as spine pillar III). When the operator
+  captures a flag by hand, obol prompts for the proof *at the point of capture* ("attach a
+  screenshot showing the flag and `ip a`"), slots it into the report at the right
+  host/milestone with the right caption, and marks its lineage as **operator-supplied**
+  (visibly distinguished, as with all external work).
+- **Pre-submission proof validator.** Because proof requirements are data and §7's
+  objective ladder tracks milestones, obol validates the report before export — e.g.
+  *"root flag on HOST-2 recorded but has no OSCP-compliant proof (captured block shows no
+  host identity, no screenshot attached)."* This makes the report a checklist-enforced
+  deliverable — a place obol is straightforwardly better than manual note-taking.
+- **No-forgery guardrail (non-negotiable).** obol **never fabricates a proof screenshot**
+  or dresses its own captured output up as the operator's live terminal. It renders its
+  own *genuinely captured* output as a clearly obol-labeled evidence block (text-first),
+  and the operator's real terminal screenshots are a separate, operator-supplied lane.
+  Forging an anti-cheat record is the "hard-coded win" dishonesty one level up
+  (`AGENTS.md` principle 10).
+
+Interlocks: §7 (the objective ladder + profile that carry proof requirements), §4 (the
+report this feeds), spine pillar III (operator-supplied evidence lineage), and the
+existing `obol/screenshots.py` (headless PNGs for the debug package — a different,
+non-proof use). Builds on `obol/report.py` + `build_report_context`.
 
 ## UX guardrails (product decision — keep these)
 

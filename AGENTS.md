@@ -32,10 +32,12 @@ statements do not.
 ## What obol is
 
 An **evidence-driven OSCP operator companion**. Terminal-first, PentOS-style shell
-subcommands. The operator drives one deliberate command at a time; obol keeps a
-conservative model of what has actually been **proven** and recommends the next
-best action from that model. Built for the OSCP exam: the terminal scrollback is
-the operator's evidence log.
+subcommands. The operator drives one deliberate command at a time — or hands obol the
+wheel with **cruise control** (`obol cruise`) and lets it advance the engagement move by
+move, foot near the brake. Either way obol keeps a conservative model of what has
+actually been **proven**, executes exactly one real, scope-gated, proof-bound command per
+move, and recommends (or, in cruise, takes) the next best action from that model. Built
+for the OSCP exam: the terminal scrollback is the operator's evidence log.
 
 **What makes it different** from the tools it learns from (see `docs/SOURCES.md`):
 a **fact-gated decision model** — actions are gated on proven facts (each carrying
@@ -47,6 +49,42 @@ decision: this is a fast OSCP-exam tool). And **one state, multiple synced
 views**: the terminal and a localhost web surface both drive the engagement over
 one store (either can launch a scope-enforced run; the web updates in real time),
 and an OSCP report is narrated from the same fact/run ledger.
+
+## The North Star — cruise control (operator-in-control automation)
+
+The sibling tool **Charon** (`docs/SOURCES.md §3`) can drive a whole lab end to end —
+enumerate, foothold, privesc, stage/run/**repair** exploits, catch its own reverse shell,
+pivot, and grab the flags — from one button. But it was **brittle**: it beat a lab only
+by hard-coding around that lab's walls after many rounds (it learned no universal
+lesson), and a single roadblock ended the run. obol's aim is Charon's reach **with the
+operator in control and without the brittleness**:
+
+- **Automate the universal 80–90%.** obol drives the methodologically universal, boring
+  work (enumerate, stage, run the standard moves, hunt flags, capture everything for the
+  report) as far as the facts allow on each phase — and it **never hard-codes a
+  lab-specific win**. When methodology runs out it hands off; it does not special-case a
+  box to get past a wall (principle 10 below).
+- **Cruise control, not autopilot.** `obol cruise` advances the engagement one real,
+  scope-gated, proof-bound move at a time and **stops itself at every checkpoint** — a
+  manual-required exploit (OSCP forbids automating it, so obol stages + crafts + hands it
+  off, never fires it), a noisy/risky step, a genuine fork, or a failure. The operator
+  keeps a foot on the brake: step, skip, take the wheel, or stop at any moment. Nothing is
+  a hidden chain — every move is an inspectable command that writes the one ledger. Cruise
+  control (a 1950s car feature) keeps forward motion while your hands stay near the wheel
+  and disengages the instant you tap the brake; that is the whole contract.
+- **Resumable handoff — the operator fills the gaps.** obol will never account for every
+  curveball, and it does not have to. When it gets stuck, the operator steps outside obol,
+  does the thing by hand, and **re-enters from facts**: paste the tool output and obol
+  parses it through the same proof-bound pipeline, or assert an operator-attested fact
+  (always visibly distinguished from obol-run evidence). Because facts are the one
+  interface and the planner runs off facts, "the operator did something outside obol" is
+  just "new facts arrived" — the frontier re-ranks and cruise resumes. This is the seam
+  Charon never had.
+
+The build sequence for this is the **cruise-control spine** in `docs/ROADMAP.md` (pillars:
+unify the move space → cruise control with a stop-contract → resumable handoff +
+external-action ingestion), with automatic exploit repair (§13) and report proof &
+screenshot handling (§14) alongside.
 
 ## The non-negotiable principles (the "always/never")
 
@@ -104,6 +142,15 @@ and an OSCP report is narrated from the same fact/run ledger.
    Add an `Unreleased` entry for code, parser, pack, runner, report, web, CLI,
    test, or documentation changes before handing work back. The test suite checks
    this for non-trivial repo changes, so do not leave the changelog as future work.
+10. **No hard-coded lab wins (the anti-Charon rule).** obol's methodology is universal
+    (Orange-grounded, carried as pack/profile **data**) or it is an operator handoff —
+    **never** a box-specific branch in the planner to get past a particular wall. Charon
+    sprawled precisely because it special-cased labs and learned no universal lesson; obol
+    must not repeat it. When the packs' methodology runs out, obol stops and hands off (the
+    resumable-handoff pillar above) and re-enters from whatever facts come back —
+    obol-parsed or operator-attested. Never manufacture a fact, a win, or a proof artifact
+    (a screenshot included) to keep a run moving; the honest lineage of every fact
+    (obol-run vs. operator-supplied) is preserved and surfaced.
 
 ## Architecture / module map
 
