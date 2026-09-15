@@ -515,6 +515,41 @@ def test_tunnel_requires_target_and_kind(cx):
     assert cx.post("/api/run/tunnel", json={"kind": "chisel"}, headers=H).status_code == 422
 
 
+def test_engagement_wide_redact_switch(cx):
+    """One switch the whole SPA respects: with include_secrets=0 every read surface —
+    per-target findings, the engagement findings roll-up, and the command ledger —
+    redacts secrets; by default (show-by-default product call) they are shown."""
+    from obol import library
+
+    ws = library.resolve_active()
+    ws.facts.add(Fact("credential.available", "host:10.10.10.161",
+                      {"user": "bob", "password": "S3cret!"}, source="crack"))
+    ws.record_run("nxc", "nxc smb 10.10.10.161 -u bob -p S3cret!", ["credential.available"],
+                  target="10.10.10.161", action_id="x")
+    ws.save()
+
+    # default: secrets shown across findings, roll-up, and the command ledger
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert any(f.get("value", {}).get("password") == "S3cret!" for f in b["findings"])
+    act = cx.get("/api/engagement/activity", headers=H).json()
+    rollup = [f for cat in act["findings"] for f in cat["findings"]]
+    assert any(f.get("value", {}).get("password") == "S3cret!" for f in rollup)
+    assert any("S3cret!" in r["command"] for r in act["timeline"])
+
+    # redact switch on (include_secrets=0): the same three surfaces hide the secret
+    b = cx.get("/api/target", params={"target": "10.10.10.161", "include_secrets": "0"}, headers=H).json()
+    assert all(f.get("value", {}).get("password") != "S3cret!" for f in b["findings"])
+    assert not any("S3cret!" in c["command"] for c in b["commands"])
+    act = cx.get("/api/engagement/activity", params={"include_secrets": "0"}, headers=H).json()
+    rollup = [f for cat in act["findings"] for f in cat["findings"]]
+    assert all(f.get("value", {}).get("password") != "S3cret!" for f in rollup)
+    assert all("S3cret!" not in r["command"] for r in act["timeline"])
+
+    # a subsequent default request is not poisoned by the earlier redacted one
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert any(f.get("value", {}).get("password") == "S3cret!" for f in b["findings"])
+
+
 def test_engagement_activity_surfaces_running_jobs_and_ledger(cx, monkeypatch):
     """0e: an in-flight Quick Start job shows up in the engagement run feed, and its
     committed command appears in the cross-host ledger once it finishes."""

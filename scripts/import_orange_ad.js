@@ -43,10 +43,18 @@ function priority(produces) {
   return best;
 }
 function actionPriority(id, produces) {
+  // Exam-flow overrides where "highest-value fact produced" mis-ranks the move.
+  // The nmap -> DC identify -> anonymous LDAP -> user enum spine, and then quiet
+  // credential-material gathering (AS-REP roasting) BEFORE noisy password spraying:
+  // spraying produces a validated credential (weight 88) so it would otherwise
+  // outrank roasting (74), but it is the classic premature, lockout-risky move and
+  // belongs after the quiet, no-credential roast. See docs/ROADMAP.md item 2.
   const override = {
     "ad-dc-identify": 96,
     "ad-anon-ldap-enum": 94,
     "ad-user-enum": 92,
+    "asrep-roast": 80,      // quiet, needs only a user list — the first cred move
+    "password-spray": 72,   // noisy/lockout risk — after the quiet material gathering
   };
   return override[id] || priority(produces);
 }

@@ -352,7 +352,7 @@
     "hash.asrep",
     "credential.candidate"
    ],
-   "priority": 74,
+   "priority": 80,
    "proves": "establishes an AS-REP hash, candidate credentials",
    "does_not_prove": "candidate material only — not a validated credential, and not access",
    "report": {
@@ -539,7 +539,7 @@
    "produces": [
     "credential.available"
    ],
-   "priority": 88,
+   "priority": 72,
    "proves": "establishes a usable credential",
    "does_not_prove": "a usable credential — not access until it authenticates against a service",
    "report": {

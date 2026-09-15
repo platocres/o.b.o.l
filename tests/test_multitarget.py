@@ -134,6 +134,50 @@ def test_engagement_graph_does_not_turn_smb_domain_banner_into_dc():
     assert edge["kind"] == "domain-service"
 
 
+def test_engagement_graph_credential_nodes_are_per_credential_and_evidence_tied():
+    """One node per distinct credential, a cred->host edge only where a fact ties them
+    (host-scoped cred fact or a session), and a cred->domain edge only to its OWN
+    domain — not one node glued to every foothold with an arbitrary domain."""
+    ws = library.create_engagement("E")
+    ws.add_target("10.10.10.5", "A")
+    ws.add_target("10.10.10.6", "B")
+    # alice: a host-scoped validated credential on A (evidence ties her to A)
+    ws.facts.add(Fact("foothold.linux", "host:10.10.10.5", {}, source="ssh"))
+    ws.facts.add(Fact("credential.available", "host:10.10.10.5",
+                      {"user": "alice", "domain": "corp.local", "password": "x"}, source="crack"))
+    # bob: a domain-scoped credential + a foothold on B, but NO fact tying bob to B yet
+    ws.facts.add(Fact("foothold.linux", "host:10.10.10.6", {}, source="ssh"))
+    ws.facts.add(Fact("credential.available", "domain:corp.local",
+                      {"user": "bob", "domain": "corp.local", "password": "y"}, source="spray"))
+    ws.save()
+
+    g = graph.build_engagement_graph(ws)
+    creds = {n["meta"]["user"]: n for n in g["nodes"] if n["type"] == "credential"}
+    assert set(creds) == {"alice", "bob"}   # one node per distinct credential
+
+    tgt = {n["meta"]["host"]: n["id"] for n in g["nodes"] if n["type"] == "target"}
+    auth = {(e["from"], e["to"]) for e in g["edges"] if e["kind"] == "authenticates"}
+    # alice authenticates A (host-scoped fact); she is NOT glued to B
+    assert (creds["alice"]["id"], tgt["10.10.10.5"]) in auth
+    assert (creds["alice"]["id"], tgt["10.10.10.6"]) not in auth
+    # bob has no host tie yet, so no authenticates edge — not blanket-linked to his foothold
+    assert not any(frm == creds["bob"]["id"] for frm, _ in auth)
+
+    # both link to their own domain, and there is no cross-domain fabrication
+    dom = next(n["id"] for n in g["nodes"] if n["type"] == "domain" and n["label"] == "corp.local")
+    cred_domain_edges = {(e["from"], e["to"]) for e in g["edges"] if e["kind"] == "credential"}
+    assert (dom, creds["alice"]["id"]) in cred_domain_edges
+    assert (dom, creds["bob"]["id"]) in cred_domain_edges
+
+    # a session logging in as bob on B is the evidence that finally ties bob->B
+    ws.add_session(host="10.10.10.6", kind="ssh", user="bob", proof_fact="foothold.linux")
+    ws.save()
+    g2 = graph.build_engagement_graph(ws)
+    creds2 = {n["meta"]["user"]: n for n in g2["nodes"] if n["type"] == "credential"}
+    auth2 = {(e["from"], e["to"]) for e in g2["edges"] if e["kind"] == "authenticates"}
+    assert (creds2["bob"]["id"], tgt["10.10.10.6"]) in auth2
+
+
 @pytest.mark.skipif(not FIXTURES.exists(), reason="bloodhound fixtures not present")
 def test_bloodhound_ingest_parses_and_records():
     ws = library.create_engagement("E")

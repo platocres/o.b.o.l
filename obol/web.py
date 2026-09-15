@@ -3,8 +3,9 @@
 A single self-contained page built from the current workspace state. It never
 executes anything and binds to localhost only — the terminal is the sole actor;
 this is just a neat mirror for eyeballing findings and the path before writing
-the report. mermaid is loaded from a CDN here for the skeleton; a production
-build should vendor it so the page works offline on an exam box.
+the report. The path graph is rendered as inline SVG (`graph.build_graph_svg`) —
+no script, no web font, no CDN — so the page works fully offline on an exam box,
+matching the live `obol serve` surface (vendored assets, SVG flow chart).
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .board import action_desc
-from .graph import build_mermaid
+from .graph import build_graph_svg
 from .pack import next_actions
 from .report import report_status_rows
 from .workspace import Workspace
@@ -35,17 +36,16 @@ _TEMPLATE = """<!doctype html>
   .not {{ color: #d29922; }} .proves {{ color: #3fb950; }}
   .blocked {{ color: #8b98a5; }}
   .graph {{ background: #0d1117; border: 1px solid #1c2530; border-radius: 8px; padding: 12px; overflow-x: auto; }}
+  .graph svg {{ max-width: none; }}
 </style></head><body>
 <header><h1>obol <small>· {name} · {target}</small></h1></header>
 <main>
   <section><h2>Key findings</h2><table>{finding_rows}</table></section>
   <section><h2>Report</h2><table>{report_rows}</table></section>
-  <section><h2>Path</h2><div class="graph"><pre class="mermaid">{mermaid}</pre></div></section>
+  <section><h2>Path</h2><div class="graph">{path_svg}</div></section>
   <section><h2>Next</h2><table>{next_rows}</table></section>
   <section><h2>Found so far</h2><table>{facts_rows}</table></section>
 </main>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
 </body></html>"""
 
 
@@ -135,7 +135,7 @@ def build_page(ws: Workspace) -> str:
 
     return _TEMPLATE.format(
         name=html.escape(ws.name), target=html.escape(ws.target),
-        mermaid=html.escape(build_mermaid(facts)),
+        path_svg=build_graph_svg(facts),
         finding_rows=_key_findings(ws),
         report_rows=_report_rows(ws),
         facts_rows=fact_rows, next_rows=next_rows,
