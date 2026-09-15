@@ -30,7 +30,7 @@ from . import autonomy
 from . import moves as moves_layer
 
 # Move-id prefixes that name a primitive; anything else is a pack action id.
-_PRIMITIVE_KINDS = {"login", "enum", "exploit", "tunnel"}
+_PRIMITIVE_KINDS = {"login", "enum", "exploit", "tunnel", "sweep"}
 
 
 class DispatchError(Exception):
@@ -103,6 +103,8 @@ def run_move(ws, move_id: str, *, host: str = "", approve: bool = False,
             return _run_enum_move(ws, move, key, host, surface=surface)
         if kind == "tunnel":
             return _run_tunnel_move(ws, move, key, host, params, surface=surface)
+        if kind == "sweep":
+            return _run_sweep_move(ws, move, key)
         if kind == "exploit":
             return _craft_exploit_move(ws, move, key, host, params)
     except DispatchError:
@@ -165,6 +167,18 @@ def _run_tunnel_move(ws, move, kind_key, host, params, *, surface):
     return _result(move, ok=True, posture="handoff",
                    summary=f"opened {kind_key} tunnel — launch the setup command",
                    command=res.get("setup_command", ""), detail=res)
+
+
+def _run_sweep_move(ws, move, tid):
+    """Sweep through a live tunnel to discover the next segment (§6e recursion). Adds any
+    live host as a target; the sweep doubles as the tunnel's health proof."""
+    from . import discovery
+    res = discovery.run_tunnel_sweep(ws, tid)
+    created = res.get("created", [])
+    return _result(move, ok=(res.get("status") == "up" or bool(created)), posture="ran",
+                   summary=(f"swept {res.get('subnet', '')}: {len(created)} new host(s), "
+                            f"tunnel {res.get('status', '')}"),
+                   added=[f"host.up ({h})" for h in created], detail=res)
 
 
 def _craft_exploit_move(ws, move, key, host, params):

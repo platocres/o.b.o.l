@@ -65,10 +65,15 @@ class CruiseResult:
 
 # ── the loop ──────────────────────────────────────────────────────────────────
 def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
-           surface: str = "cli", on_step=None) -> CruiseResult:
+           surface: str = "cli", auto_kinds=frozenset(), on_step=None) -> CruiseResult:
     """Auto-advance a target through its ``auto`` moves, stopping at the first checkpoint,
     and attach a rich briefing describing the stop. `on_step` (if given) is called with
     each `CruiseStep` as it completes, for live terminal output.
+
+    ``auto_kinds`` elevates specific approve-tier move kinds to run unattended this cruise
+    — e.g. ``{"sweep"}`` lets cruise run a through-tunnel sweep of an already-opened,
+    scope-extended pivot without stopping (the pivot decision itself, opening the tunnel,
+    is never elevated). It never elevates a ``manual`` move (a privesc exploit).
     """
     host = normalize_target(host or getattr(ws, "target", "") or "")
     result = CruiseResult(target=host)
@@ -90,14 +95,15 @@ def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
             result.stop_reason = "done"
             result.message = "nothing left to auto-run — cruise has done the safe work"
             break
-        if autonomy.needs_approval(candidate.autonomy):
+        elevated = candidate.autonomy != "manual" and candidate.kind in auto_kinds
+        if autonomy.needs_approval(candidate.autonomy) and not elevated:
             result.stop_reason = "checkpoint"
             result.stop_move = candidate.to_dict()
             result.message = _checkpoint_message(candidate)
             break
         attempted.add(candidate.id)
         try:
-            res = dispatch.run_move(ws, candidate.id, host=host, approve=False, surface=surface)
+            res = dispatch.run_move(ws, candidate.id, host=host, approve=elevated, surface=surface)
         except dispatch.DispatchError as exc:
             step = CruiseStep(candidate.id, candidate.label, candidate.kind, candidate.phase,
                               posture="blocked", ok=False, summary=str(exc))
@@ -114,6 +120,57 @@ def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
                           "keep going")
 
     result.briefing = build_briefing(ws, result)
+    return result
+
+
+@dataclass
+class EngagementCruiseResult:
+    """The result of cruising every in-scope target (the recursion across segments)."""
+    hosts: list = field(default_factory=list)   # [{host, stop_reason, message, ran, checkpoint, complete}]
+
+    @property
+    def checkpoints(self) -> list:
+        return [h for h in self.hosts if h["stop_reason"] == "checkpoint"]
+
+    @property
+    def complete(self) -> list:
+        return [h for h in self.hosts if h.get("complete")]
+
+    def to_dict(self) -> dict:
+        return {"engagement": True, "hosts": self.hosts,
+                "summary": {"cruised": len(self.hosts),
+                            "checkpoints": len(self.checkpoints),
+                            "complete": len(self.complete)}}
+
+
+def cruise_engagement(ws, *, max_steps: int = DEFAULT_MAX_STEPS, max_hosts: int = 64,
+                      surface: str = "cli", auto_kinds=frozenset(),
+                      on_host=None, on_step=None) -> EngagementCruiseResult:
+    """Cruise every in-scope target, breadth-first — the supervised recursion across
+    segments. Each target is driven through its safe moves and stopped at its own
+    checkpoint; the target list is re-read every pass, so hosts a just-run through-tunnel
+    sweep discovers (with ``auto_kinds={"sweep"}``, once the operator has opened the pivot)
+    are picked up and cruised in the same run. Pivoting itself — opening a tunnel — stays a
+    per-host checkpoint; obol never crosses into a new segment without the operator's nod.
+    """
+    result = EngagementCruiseResult()
+    done: set[str] = set()
+    while len(done) < max_hosts:
+        pending = [t["host"] for t in ws.targets if normalize_target(t["host"]) not in done]
+        if not pending:
+            break
+        host = pending[0]
+        done.add(normalize_target(host))
+        res = cruise(ws, host, max_steps=max_steps, surface=surface,
+                     auto_kinds=auto_kinds, on_step=on_step)
+        entry = {"host": normalize_target(host), "stop_reason": res.stop_reason,
+                 "message": res.message, "ran": res.ran_ok,
+                 "checkpoint": (res.briefing or {}).get("checkpoint"),
+                 "complete": res.stop_reason == "objective-complete",
+                 "briefing": res.briefing}
+        result.hosts.append(entry)
+        if on_host:
+            on_host(entry, res)
     return result
 
 
@@ -245,6 +302,13 @@ def _checkpoint_detail(ws, host: str, move: dict) -> dict:
         elif kind == "enum":
             command = f"stage {detail.get('tool', '')} on {host} and run it over the foothold"
             why = "proven foothold + credential; read-only local enumeration"
+        elif kind == "sweep":
+            from . import discovery
+            command = discovery.through_tunnel_discovery_command(
+                detail.get("transport", "socks"), detail.get("subnet", ""))
+            why = (f"tunnel {detail.get('tunnel', '')} is up and exposes "
+                   f"{detail.get('subnet', '')} — sweep it to discover the next segment")
+            risk = "active scan of the pivoted subnet (already scope-authorized via the tunnel)"
     except Exception:  # noqa: BLE001 — a preview must never break the briefing
         pass
     return {"ask": ask, "command": command, "why": why, "risk": risk,

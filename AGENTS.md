@@ -250,7 +250,9 @@ obol/
                  (login/enum/exploit/tunnel, each via its own eligible_* fn) into ONE
                  fact-gated, phase-ranked list of candidate moves per host. Enumerates
                  and ranks only (never runs, produces no facts); the frontier `obol
-                 cruise` will drive. `frontier_moves(ws, host)` -> [Move]
+                 cruise` will drive. `frontier_moves(ws, host)` -> [Move]. Move kinds:
+                 action / login / enum / exploit / tunnel / sweep (a through-tunnel sweep
+                 of a live pivot — the §6e recursion, offered once per tunnel)
   dispatch.py    move execution handle (cruise pillar I->II): run_move(ws, id) runs one
                  frontier move by id through its existing shared primitive
                  (service.run_action / sessions / enumrun / tunnels / exploits) — the
@@ -273,8 +275,13 @@ obol/
                  stop it builds a rich BRIEFING (build_briefing): where-you-are, a recap
                  (learned facts + tools to install), and the full checkpoint — a PURE
                  command preview, the facts that triggered it, the ask (approve/manual/
-                 input), the risk, the resume path, and the other moves waiting. Not a new
-                 engine. `obol cruise [host]`
+                 input), the risk, the resume path, and the other moves waiting. `obol
+                 cruise --all` cruises EVERY in-scope target breadth-first (the §6
+                 recursion across segments, re-reading the target list so a just-swept
+                 segment's hosts get cruised too); `--sweep` elevates through-tunnel sweeps
+                 of already-opened pivots to auto so cruise carries into the pivoted
+                 segment (opening a tunnel still asks). Not a new engine. `obol cruise
+                 [host] [--all] [--sweep]`
   objectives.py  per-target objective ladder (§7): initial access → privesc → local flag
                  → root flag, each rung reached only by a proving fact (foothold/access.*/
                  objective.* — profile-aware via flags.py) and carrying its evidence. Read

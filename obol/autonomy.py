@@ -31,8 +31,8 @@ TIERS = ("auto", "approve", "manual")
 # A primitive move's autonomy, by move kind. Post-foothold enum, a login, and a tunnel
 # all touch the target/network (past the recon/enum boundary), so they pause for
 # approval; a privesc exploit is never auto-fired (craft + hand off).
-PRIMITIVE_TIER = {"login": "approve", "enum": "approve",
-                  "tunnel": "approve", "exploit": "manual"}
+PRIMITIVE_TIER = {"login": "approve", "enum": "approve", "tunnel": "approve",
+                  "sweep": "approve", "exploit": "manual"}
 
 
 def tier_of_action(action) -> str:
