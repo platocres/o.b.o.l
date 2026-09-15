@@ -38,11 +38,19 @@ pillars:
   — the seed of pillar II's stop-contract), with exploits crafted, never auto-fired.
   `obol do <id>` and `POST /api/move/run`. So a move can now be both *listed* and *run*
   uniformly by id — the two calls `obol cruise` needs.
+  The **autonomy classification** then landed (`obol/autonomy.py`): every move carries a
+  tier — `auto` (recon/enum + Quick Start's safe baseline), `approve` (everything past
+  that boundary + the box-touching primitives login/enum/tunnel), `manual` (a privesc
+  exploit — craft, never fire) — data-driven (an explicit pack `autonomy` overrides the
+  phase/quickstart derivation) and conservative by default. `dispatch.run_move` enforces
+  it: an approve/manual move will not run unattended without approval (a needs-approval
+  checkpoint), while `obol do` treats the operator's explicit invocation as the approval.
+  This is cruise's stop-contract, in data and enforced in one place.
   **Still open:** fold the frontier into `obol next`/the web "next" surface, add the
   remaining primitives as moves (listeners; staging as a sub-step of enum/exploit/tunnel),
-  and classify per-move execution posture from data (which actions are noisy) so the
-  dispatcher's `approve` gate and cruise's checkpoints are driven by methodology, not
-  hardcoded.
+  and mark the manual-exploitation web cards `autonomy: "manual"` in pack data (they
+  default to `approve` today). With enumeration, execution, and the autonomy gate all in
+  place, **pillar II (`obol cruise`) is now buildable** as the loop over these three.
 - **(II) Cruise control (`obol cruise`) — advance with a stop-contract.** A loop that
   repeatedly takes the top-ranked move, runs it through the one shared scope-enforced
   runner, re-parses, re-ranks, and continues **until a checkpoint**, in priority order:
@@ -55,7 +63,9 @@ pillars:
   boundary:** cruise auto-drives recon/enum freely (Quick Start's existing safe-baseline
   line) and everything past it (creds, access, escalate, loot) is checkpoint-gated by
   default; the operator widens the leash per engagement, and §7's profile sets the
-  manual-exploit checkpoints automatically. Terminal `obol cruise` + a web toggle, full
+  manual-exploit checkpoints automatically. This boundary is now implemented as the
+  data-driven move **autonomy** tier (`obol/autonomy.py`, enforced in `dispatch.run_move`
+  — see pillar I's landed slices below). Terminal `obol cruise` + a web toggle, full
   parity. **Not** "autopilot": cruise control keeps forward motion while the operator's
   hands stay near the wheel and disengages the instant they tap the brake.
 - **(III) Resumable handoff + external-action ingestion (the anti-brittleness pillar).**
