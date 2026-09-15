@@ -30,7 +30,8 @@ const NODE_COLOR = { scope: "#64748B", domain: "#6366F1", target: "#38BDF8",
   service: "#14B8A6", credential: "#EAB308", highvalue: "#E11D48", roastable: "#F97316" };
 
 const state = { view: "engagement", target: null, tab: "overview", redact: false,
-  toolTarget: "", lastRun: null, playbook: null, scrollTo: null, findHost: "" };
+  toolTarget: "", lastRun: null, playbook: null, scrollTo: null, findHost: "",
+  cruise: {}, cruiseBusy: false };
 // charts[id] = { el: <canvas>, chart: Chart } — tracked so morphdom-preserved
 // canvases keep their Chart instance and orphaned ones are torn down.
 const charts = {};
@@ -84,10 +85,15 @@ function shortJson(value, limit = 150) {
   if (s.length > limit) s = s.slice(0, limit - 1) + "…";
   return s;
 }
+function originBadge(f) {
+  if (!f || !f.origin || f.origin === "obol") return "";
+  const attested = f.origin === "operator-attested";
+  return `<span class="cat-chip" title="Supplied by the operator, not obol's own run" style="border-color:#E0A96D66;color:#E0A96D">${attested ? "op-attested" : "op-run"}</span>`;
+}
 function factChip(f) {
   const val = shortJson(f.value);
   return `<div class="fact-chip">
-    <div class="fc-top"><span class="fc-label">${esc(f.label || f.kind)}</span><span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category || "other")}</span></div>
+    <div class="fc-top"><span class="fc-label">${esc(f.label || f.kind)}</span>${originBadge(f)}<span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category || "other")}</span></div>
     <div class="fc-kind">${esc(f.kind)}</div>
     ${val ? `<code class="fc-val">${esc(val)}</code>` : ""}
     ${f.evidence ? `<div class="fc-src" title="${esc(f.evidence)}">${esc(f.evidence)}</div>` : ""}</div>`;
@@ -294,6 +300,8 @@ function onClick(e) {
     case "open-tunnel": openTunnel(el.dataset.host || state.target, el.dataset.kind, el.dataset.subnet || "", el.dataset.exposes === "1"); break;
     case "close-tunnel": closeTunnel(el.dataset.id); break;
     case "rm-tunnel": removeTunnel(el.dataset.id); break;
+    case "cruise": runCruise(el.dataset.host || state.target); break;
+    case "cruise-do": cruiseDo(el.dataset.host || state.target, el.dataset.id, el.dataset.ask); break;
     case "run-enum": runEnumTool(el.dataset.host || state.target, el.dataset.tool); break;
     case "plan-exploit": planExploit(el.dataset.host || state.target, el.dataset.key, el.dataset.outcome, el.dataset.listener || ""); break;
     case "listener-start": startListenerPrompt(el.dataset.host || state.target, el.dataset.os || "linux"); break;
@@ -688,6 +696,7 @@ function tabOverview(b) {
       <div class="card"><div class="panel-h"><h2>Open ports</h2></div>${(b.open_ports || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap">${b.open_ports.map((p) => `<span class="pill mono">${esc(p)}</span>`).join("")}</div>` : `<div class="muted">None parsed yet — run the nmap prelude.</div>`}</div>
       <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b> · OS: <b style="color:var(--text)">${esc(b.meta.os || "unknown")}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
+    ${cruiseCard(b)}
     ${sessionsCard(b)}
     ${pivotCard(b)}
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
@@ -874,6 +883,71 @@ async function sweepTunnel(id) {
     toast("Tunnel " + r.status, `${(r.hosts || []).length} host(s) · ${(r.created || []).length} new`, r.status === "up" ? "ok" : "err");
     render();
   } catch (e) { toast("Sweep failed", e.message, "err"); }
+}
+// ── cruise control (supervised auto-advance + the pause briefing) ────────────
+async function runCruise(host) {
+  if (!host || state.cruiseBusy) return;
+  state.cruiseBusy = true; render();
+  toast("Cruising " + host, "running the safe moves, stopping at the first checkpoint …", "ok");
+  try {
+    const r = await apiPost("/api/cruise", { host });
+    state.cruise[host] = r;
+    const stop = r.stop_reason === "objective-complete" ? "objective complete"
+      : r.stop_reason === "checkpoint" ? "checkpoint" : r.stop_reason;
+    toast("Cruise " + stop, `ran ${r.briefing?.recap?.ran ?? 0} move(s)`, "ok");
+  } catch (e) { toast("Cruise failed", e.message, "err"); }
+  state.cruiseBusy = false; render();
+}
+async function cruiseDo(host, id, ask) {
+  if (!host || !id) return;
+  if (ask === "manual") { toast("Manual step", "run the crafted command yourself, then use Ingest / Assert to bring the result back", "ok"); return; }
+  const cp = (state.cruise[host]?.briefing?.checkpoint) || {};
+  if (!confirm(`Run this move?\n\n${cp.label || id}\n${cp.command ? "\n$ " + cp.command : ""}${cp.risk ? "\n\nRisk: " + cp.risk : ""}\n\nRuns through the scope-enforced runner.`)) return;
+  try {
+    await apiPost("/api/move/run", { id, host, approve: true });
+    toast("Ran " + id, "re-cruising from the new state …", "ok");
+    await runCruise(host);
+  } catch (e) { toast("Move failed", e.message, "err"); }
+}
+function objectiveBar(obj) {
+  if (!obj || !obj.total) return "";
+  const rungs = (obj.rungs || []).map((r) =>
+    `<span class="pill" title="${esc(r.evidence || "")}" style="${r.reached ? "border-color:#5FB98066;color:#5FB980" : "opacity:.5"}">${r.reached ? "✓ " : "◻ "}${esc(r.label)}</span>`).join("");
+  const tail = obj.complete ? `<span class="pill" style="border-color:#5FB980;color:#5FB980">COMPLETE</span>` : "";
+  return `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">${rungs}${tail}</div>`;
+}
+function cruiseCard(b) {
+  const host = b.meta.host;
+  const r = state.cruise[host];
+  const btn = `<button class="btn sm primary" data-act="cruise" data-host="${esc(host)}" ${state.cruiseBusy ? "disabled" : ""}>${state.cruiseBusy ? "Cruising…" : "▶ Cruise"}</button>`;
+  let body = `<div class="muted">Auto-run the safe (recon/enum) moves, stopping at the first move that needs your approval.</div>`;
+  if (r && r.briefing) {
+    const brf = r.briefing;
+    const pos = brf.position || {};
+    const rec = brf.recap || {};
+    const cp = brf.checkpoint;
+    const lead = r.stop_reason === "objective-complete" ? "🏁 Objective complete"
+      : r.stop_reason === "checkpoint" ? "⏸ Stopped at a checkpoint"
+      : r.stop_reason === "done" ? "✓ Cruise complete" : "⏸ " + esc(r.message || r.stop_reason);
+    const learned = (rec.learned || []).length ? `<div class="muted" style="margin-top:6px">learned: ${rec.learned.map(esc).join(", ")}</div>` : "";
+    const install = (rec.install || []).length ? `<div class="muted" style="margin-top:4px">blocked on missing tools: <b style="color:var(--text)">${rec.install.map(esc).join(", ")}</b></div>` : "";
+    let cpHtml = "";
+    if (cp) {
+      const doBtn = cp.ask === "manual"
+        ? `<button class="btn xs" data-act="cruise-do" data-host="${esc(host)}" data-id="${esc(cp.id)}" data-ask="manual">How to proceed</button>`
+        : `<button class="btn xs primary" data-act="cruise-do" data-host="${esc(host)}" data-id="${esc(cp.id)}" data-ask="${esc(cp.ask)}">${cp.ask === "input" ? "Needs input" : "Approve & run"}</button>`;
+      cpHtml = `<div class="card" style="margin-top:10px;border-color:#E0A96D55">
+        <div class="row" style="align-items:center;gap:8px"><span class="pill" style="border-color:#E0A96D;color:#E0A96D">${esc(cp.ask)}</span><b>${esc(cp.label)}</b><span class="spacer" style="flex:1"></span>${doBtn}</div>
+        ${cp.why ? `<div class="muted" style="margin-top:6px">why: ${esc(cp.why)}</div>` : ""}
+        ${cp.command ? `<pre class="cmd sm" style="margin:6px 0 0">$ ${esc(cp.command)}</pre>` : ""}
+        ${cp.risk ? `<div class="muted" style="margin-top:4px">risk: ${esc(cp.risk)}</div>` : ""}</div>`;
+    }
+    const opts = (brf.options || []).length ? `<div class="muted" style="margin-top:10px">other moves waiting: ${brf.options.map((o) => `${esc(o.label)}${o.autonomy !== "auto" ? " · " + esc(o.autonomy) : ""}`).join(" · ")}</div>` : "";
+    body = `<div><b>${lead}</b><div class="muted" style="margin-top:4px">${esc(brf.message || "")}</div>
+      ${objectiveBar(brf.objectives)}${learned}${install}${cpHtml}${opts}
+      <div class="muted" style="margin-top:8px;font-size:11px">Handled the checkpoint outside obol? Use <b>Ingest</b> (paste output) or <b>Assert</b> to bring the result back, then Cruise again.</div></div>`;
+  }
+  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Cruise control</h2>${btn}</div>${body}</div>`;
 }
 async function runEnumTool(host, tool) {
   if (!host || !tool) return;
@@ -1069,7 +1143,7 @@ async function toggleChecklist(host, item, checked, el) {
 }
 
 function tabFindings(b) {
-  const rows = b.findings.map((f) => `<tr><td class="kind">${esc(f.kind)}</td><td>${esc(f.label)}${Object.keys(f.value || {}).length ? `<div class="fd muted mono" style="font-size:11px">${esc(JSON.stringify(f.value))}</div>` : ""}</td>
+  const rows = b.findings.map((f) => `<tr><td class="kind">${esc(f.kind)}</td><td>${esc(f.label)} ${originBadge(f)}${Object.keys(f.value || {}).length ? `<div class="fd muted mono" style="font-size:11px">${esc(JSON.stringify(f.value))}</div>` : ""}</td>
     <td><span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category)}</span></td>
     <td class="mono muted" style="font-size:11px;max-width:320px;word-break:break-all">${esc(f.evidence)}</td></tr>`).join("")
     || `<tr><td colspan="4"><div class="empty">No findings for this target yet.</div></td></tr>`;

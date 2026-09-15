@@ -614,3 +614,29 @@ def test_profile_endpoint_get_set_and_meta(cx):
     # custom override of names/formats
     r = cx.post("/api/profile", json={"platform": "custom", "flag_names": ["x.txt"], "flag_formats": ["brace"]}, headers=H).json()
     assert r["config"]["names"] == ["x.txt"] and r["config"]["formats"] == ["brace"]
+
+
+def test_cruise_objectives_and_ingest_endpoints(cx):
+    # objectives ladder for the seeded target — nothing reached yet
+    r = cx.get("/api/objectives?host=10.10.10.161", headers=H).json()
+    assert r["total"] == 4 and r["reached"] == 0 and not r["complete"]
+
+    # paste-and-parse ingestion records operator-sourced facts
+    nmap = "PORT     STATE SERVICE\n22/tcp   open  ssh\n"
+    r = cx.post("/api/ingest", json={"text": nmap, "note": "nmap -sV 10.10.10.161",
+                                     "target": "10.10.10.161"}, headers=H).json()
+    assert r["ok"] and "port:22" in r["added"]
+    # empty ingest is rejected
+    assert cx.post("/api/ingest", json={"text": "  "}, headers=H).status_code == 422
+
+    # operator-attested assertion completes the objective and cruise then stops on it
+    cx.post("/api/assert", json={"kind": "objective.root_flag", "target": "10.10.10.161",
+                                 "note": "read by hand"}, headers=H)
+    r = cx.get("/api/objectives?host=10.10.10.161", headers=H).json()
+    assert r["complete"]
+    c = cx.post("/api/cruise", json={"host": "10.10.10.161"}, headers=H).json()
+    assert c["stop_reason"] == "objective-complete"
+    assert c["briefing"]["objectives"]["complete"]
+
+    # a bad assert (no kind) is a 422
+    assert cx.post("/api/assert", json={"note": "x"}, headers=H).status_code == 422

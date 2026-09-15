@@ -275,6 +275,12 @@ obol/
                  command preview, the facts that triggered it, the ask (approve/manual/
                  input), the risk, the resume path, and the other moves waiting. Not a new
                  engine. `obol cruise [host]`
+  objectives.py  per-target objective ladder (§7): initial access → privesc → local flag
+                 → root flag, each rung reached only by a proving fact (foothold/access.*/
+                 objective.* — profile-aware via flags.py) and carrying its evidence. Read
+                 by obol cruise (its goal function — stop at the root objective) AND the
+                 report (the objective/proof checklist). A projection over facts, not new
+                 state. `obol objectives [host]`, GET /api/objectives
   ingest.py      external-action ingestion (pillar III): the way back into cruise after
                  the operator does something by hand. ingest_output() paste-and-parses
                  operator-supplied tool output through the SAME parser pipeline (proof-
@@ -283,8 +289,8 @@ obol/
                  as the marked escape hatch. Invents no parser/fact kind. `obol ingest`,
                  `obol assert`
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / moves / do / cruise / ingest / assert / next / explain / run /
-                 playbook(s) / sweep / login /
+                 overview / moves / do / cruise / objectives / ingest / assert / next /
+                 explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used

@@ -7,6 +7,45 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **web cruise surface** — a **Cruise control** card on the per-target Overview
+  that brings `obol cruise` to the browser with full terminal parity. A ▶ Cruise button
+  runs cruise (`POST /api/cruise`) and renders the whole pause briefing as a live panel:
+  the **objective ladder** (§7), the **recap** (facts learned + the tools to install to
+  unblock more), and the **checkpoint** — its ask (approve/manual/input), the "why", a
+  command preview, and the risk — with an **Approve & run** button that runs the move
+  through `POST /api/move/run` and re-cruises from the new state, the other moves waiting,
+  and a pointer to Ingest/Assert for a checkpoint the operator handled by hand. Operator-
+  sourced findings also render with an `op-run` / `op-attested` badge (Build 1). Locked by
+  a `tests/test_webapp.py` case exercising `/api/cruise`, `/api/objectives`, `/api/ingest`,
+  and `/api/assert` (including the objective-complete stop and 422s).
+
+- Added the **per-target objective ladder** (`obol/objectives.py`, ROADMAP §7 promoted):
+  initial access → privilege escalation → local flag → root flag, each rung reached
+  **only by a proving fact** (a foothold, `access.admin`/`access.system`, or an
+  `objective.*` flag capture — profile-aware about local vs root via `flags.py`) and
+  carrying its evidence lineage. A projection over facts, not new state. It feeds the two
+  consumers it was promoted for: **`obol cruise`'s goal function** — cruise now stops with
+  `objective-complete` once the root objective is captured (an operator-attested root flag
+  counts too, closing the resumable-handoff loop) instead of wandering past the win — and
+  the **report** (a per-target Objectives line in the markdown, an `objectives` block in
+  the report context, and the ladder shown in the cruise pause briefing). Terminal `obol
+  objectives [host]` and web `GET /api/objectives`. Locked by `tests/test_objectives.py`
+  (rungs reached only by facts, root-flag completion, single-flag-plus-privilege, the
+  cruise objective-complete stop, operator-asserted completion, and the report carrying
+  it). Still open: the §14 per-rung OSCP *proof requirement* (flag shown with host
+  identity in one capture, screenshot attach/validate) riding on top of this ladder.
+
+- Operator-sourced facts are now **visibly distinguished** everywhere they surface,
+  closing the pillar III honesty loop end to end. A shared classifier
+  (`ingest.fact_origin`) reads a fact's lineage from its `source` prefix —
+  `operator-executed` (parsed from output the operator ran), `operator-attested` (a bare
+  assertion), or `obol` (obol's own runner) — and it is surfaced in the OSCP markdown
+  report (an `_(operator-attested)_` / `_(operator-executed)_` tag on the finding), the
+  structured report context and per-target findings payloads (an `origin` field), the web
+  findings tables and fact chips (an `op-run` / `op-attested` badge), and `obol findings`
+  (an `[op]` / `[op-attested]` tag). A reviewer can always tell what obol proved from what
+  the operator vouched for.
+
 - Added the **cruise pause briefing** and **external-action ingestion** — the checkpoint
   UX and cruise-control **pillar III (resumable handoff)**, folded into one build so the
   pause and the way back in land together.

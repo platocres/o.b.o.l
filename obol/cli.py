@@ -335,12 +335,18 @@ def _print_briefing(res) -> None:
     recap = b.get("recap", {})
     cp = b.get("checkpoint")
     lead = {"checkpoint": "stopped at a checkpoint", "done": "cruise complete",
-            "blocked": "stopped", "max-steps": "paused", "no-target": "stopped"}.get(
-        res.stop_reason, "stopped")
+            "blocked": "stopped", "max-steps": "paused", "no-target": "stopped",
+            "objective-complete": "objective complete"}.get(res.stop_reason, "stopped")
     print(f"\n== cruise briefing ==")
     if pos:
         acc = ", ".join(pos.get("access") or []) or "no foothold yet"
         print(f"  where: phase {pos.get('phase','?')} · frontier {pos.get('frontier','?')} · access: {acc}")
+    obj = b.get("objectives") or {}
+    if obj.get("total"):
+        nxt = (obj.get("next") or {}).get("label")
+        rungs = " → ".join(("[x]" if r["reached"] else "[ ]") + r["label"] for r in obj.get("rungs", []))
+        tail = " · COMPLETE" if obj.get("complete") else (f" · next: {nxt}" if nxt else "")
+        print(f"  objective: {obj['reached']}/{obj['total']}  {rungs}{tail}")
     if recap.get("learned"):
         print(f"  learned: {', '.join(recap['learned'])}")
     if recap.get("install"):
@@ -365,6 +371,26 @@ def _print_briefing(res) -> None:
             miss = "" if o["ready"] else f" — {o['reason']}"
             print(f"    - {o['label']} [{o['kind']}{gate}]{miss}")
     print(f"\n  ran {res.ran_ok} move(s).\n")
+
+
+def cmd_objectives(args) -> None:
+    from . import objectives
+    ws = _load_or_exit()
+    host = args.host or ws.target
+    if not host:
+        print("no active target. add one with `obol target add <ip>` or pass a host.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    p = objectives.progress(ws, host)
+    done = " · COMPLETE" if p["complete"] else ""
+    print(f"\nobjectives · {host}  ({p['reached']}/{p['total']}{done})")
+    for r in p["rungs"]:
+        mark = "[x]" if r["reached"] else "[ ]"
+        line = f"  {mark} {r['label']}"
+        if r["reached"] and r["evidence"]:
+            line += f"   ← {_trim(r['evidence'])}"
+        print(line)
+    print()
 
 
 def cmd_ingest(args) -> None:
@@ -624,7 +650,10 @@ def cmd_findings(args) -> None:
             print(f"\n[{category}]")
         state_prefix = "" if state == "supported" else f"{state} "
         detail = _value_summary(value)
-        print(f"  {origin:18} {state_prefix}{friendly(kind)}" + (f" — {_trim(detail)}" if detail else ""))
+        op = (" [op-attested]" if source.startswith("operator-attested:")
+              else " [op]" if source.startswith("operator:") else "")
+        print(f"  {origin:18} {state_prefix}{friendly(kind)}{op}"
+              + (f" — {_trim(detail)}" if detail else ""))
         if not args.no_evidence and source:
             print(f"    source: {_trim(redact_command(source, include_secrets=include_secrets))}")
         shown += 1
@@ -1524,6 +1553,11 @@ try:
     pc.add_argument("host", nargs="?", default="", help="target host (default: active target)")
     pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per run")
     pc.set_defaults(func=cmd_cruise)
+
+    po = sub.add_parser("objectives", help="show the per-target objective ladder "
+                                           "(initial access → privesc → local → root flag)")
+    po.add_argument("host", nargs="?", default="", help="target host (default: active target)")
+    po.set_defaults(func=cmd_objectives)
 
     pi = sub.add_parser("ingest", help="parse output from a command you ran yourself into "
                                        "facts (paste on stdin or --file) — the way back into cruise")
