@@ -64,6 +64,20 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   (`obol/payloads/reverse_shells.json`), reused by the exploit tier. `obol listener
   start|catch|close|rm|list` and web `GET /api/listeners`, `POST
   /api/listener/{start,catch,close}`, `DELETE /api/listener`.
+- Added the **exploit tier** (§8 fifth slice — the core of the layer): `obol/exploits.py`
+  offers privilege-escalation exploits **gated on the parsed `privesc.*` lead facts**
+  (SeImpersonate ⇒ GodPotato/PrintSpoofer; AlwaysInstallElevated ⇒ MSI; NOPASSWD sudo ⇒
+  GTFOBins; a kernel gate ⇒ PwnKit). Applicability is declarative data (a predicate per
+  registry entry), never planner branching. For an applicable exploit obol **stages the
+  binary** (transfer layer) and **crafts the exact command** for a chosen **outcome** —
+  add an admin **user**, a **SYSTEM shell** proof, or a **reverse shell** back to an
+  obol listener — with a **cleanup note** for anything it changes. Execution is
+  **approval-gated** (`--run` / `approve=true`); without approval obol only crafts for
+  review. Proof-bound capture: SYSTEM/root is recorded **only from command output**, and
+  an account it creates becomes a real `credential.available` (usable by `obol login`),
+  never a fabricated win. `obol exploits [host]`, `obol exploit <key> --outcome
+  add-user|system-shell|revshell [--user/--password/--listener] [--run]`, and web
+  `GET /api/exploits`, `POST /api/exploit/plan`, `POST /api/run/exploit`.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

@@ -12,8 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import (__version__, board, discovery, enumrun, library, listeners, provision,
-               quickstart, service, sessions, staging, tunnels)
+from . import (__version__, board, discovery, enumrun, exploits, library, listeners,
+               provision, quickstart, service, sessions, staging, tunnels)
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -1104,6 +1104,65 @@ def cmd_listener(args) -> None:
         print(f"{ln['id']:<20} {ln['kind']:<10} {ln['port']:<6} {ln['status']:<10} {ln.get('lhost', '')}")
 
 
+def cmd_exploits(args) -> None:
+    """List privilege-escalation exploits applicable to a foothold (by proven leads)."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    rows = exploits.eligible_exploits(ws, host)
+    if not rows:
+        print(f"no applicable exploits for {host} yet — run `obol enum` to surface privesc leads.")
+        return
+    print(f"APPLICABLE EXPLOITS for {host}")
+    for e in rows:
+        tag = " (guided)" if e["guided"] else ""
+        print(f"\n  {e['key']}{tag} — {e['label']}")
+        print(f"    lead: {e['lead']}   outcomes: {', '.join(e['outcomes'])}")
+        if e["note"]:
+            print(f"    note: {e['note']}")
+    print("\ncraft one: obol exploit <key> --outcome add-user|system-shell|revshell [--run]")
+
+
+def cmd_exploit(args) -> None:
+    """Craft (and, with --run, execute) an applicable privesc exploit."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        if not args.run:
+            res = exploits.plan_exploit(ws, host, args.key, args.outcome,
+                                        newuser=args.user, newpass=args.password)
+        else:
+            res = exploits.run_exploit(ws, host, args.key, args.outcome, approve=True,
+                                       newuser=args.user, newpass=args.password,
+                                       listener_id=args.listener)
+    except (exploits.ExploitError, staging.StagingError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if res["guided"]:
+        print(f"{res['label']} is guided:\n  {res['note']}")
+        return
+    print(f"exploit {res['exploit']} → {res['outcome']}")
+    if res.get("newuser"):
+        print(f"  new admin account: {res['newuser']} / {res['newpass']}")
+    print(f"\n  $ {res['command']}")
+    if res.get("cleanup"):
+        print(f"  cleanup: {res['cleanup']}")
+    if not args.run:
+        print("\nreview above, then re-run with --run to execute (approval-gated).")
+        return
+    if res.get("proof_fact"):
+        print(f"\n{board.SYM_OK} proved {res['proof_fact']} (from command output).")
+    elif res.get("credential_recorded"):
+        print(f"\n{board.SYM_OK} created admin credential — use it: obol login {host}")
+    else:
+        print(f"\nran (rc={res.get('returncode')}). Verify the outcome before trusting it.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1273,6 +1332,19 @@ try:
     pstage.add_argument("--remote-dir", default="", dest="remote_dir", help="destination directory on the target")
     pstage.add_argument("--dry-run", action="store_true", help="show the channel cascade and commands without transferring")
     pstage.set_defaults(func=cmd_stage)
+    pexploits = sub.add_parser("exploits", help="list privesc exploits applicable to a foothold (by proven leads)")
+    pexploits.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pexploits.set_defaults(func=cmd_exploits)
+    pexploit = sub.add_parser("exploit", help="craft (and with --run, execute) a privesc exploit")
+    pexploit.add_argument("key", choices=[e.key for e in exploits.EXPLOITS], help="exploit key (see `obol exploits`)")
+    pexploit.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pexploit.add_argument("--outcome", default="add-user",
+                          choices=["add-user", "system-shell", "revshell"], help="what the exploit should do")
+    pexploit.add_argument("--user", default="", help="new account name (add-user; default: obol)")
+    pexploit.add_argument("--password", default="", help="new account password (add-user; default: random)")
+    pexploit.add_argument("--listener", default="", help="listener id for the revshell outcome (see `obol listener`)")
+    pexploit.add_argument("--run", action="store_true", help="execute (approval-gated); without it, only craft for review")
+    pexploit.set_defaults(func=cmd_exploit)
     penum = sub.add_parser("enum", help="stage + run a read-only enum tool (linpeas/winpeas) and rank findings")
     penum.add_argument("tool", choices=list(enumrun.ENUM_TOOLS.keys()), help="enum tool")
     penum.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")

@@ -36,8 +36,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import (board, bloodhound, discovery, enumrun as enum_layer, library,
-                listeners as listener_layer, provision as material_cache,
+from .. import (board, bloodhound, discovery, enumrun as enum_layer, exploits as exploit_layer,
+                library, listeners as listener_layer, provision as material_cache,
                 sessions as session_layer, staging as staging_layer, tools as tool_inventory,
                 tunnels as tunnel_layer)
 from ..sessions import SessionError
@@ -1468,6 +1468,51 @@ def create_app(base, *, token: Optional[str] = None):
                 raise HTTPException(400, str(exc))
             except ActionError as exc:
                 raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
+    @app.get("/api/exploits")
+    def api_exploits(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "exploits": exploit_layer.eligible_exploits(ws, host)}
+
+    @app.post("/api/exploit/plan")
+    def api_exploit_plan(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        key = (payload or {}).get("key", "")
+        outcome = (payload or {}).get("outcome", "add-user")
+        ws = active()
+        try:
+            return exploit_layer.plan_exploit(ws, host, key, outcome,
+                                              newuser=(payload or {}).get("user", ""),
+                                              newpass=(payload or {}).get("password", ""))
+        except exploit_layer.ExploitError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/run/exploit")
+    def api_run_exploit(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        key = (payload or {}).get("key", "")
+        outcome = (payload or {}).get("outcome", "add-user")
+        if not host or not key:
+            raise HTTPException(422, "host and key are required")
+        # execution is approval-gated: the web must pass approve=true explicitly
+        approve = bool((payload or {}).get("approve", False))
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = exploit_layer.run_exploit(
+                    ws, host, key, outcome, approve=approve,
+                    newuser=(payload or {}).get("user", ""),
+                    newpass=(payload or {}).get("password", ""),
+                    listener_id=(payload or {}).get("listener_id", ""), surface="web")
+            except exploit_layer.ExploitError as exc:
+                raise HTTPException(400, str(exc))
+            except (staging_layer.StagingError, ActionError) as exc:
+                raise HTTPException(400, str(exc))
             except RunnerError as exc:
                 raise HTTPException(400, str(exc))
         return res
