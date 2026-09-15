@@ -36,7 +36,7 @@ _ACCESS_LADDER: list[tuple[str, tuple[str, ...]]] = [
     ("Service enum", ("ad.domain_known", "ad.anonymous_bind", "ad.user_list",
                       "smb.shares", "web.content_map")),
     ("Credential material", ("hash.asrep", "hash.tgs", "hash.ntlm",
-                             "credential.candidate")),
+                             "credential.candidate", "db.creds")),
     ("Valid credential", ("credential.available", "credential.plaintext",
                           "credential.ntlm_hash")),
     ("Foothold", ("foothold.windows", "foothold.linux", "access.shell",
@@ -125,6 +125,8 @@ def _fact_category(kind: str) -> str:
     if kind.startswith("objective."):
         return "objective"
     if kind.startswith("loot."):
+        return "loot"
+    if kind.startswith("db."):
         return "loot"
     if kind.startswith(("config.", "vuln.", "exploit.")):
         return "config"
