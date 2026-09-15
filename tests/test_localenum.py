@@ -148,3 +148,22 @@ def test_post_foothold_actions_unlock_from_access_facts(tmp_path):
     assert "local-linux-interfaces" in action_ids
     assert "local-linux-routes" in action_ids
     assert "local-windows-interfaces" not in action_ids
+
+
+def test_windows_local_enum_requires_winrm_exec_channel_not_rdp_only(tmp_path):
+    ws = _workspace(tmp_path)
+    ws.facts.add(Fact("host.os_family", "host:10.10.10.5", {"family": "windows"}, source="nmap"))
+    ws.facts.add(Fact("rdp.authenticated", "host:10.10.10.5", {}, source="nxc rdp"))
+    ws.facts.add(Fact(
+        "credential.available",
+        "host:10.10.10.5",
+        {"user": "low", "password": "Password123!"},
+        source="nxc rdp",
+    ))
+
+    action_ids = {a.id for a in next_actions(ws.facts_for_target("10.10.10.5"))}
+    assert "local-windows-interfaces" not in action_ids
+
+    ws.facts.add(Fact("winrm.authenticated", "host:10.10.10.5", {}, source="nxc winrm"))
+    action_ids = {a.id for a in next_actions(ws.facts_for_target("10.10.10.5"))}
+    assert "local-windows-interfaces" in action_ids
