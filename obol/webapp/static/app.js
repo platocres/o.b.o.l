@@ -265,6 +265,7 @@ function onClick(e) {
     case "add-target": e.preventDefault(); addTargetPrompt(); break;
     case "scope-add": e.preventDefault(); addScopePrompt(); break;
     case "scope-del": e.stopPropagation(); delScope(el.dataset.scope); break;
+    case "profile-set": e.preventDefault(); e.stopPropagation(); setProfilePrompt(); break;
     case "sweep": e.preventDefault(); e.stopPropagation(); runSweep(el.dataset.range); break;
     case "quickstart": e.preventDefault(); e.stopPropagation(); runQuickStart(el.dataset.host); break;
     case "activate-target": activateTarget(host); break;
@@ -506,7 +507,8 @@ async function buildEngagement() {
   pendingDonut = catTotal ? { id: "catChart", counts: s.category_counts, map: CAT_COLOR } : null;
   return `
     <div class="stat-grid">${tiles}</div>
-    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Scope</h2><button class="btn sm" data-act="scope-add">＋ Add scope</button></div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Scope</h2>
+      <div class="row" style="gap:8px;align-items:center">${profileChip(s.profile)}<button class="btn sm" data-act="scope-add">＋ Add scope</button></div></div>
       <div class="muted" style="margin-bottom:10px;font-size:12px">Hosts and CIDR ranges the runner is authorized to touch. Everything obol runs is gated on this list.</div>
       <div class="row" style="gap:8px;flex-wrap:wrap">${scopeChips}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Targets</h2><button class="btn sm primary" data-act="add-target">＋ Add target</button></div>
@@ -533,6 +535,26 @@ async function addScopePrompt() {
   if (!value) return;
   try { const r = await apiPost("/api/scope", { value }); toast("Scope added", r.added || value, "ok"); render(); }
   catch (e) { toast("Could not add scope", e.message, "err"); }
+}
+// Compact engagement-profile chip on the overview (progressive disclosure: the
+// selection lives here as a small pill; the full picker is a prompt). The profile
+// decides which flag names/formats the post-foothold flag hunt looks for (§7).
+function profileChip(p) {
+  if (!p) return "";
+  const names = (p.names || []).join(", ");
+  return `<button class="btn ghost sm" data-act="profile-set" title="Engagement profile — flag files: ${esc(names)}\nformats: ${esc((p.formats || []).join(", "))}\nClick to change the platform/exam type.">⚑ ${esc(p.platform_name || p.platform || "profile")}</button>`;
+}
+async function setProfilePrompt() {
+  let presets = [];
+  try { presets = (await api("/api/profile")).presets || []; } catch (e) { /* fall back to typed input */ }
+  const menu = presets.map((p) => `${p.id} — ${p.name} (${(p.flag_names || []).join(", ")})`).join("\n");
+  const platform = prompt("Engagement profile — platform / exam type.\nType one of:\n\n" + (menu || "htb, oscp, thm, ctf, custom") + "\n\nplatform:");
+  if (!platform) return;
+  try {
+    const r = await apiPost("/api/profile", { platform: platform.trim() });
+    toast("Profile set", (r.config && r.config.platform_name) || platform, "ok");
+    render();
+  } catch (e) { toast("Could not set profile", e.message, "err"); }
 }
 async function delScope(value) {
   try { await apiDelete(`/api/scope?value=${encodeURIComponent(value)}`); render(); }

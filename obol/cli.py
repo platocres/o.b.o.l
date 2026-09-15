@@ -652,6 +652,41 @@ def cmd_engagement(args) -> None:
         print(f" {mark} {e['slug']:22} {e['name']}  ({e['targets']} targets, {e['facts']} facts)")
 
 
+def cmd_profile(args) -> None:
+    """Show or set the engagement profile (platform/exam type + flag config)."""
+    from . import profile as profile_mod
+    sub = getattr(args, "profile_cmd", "show")
+    if sub == "list":
+        print("engagement profiles (platform / exam type):")
+        for p in profile_mod.list_presets():
+            print(f"  {p['id']:8} {p['name']:20} flags: {', '.join(p['flag_names'])}"
+                  f"   formats: {', '.join(p['flag_formats'])}")
+        return
+    ws = _load_or_exit()
+    if sub == "set":
+        data: dict = {}
+        if args.platform:
+            if not profile_mod.normalize_platform(args.platform):
+                print(f"unknown platform {args.platform!r}. see `obol profile list`.", file=sys.stderr)
+                raise SystemExit(1)
+            data["platform"] = args.platform
+        else:
+            # keep the current platform when only overriding names/formats
+            data["platform"] = (ws.profile or {}).get("platform", profile_mod.DEFAULT_PLATFORM)
+        if args.flag_names:
+            data["flag_names"] = [n.strip() for n in args.flag_names.split(",") if n.strip()]
+        if args.flag_formats:
+            data["flag_formats"] = [f.strip() for f in args.flag_formats.split(",") if f.strip()]
+        ws.set_profile(data)
+        ws.save()
+        print(f"engagement profile set: {ws.profile.get('platform')}")
+    # show (default, and after set)
+    cfg = ws.flag_config()
+    print(f"platform : {cfg['platform']} ({cfg['platform_name']})")
+    print(f"flag files: {', '.join(cfg['names'])}")
+    print(f"formats   : {', '.join(cfg['formats'])}")
+
+
 def cmd_target(args) -> None:
     ws = _load_or_exit()
     sub = getattr(args, "target_cmd", "list")
@@ -1503,6 +1538,17 @@ try:
     t_rm.add_argument("host")
     t_rm.set_defaults(func=cmd_target, target_cmd="rm")
     ptgt.set_defaults(func=cmd_target, target_cmd="list")
+
+    pprof = sub.add_parser("profile", help="show or set the engagement profile (platform/exam type + flag config)")
+    prof_sub = pprof.add_subparsers(dest="profile_cmd")
+    prof_sub.add_parser("show", help="show the current engagement profile").set_defaults(func=cmd_profile, profile_cmd="show")
+    prof_sub.add_parser("list", help="list the available platform/exam presets").set_defaults(func=cmd_profile, profile_cmd="list")
+    p_set = prof_sub.add_parser("set", help="set the platform/exam type and/or override flag names/formats")
+    p_set.add_argument("platform", nargs="?", default="", help="preset id or name (htb, oscp, thm, ctf, custom)")
+    p_set.add_argument("--flag-names", dest="flag_names", default="", help="comma-separated flag filenames (override)")
+    p_set.add_argument("--flag-formats", dest="flag_formats", default="", help="comma-separated value formats: brace,hex32,hex64,uuid,token")
+    p_set.set_defaults(func=cmd_profile, profile_cmd="set")
+    pprof.set_defaults(func=cmd_profile, profile_cmd="show")
 
     ps = sub.add_parser("serve", help="serve the live web surface on localhost (mirrors and drives the workspace)")
     ps.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1; keep local — the web can launch tools)")

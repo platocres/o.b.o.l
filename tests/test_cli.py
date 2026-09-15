@@ -200,3 +200,35 @@ def test_scan_no_enumerate_skips_quickstart(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.quickstart, "run_quickstart", lambda *args, **kwargs: pytest.fail("should not enumerate"))
 
     cli.main(["scan", "--no-enumerate"])
+
+
+def test_profile_set_show_and_list(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init"])
+    capsys.readouterr()
+
+    cli.main(["profile", "list"])
+    out = capsys.readouterr().out
+    assert "htb" in out and "oscp" in out and "TryHackMe" in out
+
+    cli.main(["profile", "set", "oscp"])
+    out = capsys.readouterr().out
+    assert "oscp" in out and "local.txt" in out and "proof.txt" in out
+
+    # persisted, and shown by a bare `profile`
+    cli.main(["profile"])
+    assert "local.txt" in capsys.readouterr().out
+    assert Workspace(tmp_path).load().profile == {"platform": "oscp"}
+
+    # a custom override of names/formats keeps the platform when none is given
+    cli.main(["profile", "set", "custom", "--flag-names", "secret.txt,FLAG", "--flag-formats", "brace"])
+    cfg = Workspace(tmp_path).load().flag_config()
+    assert cfg["names"] == ["secret.txt", "flag"] and cfg["formats"] == ["brace"]
+
+
+def test_profile_set_rejects_unknown_platform(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["profile", "set", "bogus-platform"])
+    assert exc.value.code == 1

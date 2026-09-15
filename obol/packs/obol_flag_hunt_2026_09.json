@@ -31,7 +31,7 @@
         {
           "tool": "sshpass",
           "note": "Thoroughly search the filesystem for the well-known flag files and print each as path:content over the existing non-interactive SSH channel.",
-          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {{user}}@{{target}} find / -xdev -type f -size -4k \\( -iname user.txt -o -iname root.txt -o -iname local.txt -o -iname proof.txt -o -iname flag.txt -o -iname flag \\) -exec grep -H -s . {} +"
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {{user}}@{{target}} find / -xdev -type f -size -4k \\( {{flag_inames_linux}} \\) -exec grep -H -s . {} +"
         }
       ]
     },
@@ -59,7 +59,7 @@
         {
           "tool": "nxc",
           "note": "Recursively search user profiles for the well-known flag files and print each as ===FLAG:path::content through WinRM PowerShell so output is captured and parsed like every other run.",
-          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -X \"foreach($f in Get-ChildItem -Path C:\\Users -Recurse -Force -Include user.txt,root.txt,proof.txt,local.txt,flag.txt -File -ErrorAction SilentlyContinue){Write-Output ('===FLAG:'+$f.FullName+'::'+(Get-Content -Raw -LiteralPath $f.FullName -ErrorAction SilentlyContinue))}\""
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -X \"foreach($f in Get-ChildItem -Path C:\\Users -Recurse -Force -Include {{flag_names_windows}} -File -ErrorAction SilentlyContinue){Write-Output ('===FLAG:'+$f.FullName+'::'+(Get-Content -Raw -LiteralPath $f.FullName -ErrorAction SilentlyContinue))}\""
         }
       ]
     }
