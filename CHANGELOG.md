@@ -7,6 +7,15 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added post-foothold host/network enumeration actions for Linux and Windows
+  footholds, gated on proven shell/session facts and routed through the existing
+  runner/parser/store path.
+- Added pivot-candidate parsing for Linux `ip`/resolver output and Windows
+  `ipconfig`/`route`/`arp`/`netstat` output, producing narrow facts for interfaces,
+  IPs, routes, neighbors, DNS servers, listening sockets, multi-homed hosts, and
+  candidate adjacent subnets without claiming a working tunnel.
+- Added parser regressions for Linux and Windows local network enumeration and
+  pivot-candidate overclaim boundaries.
 - Added Orange-derived Linux and Windows privilege-escalation packs generated from
   the prior obol methodology lanes, with OS/foothold gates and lead-specific abuse
   paths.
