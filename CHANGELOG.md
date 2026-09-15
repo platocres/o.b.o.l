@@ -26,6 +26,9 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 - Added flag-capture parser regressions covering local/root capture, Windows
   marker output, action-id scoping, empty/unreadable output, non-flag filenames,
   de-duplication, value-extraction boundaries, and the per-target rollup.
+- Added roadmap item 10 (credential-material harvesting): a Charon-inspired,
+  proof-bound share/loot sweep that extracts and OCRs documents (including scanned
+  PDFs) and returns ranked likely credential candidates.
 
 - Added post-foothold host/network enumeration actions for Linux and Windows
   footholds, gated on proven shell/session facts and routed through the existing
