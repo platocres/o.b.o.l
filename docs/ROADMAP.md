@@ -27,6 +27,13 @@ pillars:
   *outside* the ranked "next" list, each with its own entrypoint; unifying them is the
   **load-bearing PR** everything else rides on. This *is* the "typed step vocabulary" §12
   reached for — but its home is the planner/frontier, not a playbook file.
+  **First slice landed:** `obol/moves.py` — `frontier_moves(ws, host)` merges the packs'
+  live actions with the login/enum/exploit/tunnel offers into one fact-gated,
+  phase-ranked `Move` list (escalate/pivot moves gated on a proven foothold), surfaced as
+  `obol moves [host] [--all]` and `GET /api/moves`. It enumerates and ranks only.
+  **Still open:** fold it into `obol next`/the web "next" surface, add the remaining
+  primitives as moves (listeners; staging as a sub-step of enum/exploit/tunnel), and give
+  each `Move` the execution handle pillar II's dispatcher will call.
 - **(II) Cruise control (`obol cruise`) — advance with a stop-contract.** A loop that
   repeatedly takes the top-ranked move, runs it through the one shared scope-enforced
   runner, re-parses, re-ranks, and continues **until a checkpoint**, in priority order:
