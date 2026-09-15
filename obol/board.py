@@ -45,10 +45,14 @@ except Exception:                   # pragma: no cover
 # --------------------------------------------------------------------------- #
 # command templating — old-obol cards use {{placeholder}} tokens               #
 # --------------------------------------------------------------------------- #
-def command_context(ws: Workspace, target: str = "") -> dict:
+def command_context(ws: Workspace, target: str = "", extra: dict | None = None) -> dict:
     """Template values for command rendering. `target` overrides the active host
     (and narrows ports/domain to that host's facts) so a surface can render a
-    filled command preview for a specific target without changing active state."""
+    filled command preview for a specific target without changing active state.
+
+    `extra` pins specific token values (e.g. the exact credential a session login
+    chose) and wins over the facts-derived defaults, so a caller that already knows
+    which credential to use is not at the mercy of whichever one sorts first."""
     tgt = target or ws.target
     f = ws.facts_for_target(tgt) if target else ws.facts
     ctx = {"target": tgt or "<target>", **ws.inputs}
@@ -65,23 +69,33 @@ def command_context(ws: Workspace, target: str = "") -> dict:
     if creds:
         ctx["user"] = creds[0].get("user", "<user>")
         ctx["password"] = creds[0].get("password", "<password>")
+    # an NT hash for pass-the-hash templates ({{nthash}}), from whichever validated
+    # credential carries one — a dumped/relayed hash is auth material, not a password.
+    for cred in creds:
+        nt = cred.get("nthash") or cred.get("hash")
+        if nt:
+            ctx["nthash"] = nt
+            break
+    if extra:
+        ctx.update({k: v for k, v in extra.items() if v not in (None, "")})
     return ctx
 
 
-def fill_template(text: str, ws: Workspace, target: str = "") -> str:
+def fill_template(text: str, ws: Workspace, target: str = "", extra: dict | None = None) -> str:
     """Substitute known {{tokens}}; leave operator-supplied placeholders visible."""
     cmd = text
-    for key, val in command_context(ws, target).items():
+    for key, val in command_context(ws, target, extra).items():
         cmd = cmd.replace("{{" + key + "}}", str(val))
     return cmd
 
 
-def fill_command(action: Action, ws: Workspace, command_index: int = 0, target: str = "") -> str:
+def fill_command(action: Action, ws: Workspace, command_index: int = 0, target: str = "",
+                 extra: dict | None = None) -> str:
     """Fill command variant N (zero-based); default to the action's primary command."""
     commands = action.commands or [{"run": action.command}]
     if not 0 <= command_index < len(commands):
         raise IndexError("command variant out of range")
-    return fill_template(commands[command_index].get("run", action.command), ws, target)
+    return fill_template(commands[command_index].get("run", action.command), ws, target, extra)
 
 
 # --------------------------------------------------------------------------- #

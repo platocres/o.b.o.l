@@ -635,6 +635,55 @@ WINRM       10.10.10.10     5985   WEB02    acme.corp\jdoe
     assert "access.admin" not in kinds
 
 
+def test_pth_auth_records_an_nt_hash_not_a_plaintext_password():
+    """A `nxc winrm -H <hash>` success line carries an NT hash, not a password —
+    it must be recorded as pass-the-hash material, never mislabeled as a password."""
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = ("WINRM       10.10.10.10     5985   DC01     "
+           "[+] acme.corp\\administrator:32ed87bdb5fdc5e9cba88547376818d4 (Pwn3d!)\n")
+    facts = parse_action_output(
+        action, ws,
+        "nxc winrm 10.10.10.10 -u administrator -H 32ed87bdb5fdc5e9cba88547376818d4",
+        out, "", "test",
+    )
+    cred = next(f for f in facts if f.kind == "credential.available")
+    assert cred.value.get("nthash") == "32ed87bdb5fdc5e9cba88547376818d4"
+    assert "password" not in cred.value               # a hash is not a password
+    assert cred.value.get("method") == "pth"
+    kinds = {f.kind for f in facts}
+    assert {"winrm.authenticated", "foothold.windows", "access.admin"} <= kinds
+
+
+def test_password_auth_still_recorded_as_a_password_not_a_hash():
+    """The password path is unchanged by the pass-the-hash work: a plaintext
+    secret is still recorded as a password, never as an nthash."""
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "SMB         10.10.10.10     445    DC01     [+] acme.corp\\svc:Passw0rd!\n"
+    facts = parse_action_output(
+        action, ws, "nxc smb 10.10.10.10 -u svc -p 'Passw0rd!'", out, "", "test",
+    )
+    cred = next(f for f in facts if f.kind == "credential.available")
+    assert cred.value.get("password") == "Passw0rd!"
+    assert "nthash" not in cred.value and cred.value.get("method") == "nxc"
+
+
+def test_evil_winrm_pass_the_hash_records_hash_credential():
+    ws = _workspace()
+    action = next(action for action in load_pack() if action.id == "lateral-exec")
+    out = "*Evil-WinRM* PS C:\\Users\\administrator\\Documents> \n"
+    facts = parse_action_output(
+        action, ws,
+        "evil-winrm -i 10.10.10.10 -u administrator -H 32ed87bdb5fdc5e9cba88547376818d4",
+        out, "", "test",
+    )
+    cred = next(f for f in facts if f.kind == "credential.available")
+    assert cred.value.get("nthash") == "32ed87bdb5fdc5e9cba88547376818d4"
+    assert "password" not in cred.value
+    assert {"winrm.authenticated", "foothold.windows"} <= {f.kind for f in facts}
+
+
 def test_wmiexec_interactive_shell_system_proves_access_system():
     ws = _workspace()
     action = next(action for action in load_pack() if action.id == "lateral-exec")

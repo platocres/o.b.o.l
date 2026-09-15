@@ -192,7 +192,9 @@ _DANGEROUS_WIN_PRIVS = {
 
 # Post-credential AD path signals.
 _NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
-_AUTH_MATERIAL_RE = re.compile(r"^(?:(?P<domain>[^\\\s:/]+)\\)?(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^\s()]+)")
+_AUTH_MATERIAL_RE = re.compile(r"^(?:(?P<domain>[^\\\s:/]+)\\)?(?P<user>[A-Za-z0-9._$-]{2,}):(?P<secret>[^\s()]+)")
+# An NT hash (or LM:NT pair) — pass-the-hash auth material, not a plaintext password.
+_NT_HASH_RE = re.compile(r"^(?:[0-9a-fA-F]{32}:)?[0-9a-fA-F]{32}$")
 _EW_PROMPT_RE = re.compile(r"\*Evil-WinRM\*\s+PS\s+", re.IGNORECASE)
 _BH_ZIP_RE = re.compile(r"\b[^\s/\\]+(?:bloodhound|bhloot|sharphound)?[^\s/\\]*\.zip\b", re.IGNORECASE)
 _BH_JSON_RE = re.compile(r"\b(?:users|groups|computers|domains|ous|gpos|containers|sessions|localadmins|trusts|acls)\.json\b", re.IGNORECASE)
@@ -1191,6 +1193,15 @@ def _parse_ntlm_dump(text: str, ws: Workspace, command: str, source: str, facts:
 # --------------------------------------------------------------------------- #
 # Post-credential AD path: auth validation, footholds, BloodHound
 # --------------------------------------------------------------------------- #
+def _nt_hash(secret: str) -> str:
+    """The NT hash if `secret` is an NT hash or LM:NT pair, else "" (a plaintext
+    password). The LM half is discarded — only the NT hash is pass-the-hash material."""
+    secret = secret.strip()
+    if not _NT_HASH_RE.match(secret):
+        return ""
+    return secret.rsplit(":", 1)[-1].lower()
+
+
 def _parse_auth_material(auth: str) -> tuple[str, str, str]:
     auth = re.sub(r"\s+\([^)]*\)\s*$", "", auth.strip())
     match = _AUTH_MATERIAL_RE.match(auth)
@@ -1198,8 +1209,8 @@ def _parse_auth_material(auth: str) -> tuple[str, str, str]:
         return "", "", ""
     domain = (match.group("domain") or "").strip()
     user = _clean_username(match.group("user"))
-    password = match.group("password").strip()
-    return domain, user, password
+    secret = match.group("secret").strip()
+    return domain, user, secret
 
 
 def _add_authenticated_service(
@@ -1209,15 +1220,25 @@ def _add_authenticated_service(
     *,
     proto: str,
     user: str,
-    password: str,
+    secret: str,
     domain: str = "",
     admin: bool = False,
 ) -> None:
+    """Record a validated credential + service auth from `user:secret`. `secret` is
+    an NT hash (pass-the-hash) or a plaintext password — recorded as the narrowest
+    truth for each, never a hash mislabeled as a password."""
     user = _clean_username(user)
-    if not _valid_username(user, allow_machine=False) or not _valid_password(password):
+    if not _valid_username(user, allow_machine=False):
+        return
+    nthash = _nt_hash(secret)
+    if not nthash and not _valid_password(secret):
         return
     domain_name = domain or _domain_from_facts(ws)
-    value = {"user": user, "password": password, "service": proto, "method": "nxc"}
+    value = {"user": user, "service": proto, "method": "pth" if nthash else "nxc"}
+    if nthash:
+        value["nthash"] = nthash
+    else:
+        value["password"] = secret
     if domain_name:
         value["domain"] = domain_name
     _add(facts, Fact("credential.available", _scope_for_domain(ws, domain_name), value, ProofState.SUPPORTED, source))
@@ -1233,8 +1254,8 @@ def _parse_nxc_auth_validation(text: str, ws: Workspace, source: str, facts: lis
     for match in _NXC_AUTH_RE.finditer(text):
         proto = match.group("proto").lower()
         auth = match.group("auth").strip()
-        domain, user, password = _parse_auth_material(auth)
-        if not user or not password:
+        domain, user, secret = _parse_auth_material(auth)
+        if not user or not secret:
             continue
         _add_authenticated_service(
             facts,
@@ -1242,7 +1263,7 @@ def _parse_nxc_auth_validation(text: str, ws: Workspace, source: str, facts: lis
             source,
             proto=proto,
             user=user,
-            password=password,
+            secret=secret,
             domain=domain,
             admin="pwn3d" in auth.lower(),
         )
@@ -1260,11 +1281,14 @@ def _parse_evil_winrm(text: str, ws: Workspace, command: str, source: str, facts
         return
     user = _command_arg(command, "-u", "--user", "--username")
     password = _command_arg(command, "-p", "--password")
+    nthash = _nt_hash(_command_arg(command, "-H", "--hash"))
     domain = _command_arg(command, "-r", "--realm", "-d", "--domain")
     value = {"service": "winrm", "tool": "evil-winrm"}
     if user:
         value["user"] = _clean_username(user)
-    if password:
+    if nthash:
+        value["nthash"] = nthash
+    elif password:
         value["password"] = password
     if domain:
         value["domain"] = domain
@@ -1278,8 +1302,13 @@ def _parse_evil_winrm(text: str, ws: Workspace, command: str, source: str, facts
         tool="evil-winrm",
         promote=True,
     )
-    if user and password and _valid_password(password):
-        cred_value = {"user": _clean_username(user), "password": password, "service": "winrm", "method": "evil-winrm"}
+    if user and (nthash or (password and _valid_password(password))):
+        cred_value = {"user": _clean_username(user), "service": "winrm",
+                      "method": "pth" if nthash else "evil-winrm"}
+        if nthash:
+            cred_value["nthash"] = nthash
+        else:
+            cred_value["password"] = password
         if domain:
             cred_value["domain"] = domain
         _add(facts, Fact("credential.available", _scope_for_domain(ws, domain), cred_value, ProofState.SUPPORTED, source))

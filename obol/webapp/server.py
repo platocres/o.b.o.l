@@ -1368,13 +1368,14 @@ def create_app(base, *, token: Optional[str] = None):
         this is the operator's localhost lab/exam box)."""
         target = (payload or {}).get("target", "")
         kind = (payload or {}).get("kind", "")
+        method = (payload or {}).get("method", "")
         if not target or not kind:
             raise HTTPException(422, "target and kind are required")
         with _RUN_LOCK:
             ws = active()
             target_or_404(ws, target)
             try:
-                res = session_layer.open_session(ws, target, kind, surface="web")
+                res = session_layer.open_session(ws, target, kind, method=method, surface="web")
             except SessionError as exc:
                 raise HTTPException(400, str(exc))
             except ActionError as exc:
@@ -1382,20 +1383,21 @@ def create_app(base, *, token: Optional[str] = None):
             except RunnerError as exc:
                 raise HTTPException(400, str(exc))
         return {
-            "ok": res["ok"], "kind": res["kind"],
+            "ok": res["ok"], "kind": res["kind"], "method": res.get("method", ""),
             "reason": res.get("reason", ""),
             "session": res.get("session"),
             "outcome": _outcome_view(res["outcome"]),
         }
 
     @app.get("/api/session/login_command")
-    def api_session_login_command(target: str = Query(...), kind: str = Query(...)):
+    def api_session_login_command(target: str = Query(...), kind: str = Query(...),
+                                  method: str = Query("")):
         """The full interactive login command, rebuilt from facts — used to copy an
         existing session's command without re-running the proof."""
         ws = active()
         target_or_404(ws, target)
         try:
-            return {"command": session_layer.build_login_command(ws, target, kind)}
+            return {"command": session_layer.build_login_command(ws, target, kind, method)}
         except SessionError as exc:
             raise HTTPException(404, str(exc))
 
