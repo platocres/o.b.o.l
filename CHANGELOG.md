@@ -26,6 +26,14 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   `/etc/passwd` yields no credential, a SQL error is not a dump, and leaked keys are
   candidate material until validated. The fixture corpus adds positive and
   anti-overclaim cases for each, plus a `tests/test_web_exploit_parsers.py` suite.
+- Added **AD Abuse Success-Signal Parser Coverage v1**: outputs from `bloodyAD`,
+  Impacket addcomputer/RBCD/getST, NetExec LAPS, and gMSA hash dumping now produce
+  proof-bound facts for object-control paths, added computer accounts, Kerberos
+  ticket material, LAPS password candidates, and gMSA NTLM hash material. These
+  parsers deliberately do **not** turn control-path edits, tickets, LAPS reads, or
+  machine/gMSA material into admin/SYSTEM access, footholds, or validated login
+  credentials until a later command proves that access. The parser fixture corpus
+  now includes AD-abuse positive and anti-overclaim cases.
 - Added **Parser Coverage + Fixture Corpus v3**: SQLMap output now records
   confirmed SQL injection, database names/tables, database credential-material
   candidates, and SQLMap webshell context without claiming OS admin/root/SYSTEM or

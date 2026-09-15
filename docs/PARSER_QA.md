@@ -103,6 +103,10 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 | `web_sqli_benign_page_no_error` | benign page, injected quote, no error | none | confirmed SQLi, database dump |
 | `web_cmdi_reflected_input_no_execution` | reflected payload, no command output | none | confirmed command injection, upload |
 | `web_lfi_documentation_mention_only` | page that only mentions `/etc/passwd` | none | confirmed LFI, looted file |
+| `bloodyad_acl_control_path_only` | bloodyAD ACL mutation/detail output | AD object-control path evidence | validated credentials, foothold, admin/SYSTEM |
+| `addcomputer_machine_candidate_only` | Impacket addcomputer output | added computer account and candidate machine-account material | validated credentials, foothold, admin |
+| `rbcd_getst_ticket_material_only` | Impacket RBCD write plus getST output | RBCD control path and Kerberos ticket material | validated credentials, foothold, admin/SYSTEM |
+| `laps_gmsa_material_not_access` | NetExec LAPS plus gMSA hash output | LAPS password candidates and gMSA NTLM hash material | validated credentials, plaintext credential promotion, foothold, admin/SYSTEM |
 | `linux_privesc_fixture_leads_only` | Linux local enum output | `privesc.*` leads, host kernel/arch | root/admin/SYSTEM |
 | `windows_privesc_fixture_leads_only` | Windows local enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/SYSTEM |
 | privesc parser tests | Linux/Windows post-foothold enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/root/SYSTEM unless proof output shows it |

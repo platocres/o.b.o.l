@@ -136,29 +136,34 @@ Next work should widen this carefully:
   shares/sessions, WinRM/RDP/SSH/FTP service authentication, HTTP metadata
   (curl/whatweb), FTP/SSH banners, SNMP walk/check output, and common nmap service
   script findings for SSH host keys, FTP anonymous login, SNMP info, HTTP redirects,
-  and technology fingerprints. The first **web-exploitation success-signal** slice
-  now confirms the manual (curl-driven) Orange web cards from their output shape:
+  and technology fingerprints. Two success-signal slices have landed on top of
+  that recon coverage. The **AD-abuse** slice covers ACL/control-path writes,
+  addcomputer/RBCD/getST, LAPS candidates, and gMSA hash material without promoting
+  those outputs to admin/SYSTEM access. The **web-exploitation** slice confirms the
+  manual (curl-driven) Orange web cards from their output shape:
   `web.lfi_confirmed` (+ `loot.files`/`web.source`) from a real file/source read,
   `web.cmdi_confirmed` from captured command output (command injection, SSTI RCE,
   web shells, an executing uploaded shell), `web.sqli_confirmed` from a manual DBMS
   error (no sqlmap), and `web.ssrf_confirmed` (+ candidate cloud-key material) from
   internal metadata content — none promoted to a foothold, shell, or validated
-  credential. Continue with exploitation-card success signals for the remaining web
-  cards (deserialization, JWT, NoSQLi, Tomcat/Jenkins/WordPress, IDOR, XSS),
-  privesc/pivot outputs, and more real-tool fixtures. Every parser must map output
-  to the narrowest fact and include anti-overfit tests.
+  credential. Continue with success signals for the remaining web cards
+  (deserialization, JWT, NoSQLi, Tomcat/Jenkins/WordPress, IDOR, XSS),
+  Rubeus/TGT capture output, trust/SCCM support branches, tunnel/proxy failure
+  transcripts, privesc/pivot outputs, and more real-tool fixtures. Every parser
+  must map output to the narrowest fact and include anti-overfit tests.
 - **Better port-to-playbook gating.** The Orange AD pack now has a small exam-flow
   priority override for nmap → DC identify → anonymous LDAP → user enum. Extend
   that idea across web/privesc sibling packs without hardcoding box wins.
-- **Parser fixtures from real tools: V3 CORPUS DONE.** `docs/PARSER_QA.md`
+- **Parser fixtures from real tools: V3+AD ABUSE CORPUS DONE.** `docs/PARSER_QA.md`
   documents how parsers are written and judged. `tests/fixtures/parser/` now has
   a manifest-driven fixture corpus covering nmap metadata, curl/whatweb HTTP
   metadata, NetExec SSH/FTP auth and failures, SSH banner vs shell proof, SNMP/FTP
   edge cases, NetExec SAM dumps, secretsdump/NTDS loot, BloodHound collection vs
   path analysis, SQLMap database/webshell signals, git-dumper source recovery, and
-  Linux/Windows privesc leads. Continue adding anonymized Forest and other lab
-  outputs as golden regressions, but never as recipes. Fixture names should vary
-  so tests prove shape recognition, not walkthrough memorization.
+  Linux/Windows privesc leads, plus AD-abuse control-path, addcomputer, RBCD/getST,
+  LAPS, and gMSA cases. Continue adding anonymized Forest and other lab outputs as
+  golden regressions, but never as recipes. Fixture names should vary so tests
+  prove shape recognition, not walkthrough memorization.
 - **Service-specific next moves.** If `389` is open, prefer NetExec LDAP and
   ldapsearch. If `445` is open, prefer nxc SMB/null/guest/RID paths. If HTTP ports
   exist, unlock web enumeration once the web pack exists.
