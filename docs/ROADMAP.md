@@ -612,6 +612,96 @@ data, not planner branching; one runner, one store, one scope gate; guided
 one-command-at-a-time manual exploitation, never an automated one-click chain;
 success is a proof-bound fact from real output, never a card that only renders.
 
+## 12. Phase playbooks & runbooks (one-click, context-suggested, fully selectable)
+
+Today a playbook is a hand-written, ordered list of *pack action ids* run **one step
+at a time** (`obol/playbook.py`, `obol/playbooks/*.json`; two ship, both recon). The
+operator drives it step by step from the terminal or the per-target Playbooks tab. The
+vision here: **every phase has its own set of runbooks the operator fires with one
+click on a target** — and obol *suggests* which ones fit *this* target from its gathered
+facts, while **all** playbooks stay browsable and selectable in a dedicated site
+section (and every terminal equivalent) so the operator can always override the
+suggested path. This is the batching/orchestration layer over everything already built
+(packs, sessions, listeners, staging, tunnels), not a second engine: each step still
+delegates to the one shared, scope-enforced, proof-bound `service.run_action` (or a
+sibling shared primitive), and writes the one `.obol` store.
+
+Three model decisions fixed up front:
+
+- **A playbook step is a small typed vocabulary, not only a pack action.** To express
+  "prepare for a reverse shell" or "stage and run enumeration", a step must be able to
+  invoke the primitives already built — start a listener (§8 `listeners.py`), open a
+  login/session (§6a `sessions.py`), stage a material (§8 `staging.py`), run enum
+  run-and-rank (§8 `enumrun.py`), craft an exploit (§8 `exploits.py`), open/auto a
+  tunnel then sweep through it (§6d/e). So generalize `PlaybookStep` from
+  `{action_id}` to a tagged step (`{kind: "action"|"login"|"listener"|"stage"|"enum"|
+  "tunnel"|…, …}`), each kind dispatching to its existing shared service call. The
+  *ordering and composition* stay data; the *step kinds* are a fixed, small set in
+  code. No step invents a runner, a parser, or a fact — it calls a primitive that is
+  already proof-bound. "Playbook is not a second engine" holds by construction.
+- **Applicability is declarative fact-gating, reusing what exists.** Each playbook
+  carries a phase tag and an applicability predicate over facts/OS — modeled on the
+  exploit tier's per-entry predicate (`exploits.py`) and an Action's `requires_*`/`os`.
+  A playbook is **suggested** for a target when its predicate matches its facts and its
+  phase is on-flow for that target's frontier (item 2's `phases.py` — reuse
+  `frontier_index`/`phase_of_action`); it is **available** always. So "context the
+  gathered facts suggest" = evaluate predicates against the target's facts, then rank
+  the matches by the same frontier model that ranks single actions — several enum or
+  staging runbooks can be suggested at once, ordered by fit.
+- **One-click run-all keeps per-step approval.** "Fire with one button" runs the whole
+  ordered sequence, but the existing `require_approval` gate still pauses the noisy/
+  risky steps (a confirm on the web, a 409/`--approve` in the terminal) — run-all is a
+  convenience over the same gated stepper, never a bypass of scope or approval. A step
+  whose precondition isn't met yet (a login before a foothold exists) is skipped with a
+  reason, not failed, so a run-all degrades gracefully.
+
+The build sequence (each a reviewable PR):
+
+- **(a) Run-all + phase tags + expanded pack-action library.** Add a `phase` tag and
+  one-click run-all (honoring per-step approval and precondition-skip) to the existing
+  playbook engine, then grow the library so each phase has coverage built purely from
+  pack actions: recon (have `ad-recon`), enum (`web-recon` + `smb-enum`, `ldap-deep`),
+  creds (`roast-and-spray`: AS-REP → Kerberoast → careful spray), etc. Terminal:
+  `obol playbook <name> --run` (all steps) beside the existing `--step N`. Web: a
+  **Run playbook** button on the per-target Playbooks tab.
+- **(b) Typed steps → sessions/listeners/staging/tunnels runbooks.** Generalize
+  `PlaybookStep` to the tagged vocabulary above and ship the access/escalate/pivot
+  runbooks that need it: **prepare-reverse-shell** (start a listener + craft/stage the
+  OS-matched payload from `payloads/reverse_shells.json` + present the one-liners),
+  **rdp-login** / **winrm-login** (gate on a reachable service + a validated credential,
+  open the §6a session), **linux/windows-privesc-enum** (stage + run linpeas/winpeas →
+  leads), **auto-escalate** (an applicable exploit, approval-gated), **tunnel-and-sweep**
+  (auto-tunnel then through-tunnel sweep). Each step dispatches to its already-built
+  shared primitive; nothing new touches the store directly.
+- **(c) Context suggestion + ranking.** A projection (like `pivot.py`) that, per target,
+  returns the applicable playbooks ranked by the frontier/phase model — the "suggested
+  runbooks for this box right now" list. Surfaces on the per-target Access/Overview as a
+  compact suggestion (progressive disclosure — a few top picks, not the whole library)
+  and drives `obol suggest`/`obol next --playbooks` in the terminal.
+- **(d) Dedicated engagement Playbooks section (both surfaces).** A new site view
+  (distinct from the per-target tab) listing **every** playbook grouped by phase, each
+  with its plan, its applicability against the selected target, and a run button — so
+  the operator can pick any playbook regardless of the suggestion. Terminal parity:
+  `obol playbooks` grows a grouped, phase-labeled listing with applicability against the
+  active target, and `obol playbook <name> --run [--target H]` runs any of them.
+- **(e) Operator playbooks as data (optional).** Let the operator drop a JSON playbook
+  into an engagement/user playbooks dir so custom runbooks sit beside the shipped
+  library on both surfaces — composition stays data, no code change to add a runbook.
+
+Interlocks: item 2 (`phases.py` frontier ranks the suggestions), §6a/§6d/e (session,
+tunnel primitives the typed steps call), §8 (listener/stage/enum/exploit primitives),
+item 5 (the web run-from-site + SSE the runbook steps already stream through), §9 (a
+run-all of independent steps is a natural consumer of the bounded worker pool — ordered/
+dependent steps stay serial, fact-gating already expresses the dependency), and §7 (a
+box's `machine_type`/exam type can nudge which suggested runbook ranks first, and OSCP
+mode can hide runbooks built on disallowed automated tools per §11). Non-negotiables:
+**terminal parity for every capability** (the operator's hard requirement — no
+web-only runbook, no web-only run/select/suggest); one runner, one store, one scope
+gate; a step delegates to an existing proof-bound primitive and never invents facts;
+per-step approval survives run-all; suggestion never *hides* a playbook (all stay
+selectable — the ranking orders, it does not gate); and the dedicated section keeps the
+lean Overview lean (progressive disclosure — the full library lives in its own view).
+
 ## UX guardrails (product decision — keep these)
 
 This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:

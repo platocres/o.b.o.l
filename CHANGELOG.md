@@ -7,6 +7,12 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Roadmap: added **§12 Phase playbooks & runbooks** — a design for phase-scoped, one-click,
+  context-suggested runbooks per target, with all playbooks browsable/selectable in a
+  dedicated site section and full terminal parity. Builds on the item-2 phase model
+  (frontier ranks the suggestions) and orchestrates the already-built primitives
+  (sessions, listeners, staging, tunnels) via a generalized typed playbook step — not a
+  second engine. Planning only; no code yet. See `docs/ROADMAP.md §12`.
 - Added the **engagement phase/flow ranking model** (ROADMAP item 2): the planner now
   ranks live actions by the shared phase model (recon → enum → creds → access →
   escalate → loot) *relative to each target's current frontier*, instead of by a bare
