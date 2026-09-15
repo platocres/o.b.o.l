@@ -12,14 +12,16 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, quickstart, service, sessions
+from . import __version__, board, discovery, library, quickstart, service, sessions, tunnels
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
+from .pivot import engagement_pivots, pivot_summary
 from .runner import RunnerError
 from .scope import extract_ip_scope_entries, normalize_scope_entry, target_in_scope
 from .seed import seed_forest
 from .service import ActionError
 from .sessions import SessionError
+from .tunnels import TunnelError
 from .workspace import Workspace, find_workspace
 
 
@@ -822,6 +824,87 @@ def cmd_session(args) -> None:
         cmd_sessions(args)
 
 
+def cmd_pivots(args) -> None:
+    """Show the engagement's pivot candidates: hosts with a proven foothold whose
+    local enumeration turned up multi-homing or adjacent subnets to pivot into."""
+    ws = _load_or_exit()
+    rows = engagement_pivots(ws)
+    if not rows:
+        print("no pivot candidates yet — get a foothold and run the local enumeration "
+              "sweep (`obol next` on a host you have access to).")
+        return
+    print("PIVOT CANDIDATES")
+    for piv in rows:
+        tag = "multi-homed" if piv["multihomed"] else "adjacent subnet"
+        print(f"\n  {piv['label']} ({piv['host']}) — {tag}")
+        for s in piv["subnets"]:
+            mark = "in scope" if s["in_scope"] else "NOT in scope — a tunnel would authorize it"
+            print(f"    {s['cidr']:<20} {mark}")
+        if piv["dns_servers"]:
+            print(f"    internal DNS: {', '.join(piv['dns_servers'])}")
+    print("\nbuild a tunnel: obol tunnel open <host> --kind <ligolo|chisel|sshuttle|ssh-dynamic|ssh-local> --subnet <cidr>")
+
+
+def cmd_tunnels(args) -> None:
+    """List tunnel transports and any live tunnels."""
+    ws = _load_or_exit()
+    if ws.tunnels:
+        print(f"{'ID':<20} {'HOST':<16} {'KIND':<12} {'TRANSPORT':<12} {'EXPOSED':<18} STATUS")
+        for t in ws.tunnels:
+            pxy = " (proxychains)" if t.get("proxychains") else ""
+            print(f"{t['id']:<20} {t['host']:<16} {t['kind']:<12} {t['transport']:<12} "
+                  f"{(t.get('exposed_subnet') or '-'):<18} {t['status']}{pxy}")
+        print()
+    print("available transports:")
+    for k in tunnels.TUNNEL_KINDS:
+        pxy = "proxychains" if k.needs_proxychains else "direct"
+        sub = "subnet route" if k.exposes_subnet else "single-port forward"
+        print(f"  {k.key:<12} {k.transport:<12} {pxy:<12} {sub}")
+
+
+def cmd_tunnel(args) -> None:
+    ws = _load_or_exit()
+    cmd = getattr(args, "tunnel_cmd", "list")
+    if cmd == "open":
+        host = args.target or ws.target
+        if not host:
+            print("no target — pass a host or set an active target.", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            res = tunnels.open_tunnel(ws, host, args.kind, subnet=args.subnet,
+                                      local_port=args.local_port, remote=args.remote,
+                                      remote_port=args.remote_port, lhost=args.lhost,
+                                      surface="cli")
+        except TunnelError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        t = res["tunnel"]
+        print(f"\n{board.SYM_OK} tunnel {t['id']} recorded ({t['kind']}, {t['transport']}, status: {t['status']}).")
+        if res["scope_added"]:
+            print(f"scope auto-extended (pivot-authorized): {res['scope_added']}")
+        if res["proxychains"]:
+            print("hosts reached through this tunnel are auto-prefixed with `proxychains -q`.")
+        print("\nlaunch the tunnel in your terminal:")
+        print(f"   $ {res['setup_command']}")
+    elif cmd == "close":
+        try:
+            tunnels.close_tunnel(ws, args.id)
+        except TunnelError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"closed {args.id}")
+    elif cmd == "rm":
+        try:
+            res = tunnels.remove_tunnel(ws, args.id)
+        except TunnelError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"removed {args.id}"
+              + (f" (scope retracted: {res['scope_retracted']})" if res["scope_retracted"] else ""))
+    else:
+        cmd_tunnels(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -940,6 +1023,30 @@ try:
         sp.add_argument("id", help="session id (see `obol sessions`)")
         sp.set_defaults(func=cmd_session, session_cmd=name)
     psession.set_defaults(func=cmd_session, session_cmd="list")
+
+    # pivots + tunnels (§6c/§6d) --------------------------------------------------
+    sub.add_parser("pivots", help="show pivot candidates (multi-homed hosts + adjacent subnets)").set_defaults(func=cmd_pivots)
+
+    sub.add_parser("tunnels", help="list tunnel transports and any live tunnels").set_defaults(func=cmd_tunnels)
+    ptunnel = sub.add_parser("tunnel", help="open or manage a pivot tunnel (ligolo/chisel/sshuttle/ssh)")
+    tunnel_sub = ptunnel.add_subparsers(dest="tunnel_cmd")
+    tunnel_sub.add_parser("list", help="list tunnels").set_defaults(func=cmd_tunnel, tunnel_cmd="list")
+    t_open = tunnel_sub.add_parser("open", help="record a tunnel from a foothold and auto-extend scope to its subnet")
+    t_open.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    t_open.add_argument("--kind", required=True, choices=[k.key for k in tunnels.TUNNEL_KINDS],
+                        help="tunnel transport")
+    t_open.add_argument("--subnet", default="", help="the subnet the tunnel exposes (for subnet-route transports)")
+    t_open.add_argument("--lhost", default="", help="your listener host/IP (for reverse transports)")
+    t_open.add_argument("--local-port", type=int, default=0, dest="local_port", help="local listener/forward port")
+    t_open.add_argument("--remote", default="", help="remote host for a single-port forward (ssh -L)")
+    t_open.add_argument("--remote-port", type=int, default=0, dest="remote_port", help="remote port for a single-port forward")
+    t_open.set_defaults(func=cmd_tunnel, tunnel_cmd="open")
+    for name, helptext in (("close", "mark a tunnel down"),
+                           ("rm", "remove a tunnel record (retracts its auto-added scope)")):
+        tp = tunnel_sub.add_parser(name, help=helptext)
+        tp.add_argument("id", help="tunnel id (see `obol tunnels`)")
+        tp.set_defaults(func=cmd_tunnel, tunnel_cmd=name)
+    ptunnel.set_defaults(func=cmd_tunnel, tunnel_cmd="list")
 
     pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")

@@ -148,6 +148,42 @@ def test_scan_sweeps_every_scope_entry_and_quickstarts_targets(tmp_path, monkeyp
     assert "Quick Start" in out
 
 
+def test_pivots_and_tunnel_open_extends_scope(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["init"])
+    capsys.readouterr()
+
+    ws = Workspace(tmp_path).load()
+    ws.add_target("10.0.0.5")
+    ws.target = "10.0.0.5"
+    s = "host:10.0.0.5"
+    ws.facts.add(Fact("foothold.linux", s, {}, source="ssh id"))
+    ws.facts.add(Fact("host.os_family", s, {"family": "linux"}, source="ssh id"))
+    ws.facts.add(Fact("credential.available", s, {"user": "bob", "password": "pw"}, source="crack"))
+    ws.facts.add(Fact("host.multihomed", s, {"interfaces": 2, "subnets": ["172.16.20.0/24"]}, source="ip"))
+    ws.facts.add(Fact("network.subnet_candidate", s, {"cidr": "172.16.20.0/24"}, source="ip"))
+    ws.facts.add(Fact("pivot.candidate", s, {"reasons": ["multiple interface networks"],
+                                             "subnets": ["172.16.20.0/24"]}, source="ip"))
+    ws.save()
+
+    cli.main(["pivots"])
+    out = capsys.readouterr().out
+    assert "PIVOT CANDIDATES" in out
+    assert "172.16.20.0/24" in out and "NOT in scope" in out
+
+    cli.main(["tunnel", "open", "10.0.0.5", "--kind", "chisel", "--subnet", "172.16.20.0/24", "--lhost", "10.10.14.7"])
+    out = capsys.readouterr().out
+    assert "scope auto-extended" in out and "172.16.20.0/24" in out
+    assert "proxychains" in out
+
+    reloaded = Workspace(tmp_path).load()
+    assert "172.16.20.0/24" in reloaded.scope
+    assert [(t["kind"], t["transport"]) for t in reloaded.tunnels] == [("chisel", "socks")]
+
+    cli.main(["tunnels"])
+    assert "chisel" in capsys.readouterr().out
+
+
 def test_scan_no_enumerate_skips_quickstart(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cli.main(["init"])

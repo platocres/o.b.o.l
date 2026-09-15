@@ -151,6 +151,17 @@ obol/
                  new host. Scaffolding, not Orange methodology; stays proof-bound
   service.py     run -> parse -> record -> save; the ONE path both surfaces call
                  (target=... pins a run to a host); eligible_actions = tool palette
+  pivot.py       pivot-candidate projection (§6c): lifts the parsed host.multihomed/
+                 network.subnet_candidate/pivot.candidate lead facts into one "where
+                 to pivot next" view (multi-homed status + candidate adjacent subnets,
+                 each tagged in/out of scope) for the target/engagement/report surfaces.
+                 Read-only; never mutates scope or state
+  tunnels.py     tunnels layer (§6d): a registry of pivot transports (ligolo/sshuttle/
+                 chisel/ssh -D/-L) with each transport (transparent/socks/portforward)
+                 + OS + setup command; tunnels are LIVE STATE (Workspace.tunnels, a
+                 status that can flip), NOT facts. Opening one auto-extends scope to
+                 its subnet (pivot-authorized, never a bypass); route_prefix() makes
+                 the runner reachability-aware (proxychains -q for SOCKS-only hosts)
   sessions.py    sessions layer (§6a): one-click login (winrm/ssh/rdp) PAIRED with a
                  non-interactive proof run through service.run_action — the captured
                  output establishes the access fact (facts stay the source of truth),

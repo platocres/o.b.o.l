@@ -469,6 +469,52 @@ def test_login_requires_target_and_kind(cx):
     assert cx.post("/api/run/login", json={"kind": "winrm"}, headers=H).status_code == 422
 
 
+def test_tunnel_flow_over_web_extends_scope_and_surfaces_in_bundle(cx):
+    """§6d over the web: a foothold surfaces pivot candidates and tunnel offers; opening
+    a tunnel auto-extends scope to its subnet and records live state the bundle shows."""
+    from obol import library
+
+    ws = library.resolve_active()
+    s = "host:10.10.10.161"
+    ws.facts.add(Fact("foothold.linux", s, {}, source="ssh id"))
+    ws.facts.add(Fact("host.os_family", s, {"family": "linux"}, source="ssh id"))
+    ws.facts.add(Fact("credential.available", s, {"user": "bob", "password": "pw123"}, source="crack"))
+    ws.facts.add(Fact("host.multihomed", s, {"interfaces": 2, "subnets": ["172.16.20.0/24"]}, source="ip"))
+    ws.facts.add(Fact("network.subnet_candidate", s, {"cidr": "172.16.20.0/24"}, source="ip"))
+    ws.facts.add(Fact("pivot.candidate", s, {"reasons": ["multiple interface networks"],
+                                             "subnets": ["172.16.20.0/24"]}, source="ip"))
+    ws.save()
+
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert b["pivots"]["multihomed"] is True
+    assert "172.16.20.0/24" in b["pivots"]["unscoped_subnets"]
+    kinds = {k["kind"]: k for k in b["tunnel_kinds"]}
+    assert kinds["chisel"]["proxychains"] is True and kinds["ligolo"]["proxychains"] is False
+
+    r = cx.post("/api/run/tunnel", json={"target": "10.10.10.161", "kind": "chisel",
+                                         "subnet": "172.16.20.0/24", "lhost": "10.10.14.7"}, headers=H).json()
+    assert r["ok"] and r["proxychains"] is True and r["scope_added"] == "172.16.20.0/24"
+    assert "chisel" in r["setup_command"]
+
+    # scope auto-extended and the live tunnel surfaces in the bundle
+    meta = cx.get("/api/meta", headers=H).json()
+    assert "172.16.20.0/24" in meta["scope"]
+    b = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert [(t["kind"], t["status"], t["exposed_subnet"]) for t in b["tunnels"]] \
+        == [("chisel", "up", "172.16.20.0/24")]
+
+    # remove retracts the auto-added scope (no target discovered inside it yet)
+    tid = b["tunnels"][0]["id"]
+    rr = cx.request("DELETE", "/api/tunnel", params={"id": tid}, headers=H).json()
+    assert rr["scope_retracted"] == "172.16.20.0/24"
+    assert "172.16.20.0/24" not in cx.get("/api/meta", headers=H).json()["scope"]
+
+
+def test_tunnel_requires_target_and_kind(cx):
+    assert cx.post("/api/run/tunnel", json={"target": "10.10.10.161"}, headers=H).status_code == 422
+    assert cx.post("/api/run/tunnel", json={"kind": "chisel"}, headers=H).status_code == 422
+
+
 def test_engagement_activity_surfaces_running_jobs_and_ledger(cx, monkeypatch):
     """0e: an in-flight Quick Start job shows up in the engagement run feed, and its
     committed command appears in the cross-host ledger once it finishes."""

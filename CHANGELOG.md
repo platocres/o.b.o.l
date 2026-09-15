@@ -7,6 +7,27 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the tunnels layer and a route-aware runner (§6d): `obol/tunnels.py` is a
+  registry of pivot transports (ligolo-ng, sshuttle, chisel, ssh `-D`, ssh `-L`),
+  each carrying its transport (transparent L3 vs SOCKS vs single-port forward), the
+  foothold OS it fits, and the setup command handed to the operator. Tunnels are
+  live state, not facts — recorded in `Workspace.tunnels` (a new SQLite `tunnels`
+  table) with a mutable status. Bringing up a tunnel that exposes a subnet
+  auto-extends the operator's scope to that subnet (tagged as pivot-authorized via
+  that tunnel, retracted on removal unless a discovered target still lives there) —
+  the hard scope gate is auto-populated from a proven foothold, never bypassed. The
+  runner is now reachability-aware: `service.build_command` auto-prefixes
+  `proxychains -q` for a host reachable only through a SOCKS tunnel and leaves a
+  transparent L3 route (ligolo/sshuttle) or a directly-scoped host alone, so the
+  operator never manages proxychains by hand.
+- Added `obol pivots`, `obol tunnels`, and `obol tunnel open|close|rm`, plus web
+  endpoints (`POST /api/run/tunnel`, `POST /api/tunnel/close`, `DELETE /api/tunnel`)
+  and a Tunnels section in the target Overview's Pivot candidates card: one-click
+  build a tunnel into an unscoped candidate subnet, live tunnel state with the
+  proxychains flag and copyable setup command, and close/remove. The through-tunnel
+  health sweep (§6e), the auto-tunnel cascade, and the topology map (§6f) build on
+  this slice and remain to do.
+
 - Surfaced post-foothold pivot candidates (§6c): a read-only projection
   (`obol/pivot.py`) lifts the already-parsed `host.multihomed`,
   `network.subnet_candidate`, and `pivot.candidate` lead facts into a single

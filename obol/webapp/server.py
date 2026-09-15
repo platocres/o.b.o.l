@@ -35,8 +35,10 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import board, bloodhound, discovery, library, sessions as session_layer, tools as tool_inventory
+from .. import (board, bloodhound, discovery, library, sessions as session_layer,
+                tools as tool_inventory, tunnels as tunnel_layer)
 from ..sessions import SessionError
+from ..tunnels import TunnelError
 from ..graph import (
     build_engagement_graph,
     build_graph_model,
@@ -743,6 +745,9 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
         # pivot candidates (§6c): multi-homed status + candidate adjacent subnets
         # parsed from post-foothold local enum, the precondition for a tunnel.
         "pivots": pivot_summary(ws, host),
+        # tunnels (§6d): live pivot transports from this foothold + offerable kinds.
+        "tunnels": list(ws.tunnels_for(host)),
+        "tunnel_kinds": tunnel_layer.eligible_tunnels(ws, host),
     }
 
 
@@ -1440,6 +1445,55 @@ def create_app(base, *, token: Optional[str] = None):
                 raise HTTPException(404, f"no session {id!r}")
             ws.save()
         return {"ok": True}
+
+    # ── tunnels layer (§6d: pivot transports + route-aware runner) ────────────
+    @app.post("/api/run/tunnel")
+    def api_run_tunnel(payload: dict = Body(...)):
+        """Record a tunnel from a foothold, auto-extend scope to its exposed subnet,
+        and return the setup command to launch. A tunnel is live state, not a fact;
+        its status defaults to up (a §6e health sweep will confirm it)."""
+        payload = payload or {}
+        target = payload.get("target", "")
+        kind = payload.get("kind", "")
+        if not target or not kind:
+            raise HTTPException(422, "target and kind are required")
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, target)
+            try:
+                res = tunnel_layer.open_tunnel(
+                    ws, target, kind,
+                    subnet=payload.get("subnet", ""), lhost=payload.get("lhost", ""),
+                    local_port=int(payload.get("local_port", 0) or 0),
+                    remote=payload.get("remote", ""),
+                    remote_port=int(payload.get("remote_port", 0) or 0),
+                    surface="web",
+                )
+            except TunnelError as exc:
+                raise HTTPException(400, str(exc))
+        return {"ok": res["ok"], "tunnel": res["tunnel"], "setup_command": res["setup_command"],
+                "proxychains": res["proxychains"], "scope_added": res["scope_added"]}
+
+    @app.post("/api/tunnel/close")
+    def api_tunnel_close(payload: dict = Body(...)):
+        tid = (payload or {}).get("id", "")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                tunnel_layer.close_tunnel(ws, tid)
+            except TunnelError as exc:
+                raise HTTPException(404, str(exc))
+        return {"ok": True}
+
+    @app.delete("/api/tunnel")
+    def api_tunnel_remove(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                res = tunnel_layer.remove_tunnel(ws, id)
+            except TunnelError as exc:
+                raise HTTPException(404, str(exc))
+        return {"ok": True, "scope_retracted": res["scope_retracted"]}
 
     @app.post("/api/run/quickstart")
     def api_run_quickstart(payload: dict = Body(...)):

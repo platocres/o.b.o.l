@@ -70,7 +70,15 @@ def build_command(action: Action, ws: Workspace, *, command_index: int = 0,
     extra = board.fill_template(args_extra, ws, target, context).strip() if args_extra else ""
     if extra:
         cmd = f"{cmd} {extra}"
+    # tool label is derived before any route prefix, so it stays the real tool.
     tool = command_meta.get("tool") or action.tool or (cmd.split()[0] if cmd.split() else "")
+    # route-aware runner (§6d): a host reachable only through a SOCKS tunnel gets
+    # proxychains auto-prefixed; a transparent route or a directly-scoped host does
+    # not. Keyed on the effective target so previews and execution agree.
+    from .tunnels import route_prefix
+    prefix = route_prefix(ws, target or ws.target)
+    if prefix and not cmd.startswith(prefix):
+        cmd = prefix + cmd
     return cmd, tool
 
 
