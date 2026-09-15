@@ -136,3 +136,23 @@ Use this workflow:
 Fixtures may be based on real tools, but must be anonymized and generalized.
 Do not encode lab names, box-specific solution paths, magic passwords, or
 hardcoded route logic. Golden fixtures are regression locks, not recipes.
+
+## Audit history
+
+Parsers are periodically re-read against this contract — we do not assume a
+parser is correct because it was written to a spec. The most recent full audit
+(`tests/test_parser_audit_fixes.py`) reinforced these boundaries after finding
+real false positives:
+
+- Registry/policy leads must reflect the **actual parsed value**, not the mere
+  presence of a keyword or a stray matching token (AlwaysInstallElevated).
+- `host.os_family` (which filters OS-specific actions) is promoted only from a
+  banner/CPE, never a port number — services like WS-Man/RDP also run on Linux.
+- An authenticated-as-guest bind is not an anonymous bind.
+- Enum-tool dumps are noisy: a candidate needs a real shape (a `find -perm`
+  result or `rws` mode for SUID; a value-bearing assignment for a secret; a
+  service ACE or low-privilege writable ACE for a weak service permission; a
+  john `--show` cracked footer for a credential), never a bare keyword.
+
+When you touch a parser, add the misleading-output negative that proves it does
+not overclaim — that is what turns a fixture corpus into a regression lock.

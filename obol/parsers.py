@@ -103,6 +103,7 @@ _LAPS_PASSWORD_RE = re.compile(r"\b(?:ms-Mcs-AdmPwd|msLAPS-Password|LAPS\s+Passw
 _LAPS_COMPUTER_RE = re.compile(r"\b(?:Computer|Name|sAMAccountName)\s*[:=]\s*(?P<computer>[A-Za-z0-9_.-]+\$?)", re.IGNORECASE)
 _LAPS_USER_RE = re.compile(r"\b(?:User|Username|Account)\s*[:=]\s*(?P<user>[A-Za-z0-9._$-]+)", re.IGNORECASE)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
+_JOHN_CRACKED_FOOTER_RE = re.compile(r"\b\d+\s+password\s+hash(?:es)?\s+cracked\b", re.IGNORECASE)
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
 _NMAP_OPEN_RE = re.compile(
@@ -300,6 +301,13 @@ _UNAME_RE = re.compile(
     re.IGNORECASE,
 )
 _SUID_PATH_RE = re.compile(r"(?P<path>/[A-Za-z0-9_./+-]+)")
+# A local secret candidate: a value-bearing assignment (password/api key/token
+# followed by an actual value) or a private-key header — not a bare keyword.
+_LOCAL_FILE_SECRET_RE = re.compile(
+    r"(?:password|passwd|pwd|api[_-]?key|secret|token|connectionstring)\s*[=:]\s*['\"]?\S{3,}"
+    r"|-----BEGIN (?:OPENSSH|RSA|DSA|EC|PGP) PRIVATE KEY-----",
+    re.IGNORECASE,
+)
 _CAPABILITY_RE = re.compile(r"^(?P<path>/\S+)\s*=\s*(?P<caps>[^#\r\n]+cap_[^#\r\n]+)$", re.IGNORECASE | re.MULTILINE)
 _PASSWD_MODE_RE = re.compile(r"^(?P<mode>-[rwxstST-]{9})\s+.*\s+(?P<path>/etc/passwd)\b", re.MULTILINE)
 _WIN_PRIV_RE = re.compile(r"^\s*(?P<name>Se[A-Za-z0-9]+Privilege)\s+.+?\s+(?P<state>Enabled|Disabled)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -309,6 +317,19 @@ _DANGEROUS_WIN_PRIVS = {
     "sebackupprivilege", "serestoreprivilege", "setakeownershipprivilege",
     "seloaddriverprivilege", "semanagevolumeprivilege", "setcbprivilege",
 }
+# AlwaysInstallElevated is only exploitable when BOTH the HKLM and HKCU policy
+# DWORDs are non-zero. Parse the actual reg-query value per hive; the key name
+# alone (or a stray "1" elsewhere in the transcript) proves nothing.
+_AIE_VALUE_RE = re.compile(r"AlwaysInstallElevated\s+REG_DWORD\s+0x(?P<val>[0-9a-fA-F]+)", re.IGNORECASE)
+_HKLM_HEADER_RE = re.compile(r"^\s*(?:HKEY_LOCAL_MACHINE|HKLM)\b", re.IGNORECASE)
+_HKCU_HEADER_RE = re.compile(r"^\s*(?:HKEY_CURRENT_USER|HKCU)\b", re.IGNORECASE)
+# A weak service permission is a service-specific write ACE, or a writable ACE
+# granted to a low-privilege principal — not any (F)/(M) token on any file.
+_WEAK_SVC_ACCESS_RE = re.compile(r"\b(?:SERVICE_CHANGE_CONFIG|SERVICE_ALL_ACCESS|SERVICE_CHANGE|WRITE_DAC|WRITE_OWNER)\b")
+_LOWPRIV_WRITE_ACE_RE = re.compile(
+    r"(?:BUILTIN\\Users|NT AUTHORITY\\(?:Authenticated Users|INTERACTIVE)|Authenticated Users|Everyone|\bUsers)\s*:\s*\([^)]*[FMW][^)]*\)",
+    re.IGNORECASE,
+)
 
 # Post-credential AD path signals.
 _NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -598,6 +619,12 @@ def _url_path(url: str) -> str:
 
 def _looks_anonymous_ldap_command(command: str, action: Action) -> bool:
     lowered = command.lower()
+    # A supplied, non-empty username means the bind is authenticated, whatever
+    # the action id says — so an operator who edits the anon-enum action to pass
+    # credentials no longer mislabels the result as an anonymous bind.
+    user_match = re.search(r"(?:-u|--username|--user)\s+(?P<user>\S+)", command)
+    if user_match and user_match.group("user").strip("'\"") != "":
+        return False
     if action.id == "ad-anon-ldap-enum":
         return True
     return _is_ldap_command(command) and (" -x " in f" {lowered} " or "-u ''" in lowered or '-u ""' in lowered)
@@ -931,13 +958,17 @@ def _parse_service_reachability(port: int, proto: str, service: str, ws: Workspa
         )
     if port in {5985, 5986} or "wsman" in service_l or "winrm" in service_l:
         _add(facts, Fact("winrm.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        # A WS-Man/WinRM port is a strong hint, not proof of Windows: OMI and
+        # other pywinrm/WS-Man servers listen on 5985/5986 on Linux. Promote
+        # os_family only from a Windows banner/CPE (the `_add_os_from_text` path),
+        # never from the port number alone.
         _add_os_observation(
             facts, ws, source,
             family="windows",
             evidence=f"{port}/{proto} {service or 'winrm'}",
-            confidence="high",
+            confidence="medium",
             tool="nmap",
-            promote=True,
+            promote=False,
         )
     if port in {80, 443, 8080, 8000, 8443} or service_l in {"http", "https", "ssl/http"}:
         _add(facts, Fact("http.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
@@ -1011,7 +1042,10 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
                 promote=(proto == "winrm"),
             )
 
-    if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE | re.MULTILINE):
+    # A null/anonymous LDAP bind only. A successful `guest` bind is
+    # authenticated-as-guest (a different access primitive, handled as a guest
+    # session), not an anonymous bind — do not conflate them.
+    if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|'')", text, re.IGNORECASE | re.MULTILINE):
         _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
 
 
@@ -1241,11 +1275,18 @@ def _parse_cracked_credentials(text: str, ws: Workspace, command: str, source: s
 
         if "john" not in lowered_command:
             continue
-        if "--show" not in lowered_command and "password hash" not in text.lower():
+        # Only trust `user:password` rows when this is genuine `--show` output:
+        # john's `--show` prints a "N password hashes cracked" footer. The bare
+        # "Loaded N password hashes" preamble (printed even when nothing cracks)
+        # is not enough — otherwise any `word:word` line in the transcript would
+        # be misread as a cracked credential.
+        if "--show" not in lowered_command and not _JOHN_CRACKED_FOOTER_RE.search(text):
             continue
 
         match = _JOHN_SHOW_RE.match(line)
         if not match:
+            continue
+        if not _valid_password(match.group("password")):
             continue
         _add_plaintext_credential(
             facts,
@@ -1992,18 +2033,24 @@ def _parse_linux_privesc_output(
         )
 
     suid_paths: set[str] = set()
-    if "-perm -4000" in lowered_command or "suid" in lowered or "rws" in lowered:
+    suid_find = any(tok in lowered_command for tok in ("-perm -4000", "-perm -u=s", "-perm /4000", "-perm /u=s"))
+    if suid_find or "suid" in lowered or "rws" in lowered:
         for raw in text.splitlines():
             line = raw.strip()
             if not line or "/proc/" in line:
                 continue
-            if line.startswith("/") and " " not in line:
-                suid_paths.add(line)
-                continue
+            # An ls -l mode field with the setuid bit ("rws") is reliable evidence
+            # on its own line, wherever it appears.
             if "rws" in line.lower():
                 match = _SUID_PATH_RE.search(line)
                 if match:
                     suid_paths.add(match.group("path"))
+                continue
+            # A bare absolute path is a SUID candidate only when the command was a
+            # `find -perm` search (whose entire output is setuid binaries). A stray
+            # path in a linpeas dump — which prints hundreds — is not.
+            if suid_find and line.startswith("/") and " " not in line:
+                suid_paths.add(line)
     if suid_paths:
         _add_host_privesc_fact(
             facts, ws, source,
@@ -2059,7 +2106,10 @@ def _parse_linux_privesc_output(
     if process_lines and ("pspy" in lowered_command or "uid=0" in lowered or "cmd:" in lowered):
         _add_host_privesc_fact(facts, ws, source, "privesc.process_lead", {"commands": process_lines[:30]}, lead_kinds)
 
-    if re.search(r"password\s*[=:]\s*\S+|BEGIN OPENSSH|api[_-]?key|secret", text, re.IGNORECASE):
+    # A candidate secret needs a value-bearing assignment or a real private-key
+    # header — not a bare keyword like "secret" or a "Checking for passwords"
+    # header, which appear all over enum-tool output and would mint noise.
+    if _LOCAL_FILE_SECRET_RE.search(text):
         _add(
             facts,
             Fact("credential.candidate", f"host:{ws.target}", {"kind": "local_file_secret", "evidence": "local loot output"}, ProofState.SUPPORTED, source),
@@ -2124,13 +2174,31 @@ def _parse_windows_privesc_output(
             lead_kinds,
         )
 
-    if "alwaysinstallelevated" in lowered and len(re.findall(r"0x1|\b0*1\b", lowered)) >= 2:
-        _add_host_privesc_fact(
-            facts, ws, source,
-            "privesc.always_install_elevated",
-            {"hklm": True, "hkcu": True},
-            lead_kinds,
-        )
+    if "alwaysinstallelevated" in lowered:
+        aie_hklm = aie_hkcu = False
+        current_hive = ""
+        for raw in text.splitlines():
+            if _HKLM_HEADER_RE.search(raw):
+                current_hive = "hklm"
+            elif _HKCU_HEADER_RE.search(raw):
+                current_hive = "hkcu"
+            value_match = _AIE_VALUE_RE.search(raw)
+            if not value_match:
+                continue
+            enabled = int(value_match.group("val"), 16) != 0
+            if current_hive == "hklm":
+                aie_hklm = enabled
+            elif current_hive == "hkcu":
+                aie_hkcu = enabled
+        # Exploitable only when both policy keys are actually set to a non-zero
+        # value; a 0x0/0x0 host (the safe default) must not be flagged.
+        if aie_hklm and aie_hkcu:
+            _add_host_privesc_fact(
+                facts, ws, source,
+                "privesc.always_install_elevated",
+                {"hklm": True, "hkcu": True},
+                lead_kinds,
+            )
 
     unquoted = []
     if ".exe" in lowered:
@@ -2151,7 +2219,10 @@ def _parse_windows_privesc_output(
     weak_service = []
     for raw in text.splitlines():
         line = raw.strip()
-        if re.search(r"SERVICE_CHANGE_CONFIG|\(F\)|\(M\)|BUILTIN\\Users:.*\([FM]\)", line, re.IGNORECASE):
+        # A service-specific write access right, or a writable ACE granted to a
+        # low-privilege principal — not a bare (F)/(M) token, which appears on
+        # every icacls dump for admin/SYSTEM-owned files too.
+        if _WEAK_SVC_ACCESS_RE.search(line) or _LOWPRIV_WRITE_ACE_RE.search(line):
             weak_service.append(line[:220])
     if weak_service:
         _add_host_privesc_fact(
