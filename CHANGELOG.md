@@ -258,6 +258,40 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 - Parser fixture expectations now include OS facts where the existing transcripts
   already contain strong OS evidence.
 
+### Fixed
+
+- **Parser quality audit — proof-boundary and false-positive fixes** (from a
+  full read-only audit of every parser in `obol/parsers.py`, including the newly
+  merged AD-abuse parsers):
+  - **AlwaysInstallElevated** no longer fires from noise. It now parses the actual
+    per-hive `reg query` DWORD and records the lead only when **both** the HKLM and
+    HKCU policy values are set; a safe `0x0/0x0` host (previously flagged whenever
+    two stray `1`s appeared anywhere in the transcript) is no longer a false lead.
+  - **`host.os_family` is no longer promoted from a bare WinRM port.** An open
+    5985/5986 is a `host.os_hint` only — OMI and other WS-Man servers run on Linux,
+    so os_family (which drives OS-specific action filtering) now requires a Windows
+    banner/CPE, matching the RDP-port behavior and the PARSER_QA "strong evidence"
+    rule.
+  - **A successful `guest` LDAP bind is no longer recorded as `ad.anonymous_bind`**
+    (authenticated-as-guest is a different primitive than a null/anonymous bind).
+  - **Anonymous-bind detection is command-shape-driven, not action-id-driven:** an
+    operator who edits the anon-enum action to pass a real username no longer has
+    the result mislabeled as an anonymous bind.
+  - **SUID candidates** now come from a `find -perm` search or an actual `rws`
+    setuid mode line, not from every bare path in a linpeas dump that merely
+    mentions "SUID". **Local-secret candidates** now require a value-bearing
+    assignment or a private-key header, not a bare `secret`/`password` keyword.
+  - **Weak service permissions** now require a service-specific access right
+    (`SERVICE_CHANGE_CONFIG`, …) or a writable ACE granted to a low-privilege
+    principal, instead of any `(F)`/`(M)` token on any admin-owned file.
+  - **John cracked credentials** are recorded only from real `--show` output (a
+    `N password hashes cracked` footer), not from the `Loaded N password hashes`
+    preamble, and each row's password is validated.
+  - Added `tests/test_parser_audit_fixes.py` (21 misleading-output regressions,
+    each of which would have caught its finding), plus positive/negative coverage
+    for the previously-untested `nxc rdp` parser and boundary locks for the
+    AD-abuse addcomputer/gMSA parsers.
+
 ## 2026-09-15 - Backfilled Project History
 
 ### Added
