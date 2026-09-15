@@ -35,6 +35,7 @@ _LINUX_NEIGH_RE = re.compile(
 )
 _DNS_RE = re.compile(r"^\s*nameserver\s+(?P<addr>\d+(?:\.\d+){3})\s*$", re.I)
 
+_NXC_PREFIX_RE = re.compile(r"^(?:SMB|WINRM|WMI|RPC|SSH)\s+\S+\s+\d+\s+\S+\s+(?P<body>.*)$", re.I)
 _WIN_ADAPTER_RE = re.compile(r"^\s*(?P<kind>.+?)\s+adapter\s+(?P<name>.+?):\s*$", re.I)
 _WIN_IPV4_RE = re.compile(r"IPv4 Address[^:]*:\s*(?P<addr>\d+(?:\.\d+){3})", re.I)
 _WIN_MASK_RE = re.compile(r"Subnet Mask[^:]*:\s*(?P<mask>\d+(?:\.\d+){3})", re.I)
@@ -123,6 +124,19 @@ def _interesting_host(addr: str) -> bool:
     return not (ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified)
 
 
+def _logical_lines(text: str) -> Iterable[str]:
+    """Yield command-output lines after removing common NetExec row prefixes.
+
+    NetExec prepends rows like ``WINRM 10.10.10.5 5985 HOST`` before command
+    output. Stripping that prefix lets the Windows parsers consume the same
+    shapes they would see from a direct console transcript.
+    """
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        match = _NXC_PREFIX_RE.match(line)
+        yield match.group("body") if match else line
+
+
 def _maybe_pivot_facts(out: list[Fact], seen: set[tuple[str, str, str]], scope: str, source: str,
                        interface_networks: Iterable[str], route_networks: Iterable[str]) -> None:
     iface_nets = sorted({n for n in interface_networks if _interesting_network(n)})
@@ -134,7 +148,19 @@ def _maybe_pivot_facts(out: list[Fact], seen: set[tuple[str, str, str]], scope: 
     if len(iface_nets) > 1:
         _emit(out, seen, "host.multihomed", scope, {"interfaces": len(iface_nets), "subnets": iface_nets}, source)
         reasons.append("multiple interface networks")
-    routed_only = [n for n in route_nets if n not in iface_nets]
+
+    # Route tables are noisy: a single connected subnet plus default route is normal
+    # host context, not a pivot signal. Treat route-only output as pivot-worthy only
+    # when it exposes multiple meaningful non-default networks. When interface
+    # context is present, a route outside those interface networks is a stronger
+    # "additional subnet" hint.
+    if iface_nets:
+        routed_only = [n for n in route_nets if n not in iface_nets]
+    elif len(route_nets) > 1:
+        routed_only = route_nets
+    else:
+        routed_only = []
+
     if routed_only:
         reasons.append("route to additional subnet")
     if reasons:
@@ -255,8 +281,7 @@ def _parse_windows_interfaces(text: str, scope: str, source: str) -> list[Fact]:
         _emit(out, seen, "host.interface", scope, {"name": current or "unknown", "address": ip, "cidr": cidr, "network": network, "family": "ipv4"}, source)
         _emit(out, seen, "host.ip_address", scope, {"address": ip, "cidr": cidr, "interface": current or "unknown", "network": network}, source)
 
-    for raw in text.splitlines():
-        line = raw.rstrip()
+    for line in _logical_lines(text):
         adapter = _WIN_ADAPTER_RE.search(line)
         if adapter:
             current = adapter.group("name").strip()
@@ -307,7 +332,7 @@ def _parse_windows_routes(text: str, scope: str, source: str) -> list[Fact]:
     seen: set[tuple[str, str, str]] = set()
     networks: list[str] = []
     count = 0
-    for line in text.splitlines():
+    for line in _logical_lines(text):
         m = _WIN_ROUTE_RE.search(line)
         if not m:
             continue
@@ -333,7 +358,7 @@ def _parse_windows_neighbors(text: str, scope: str, source: str) -> list[Fact]:
     out: list[Fact] = []
     seen: set[tuple[str, str, str]] = set()
     count = 0
-    for line in text.splitlines():
+    for line in _logical_lines(text):
         m = _WIN_ARP_RE.search(line)
         if not m:
             continue
@@ -355,7 +380,7 @@ def _parse_windows_listeners(text: str, scope: str, source: str) -> list[Fact]:
     out: list[Fact] = []
     seen: set[tuple[str, str, str]] = set()
     count = 0
-    for line in text.splitlines():
+    for line in _logical_lines(text):
         m = _WIN_NETSTAT_RE.search(line)
         if not m:
             continue
