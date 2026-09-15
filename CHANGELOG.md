@@ -7,6 +7,38 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Framed the **cruise-control spine** in `docs/ROADMAP.md` + `AGENTS.md` (North Star,
+  planning/docs only — no code): obol's operator-in-control answer to Charon's one-button
+  lab automation. The goal is Charon's reach *without* Charon's brittleness (it beat labs
+  only by hard-coding around their walls and ended the run at any roadblock). Three
+  pillars — **(I) unify the move space** (the built primitives — sessions, listeners,
+  staging, enum, exploits, tunnels, flag capture — become fact-gated *candidate moves* in
+  the one ranked frontier, alongside pack actions; the load-bearing PR, and the real home
+  of §12's "typed step vocabulary"); **(II) cruise control** (`obol cruise`) — advance one
+  real, scope-gated, proof-bound move at a time with a **stop-contract** (manual-required
+  / noisy / ambiguous / failure / objective-complete) and the operator's foot on the
+  brake, auto-driving recon/enum by default and checkpoint-gating everything past it;
+  **(III) resumable handoff + external-action ingestion** — paste-and-parse (primary,
+  through the same proof-bound parser) and operator-attested assertion (a marked escape
+  hatch), so a roadblock is a graceful re-entry from facts, not the end of the run. Cruise
+  control (a car feature, deliberately *not* "autopilot"/"copilot") keeps forward motion
+  while your hands stay near the wheel and disengages the instant you tap the brake.
+- Added `AGENTS.md` **principle 10 — no hard-coded lab wins (the anti-Charon rule):**
+  methodology is universal (Orange-grounded, carried as data) or it is an operator
+  handoff; never a box-specific planner branch, and never a manufactured fact/win/proof
+  artifact to keep a run moving. Reworded the "one deliberate command at a time" identity
+  line to embrace cruise control (each move is still exactly one inspectable, proof-bound,
+  scope-gated command).
+- Refolded ROADMAP **§12** (was "Phase playbooks & runbooks", the automation headline)
+  into "**Named runbooks — a convenience over the cruise-control frontier**": a saved
+  shortcut that seeds moves into the same frontier and `obol cruise` loop, never a second
+  orchestrator. Promoted **§7's per-target objective ladder** to load-bearing (cruise
+  control's goal function + the report's proof checklist). Added ROADMAP **§13 —
+  automatic exploit repair** (bounded, data-driven, operator-approved, proof-bound;
+  preparation-only in OSCP mode) and **§14 — report proof & screenshot handling** (OSCP
+  proof rules as profile data, obol-generated compliant proof blocks, operator-screenshot
+  attach/guide/validate, a pre-submission proof validator, and a no-forgery guardrail).
+
 - Added the **engagement profile** (ROADMAP §7, first slice): an engagement now
   carries a platform/exam type that decides **which flag file names and value
   formats the post-foothold flag hunt looks for**, instead of the hunt being
