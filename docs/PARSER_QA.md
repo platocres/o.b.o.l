@@ -95,6 +95,14 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 | `bloodhound_analysis_attack_path_only` | BloodHound path analysis text | AD attack-path evidence | collection archive, credentials, access |
 | `sqlmap_database_and_webshell_context` | SQLMap SQLi/database/os-shell output | confirmed SQLi, database metadata, database credential material, webshell context | validated credentials, Windows/Linux foothold, admin/SYSTEM |
 | `git_dumper_source_candidate_secret` | git-dumper plus source grep | exposed Git source and source-secret candidates | validated credentials, web auth, access |
+| `web_lfi_etc_passwd_read` | manual LFI reading `/etc/passwd` | confirmed LFI, looted file, Linux OS hint | credentials, foothold, shell, admin |
+| `web_lfi_php_filter_source` | LFI `php://filter` base64 source | confirmed LFI, exposed PHP source, looted file | validated/plaintext credentials |
+| `web_cmdi_uid_command_output` | command injection returning `uid=` | confirmed command injection, OS hint | foothold, interactive shell, admin/SYSTEM, credentials |
+| `web_sqli_manual_error_signature` | manual SQLi DBMS error (no sqlmap) | confirmed SQL injection, DBMS fingerprint | database dump/creds, webshell, credentials |
+| `web_ssrf_imds_cloud_credentials` | SSRF to cloud metadata leaking keys | confirmed SSRF, candidate cloud key material | validated credentials, cloud access, admin |
+| `web_sqli_benign_page_no_error` | benign page, injected quote, no error | none | confirmed SQLi, database dump |
+| `web_cmdi_reflected_input_no_execution` | reflected payload, no command output | none | confirmed command injection, upload |
+| `web_lfi_documentation_mention_only` | page that only mentions `/etc/passwd` | none | confirmed LFI, looted file |
 | `linux_privesc_fixture_leads_only` | Linux local enum output | `privesc.*` leads, host kernel/arch | root/admin/SYSTEM |
 | `windows_privesc_fixture_leads_only` | Windows local enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/SYSTEM |
 | privesc parser tests | Linux/Windows post-foothold enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/root/SYSTEM unless proof output shows it |

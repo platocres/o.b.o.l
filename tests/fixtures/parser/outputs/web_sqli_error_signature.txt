@@ -1,0 +1,2 @@
+<b>Warning</b>:  mysqli_fetch_array() expects parameter 1 to be mysqli_result, bool given
+You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near ''1''' at line 1
