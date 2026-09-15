@@ -136,6 +136,8 @@ def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
 class EngagementCruiseResult:
     """The result of cruising every in-scope target (the recursion across segments)."""
     hosts: list = field(default_factory=list)   # [{host, stop_reason, message, ran, checkpoint, complete}]
+    discoveries: list = field(default_factory=list)  # [{range, created:[...]}] initial scope sweeps
+    pending_sweeps: list = field(default_factory=list)  # scope ranges awaiting approval to sweep
 
     @property
     def checkpoints(self) -> list:
@@ -147,9 +149,34 @@ class EngagementCruiseResult:
 
     def to_dict(self) -> dict:
         return {"engagement": True, "hosts": self.hosts,
+                "discoveries": self.discoveries, "pending_sweeps": self.pending_sweeps,
                 "summary": {"cruised": len(self.hosts),
                             "checkpoints": len(self.checkpoints),
-                            "complete": len(self.complete)}}
+                            "complete": len(self.complete),
+                            "discovered": sum(len(d.get("created", [])) for d in self.discoveries)}}
+
+
+def _discover_scope(ws, result, auto_kinds, surface) -> None:
+    """The initial recursion step: sweep authorized-but-unswept scope RANGES to populate
+    targets, so cruise can start from a bare /24 — not only cruise existing hosts. A scope
+    sweep is a through-the-network active scan, so it is `approve`-tier: it auto-runs only
+    in lab mode or when the operator passed --sweep; otherwise it is a pending checkpoint."""
+    from . import autonomy, discovery
+    swept = {r.get("range") for r in ws.runs if r.get("sweep") and not r.get("tunnel")}
+    for entry in list(ws.scope):
+        if "/" not in entry or entry in swept:
+            continue  # a single host, or already swept
+        decision = autonomy.decide(ws, kind="sweep", base_tier="approve")
+        if decision == "auto" or "sweep" in auto_kinds:
+            try:
+                summary = discovery.run_sweep(ws, entry)
+            except Exception as exc:  # noqa: BLE001 — a refused/failed sweep is not fatal
+                result.pending_sweeps.append(entry)
+                continue
+            result.discoveries.append({"range": entry, "created": summary.get("created", []),
+                                       "hosts": summary.get("hosts", [])})
+        elif decision == "ask":
+            result.pending_sweeps.append(entry)
 
 
 def cruise_engagement(ws, *, max_steps: int = DEFAULT_MAX_STEPS, max_hosts: int = 64,
@@ -163,6 +190,9 @@ def cruise_engagement(ws, *, max_steps: int = DEFAULT_MAX_STEPS, max_hosts: int 
     per-host checkpoint; obol never crosses into a new segment without the operator's nod.
     """
     result = EngagementCruiseResult()
+    # initial recursion step: sweep authorized scope ranges to populate targets first, so
+    # `obol cruise --all` can start from a bare /24 rather than only cruise known hosts.
+    _discover_scope(ws, result, auto_kinds, surface)
     done: set[str] = set()
     while len(done) < max_hosts:
         pending = [t["host"] for t in ws.targets if normalize_target(t["host"]) not in done]

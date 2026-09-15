@@ -235,6 +235,59 @@ def scan() -> dict:
             "scanned_at": time.time()}
 
 
+def missing_tools() -> list[dict]:
+    """Catalogue tools that are not found and that obol can auto-install (have an apt or
+    pipx hint, and are not flagged manual). The set for the one-pass installer."""
+    overrides = load_overrides()
+    out: list[dict] = []
+    for t in REGISTRY:
+        if getattr(t, "manual", False) or not (t.apt or t.pipx):
+            continue
+        if detect(t, overrides)["found"]:
+            continue
+        out.append({"key": t.key, "label": t.label,
+                    "apt": t.apt, "pipx": t.pipx,
+                    "install": install_command(t.key)})
+    return out
+
+
+def install_plan(missing: list[dict] | None = None) -> dict:
+    """A one-pass install plan for the missing tools: a single apt-get line for all apt
+    packages, one pipx line per pipx package, and the manual leftovers. Local system change,
+    so the caller confirms; apt runs under sudo (which prompts on the real TTY)."""
+    missing = missing if missing is not None else missing_tools()
+    apt_pkgs, pipx_pkgs, manual = [], [], []
+    for t in missing:
+        if t.get("apt"):
+            apt_pkgs.append(t["apt"])
+        elif t.get("pipx"):
+            pipx_pkgs.append(t["pipx"])
+        else:
+            manual.append(t["label"])
+    commands: list[str] = []
+    if apt_pkgs:
+        commands.append("sudo apt-get install -y " + " ".join(sorted(set(apt_pkgs))))
+    for pkg in sorted(set(pipx_pkgs)):
+        commands.append(f"pipx install {pkg}")
+    return {"apt": sorted(set(apt_pkgs)), "pipx": sorted(set(pipx_pkgs)),
+            "manual": manual, "commands": commands}
+
+
+def run_install(plan: dict) -> bool:
+    """Run a one-pass install plan. apt runs under sudo, inheriting this terminal so SUDO
+    ITSELF prompts for the password — obol never sees or stores it. Returns True if every
+    command exited 0. Never runs in a non-interactive context that could hang on a prompt."""
+    import subprocess
+    ok = True
+    for cmd in plan.get("commands", []):
+        try:
+            r = subprocess.run(cmd.split(), check=False)  # stdin/out inherited → sudo prompts on TTY
+            ok = ok and (r.returncode == 0)
+        except Exception:  # noqa: BLE001
+            ok = False
+    return ok
+
+
 def install_command(key: str) -> str:
     t = _BY_KEY.get(key)
     if not t:

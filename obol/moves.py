@@ -131,6 +131,21 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
                     "user": o.get("user", ""), "pth": bool(o.get("pth"))},
         ))
 
+    # 2b) reverse-shell listener (§8) — a LOCAL move (obol's own box) offered when the host
+    #     has a code-execution path (a confirmed web RCE, or an exploit candidate) but no
+    #     live session yet: start a listener + prep the payload so you can catch a shell.
+    exec_facts = ("web.cmdi_confirmed", "web.upload_confirmed", "exploit.candidate")
+    has_session = any(s.get("status") == "active" for s in ws.sessions_for(host))
+    if not has_session and any(tf.has(k) for k in exec_facts):
+        moves.append(Move(
+            kind="listener", id="listener:start",
+            label="Start a reverse-shell listener (catch a shell)",
+            phase="access", ready=True, priority=70,
+            autonomy=autonomy.PRIMITIVE_TIER.get("listener", "auto"),
+            detail={"os": "windows" if tf.has("host.os_family") and "windows" in
+                    str(tf.values("host.os_family")).lower() else "linux"},
+        ))
+
     # Escalate/pivot primitives are post-foothold by nature. `eligible_exploits` and
     # `eligible_tunnels` already self-gate on a foothold; `eligible_enum` is permissive
     # (it lists OS tools as not-ready pre-foothold), so gate all three here on a proven

@@ -45,7 +45,7 @@ def fact_origin(fact) -> str:
     src = (getattr(fact, "source", "") or "")
     if src.startswith(OPERATOR_ATTESTED + ":"):
         return "operator-attested"
-    if src.startswith(OPERATOR_SOURCE + ":"):
+    if src.startswith("operator-session:") or src.startswith(OPERATOR_SOURCE + ":"):
         return "operator-executed"
     return "obol"
 
@@ -94,6 +94,36 @@ def ingest_output(ws, text: str, *, action_id: str = "", target: str = "",
     ws.save()
     return {"ok": True, "added": added, "target": host, "action": action.id,
             "parsed": len(facts)}
+
+
+def add_credential(ws, *, user: str, password: str = "", nthash: str = "", domain: str = "",
+                   admin: bool = False, target: str = "", note: str = "",
+                   surface: str = "cli") -> dict:
+    """Record a credential the operator found by hand as a validated
+    ``credential.available`` fact — the clean front door onto the pillar-III assert path.
+
+    Normalizes into the exact value shape the session / tunnel / flag layers read (`user`,
+    `password` and/or `nthash`, `domain`), so a manually-recovered admin password or NT
+    hash immediately unlocks PtH/password login, SSH-transport tunnels, and the flag hunt.
+    Stamped operator-attested so its lineage stays honest. Returns {ok, added, kind, scope}.
+    """
+    user = (user or "").strip()
+    if not user:
+        raise ValueError("a username is required (e.g. --user Administrator)")
+    if not (password or nthash):
+        raise ValueError("a password or an NT hash is required")
+    value: dict = {"user": user}
+    if password:
+        value["password"] = password
+    if nthash:
+        value["nthash"] = nthash.strip()
+    if domain:
+        value["domain"] = domain
+    if admin:
+        value["admin"] = True
+    return assert_fact(ws, "credential.available", value=value, scope="",
+                       target=target, note=note or "credential added by operator",
+                       surface=surface)
 
 
 def assert_fact(ws, kind: str, *, value: dict | None = None, scope: str = "",

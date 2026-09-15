@@ -335,9 +335,15 @@ def cmd_cruise(args) -> None:
 
         eng = cruise_layer.cruise_engagement(ws, max_steps=args.max_steps,
                                              auto_kinds=auto_kinds, on_host=on_host, on_step=None)
+        for d in eng.discoveries:
+            print(f"  swept {d['range']}: +{len(d.get('created', []))} new host(s)")
         s = eng.to_dict()["summary"]
         print(f"\ncruised {s['cruised']} target(s): {s['checkpoints']} at a checkpoint, "
-              f"{s['complete']} complete.")
+              f"{s['complete']} complete"
+              + (f"; discovered {s['discovered']} host(s)" if s['discovered'] else "") + ".")
+        if eng.pending_sweeps:
+            print(f"\n  scope ranges awaiting a sweep (approve): {', '.join(eng.pending_sweeps)}")
+            print("  → `obol cruise --all --sweep` to sweep them, or `obol scan`.")
         opens = [e for e in eng.hosts if e.get("checkpoint")]
         if opens:
             print("\nyour checkpoints:")
@@ -444,6 +450,77 @@ def cmd_objectives(args) -> None:
             line += f"   ← {_trim(r['evidence'])}"
         print(line)
     print()
+
+
+def cmd_follow(args) -> None:
+    from . import follow
+    ws = _load_or_exit()
+    if args.penelope:
+        res = follow.tail_penelope_logs(ws, log_dir=args.log_dir, target=args.target)
+        if not res.get("ok"):
+            print(res.get("reason", "no penelope logs found"), file=sys.stderr)
+            raise SystemExit(1)
+        print(f"ingested {len(res['files'])} penelope log(s); "
+              f"{len(res['added'])} operator-session fact(s): {', '.join(res['added']) or '—'}")
+        return
+    argv = args.cmd
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv:
+        print("usage: obol follow -- <interactive command>   (e.g. obol follow -- evil-winrm -i HOST -u U -p P)",
+              file=sys.stderr)
+        print("   or: obol follow --penelope [--log-dir DIR]", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"following: {' '.join(argv)}  (obol is watching this session; drive it normally)\n")
+    res = follow.run_followed(ws, argv, target=args.target)
+    print(f"\nsession ended — {len(res['added'])} operator-session fact(s): "
+          f"{', '.join(res['added']) or '—'}")
+    if res.get("screenshot"):
+        print(f"proof captured — screenshot saved: {res['screenshot']}")
+    print("run `obol cruise` to continue from what obol learned.")
+
+
+def cmd_install(args) -> None:
+    from . import tools
+    ws = None
+    missing = tools.missing_tools()
+    if not missing:
+        print("all catalogued tools obol can auto-install are present.")
+        return
+    plan = tools.install_plan(missing)
+    print(f"\n{len(missing)} tool(s) missing; obol can install them in one pass:")
+    for t in missing:
+        print(f"  - {t['label']:22} ({t['install']})")
+    print("\ncommands:")
+    for c in plan["commands"]:
+        print(f"  $ {c}")
+    if plan["manual"]:
+        print("\nmanual (no apt/pipx hint): " + ", ".join(plan["manual"]))
+    if args.dry_run:
+        print("\n(dry run — nothing installed)")
+        return
+    if not args.yes:
+        print("\napt needs sudo — it will prompt on this terminal. re-run with --yes to proceed,")
+        print("or copy the commands above. (obol never stores your sudo password.)")
+        return
+    ok = tools.run_install(plan)
+    print("\ninstall pass complete." if ok else "\ninstall pass finished with errors — see output above.")
+
+
+def cmd_cred(args) -> None:
+    from . import ingest
+    ws = _load_or_exit()
+    try:
+        res = ingest.add_credential(ws, user=args.user, password=args.password,
+                                    nthash=args.nthash, domain=args.domain, admin=args.admin,
+                                    target=args.target, note=args.note)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
+    where = res["scope"] or "(engagement)"
+    kind = "NT hash" if args.nthash and not args.password else "password"
+    print(f"added credential ({kind}) for {args.user} on {where}.")
+    print("obol will use it for login, tunnels, and the flag hunt — run `obol moves` or `obol cruise`.")
 
 
 def cmd_ingest(args) -> None:
@@ -1625,6 +1702,41 @@ try:
                                            "(initial access → privesc → local → root flag)")
     po.add_argument("host", nargs="?", default="", help="target host (default: active target)")
     po.set_defaults(func=cmd_objectives)
+
+    pf = sub.add_parser("follow", help="follow your OWN interactive session — obol watches "
+                                       "and parses it into facts (no copy-paste, no auto-login)")
+    pf.add_argument("--target", default="", help="host the session is on (default: active target)")
+    pf.add_argument("--penelope", action="store_true",
+                    help="ingest penelope's session logs instead of wrapping a command")
+    pf.add_argument("--log-dir", default="", help="penelope log dir (default: auto-detect)")
+    pf.add_argument("cmd", nargs=argparse.REMAINDER,
+                    help="-- <interactive command>  (e.g. -- evil-winrm -i H -u U -p P)")
+    pf.set_defaults(func=cmd_follow)
+
+    pins = sub.add_parser("install", help="one-pass install of the missing tools obol needs "
+                                          "(apt + pipx; sudo prompts on your terminal)")
+    pins.add_argument("--dry-run", action="store_true", help="show the plan, install nothing")
+    pins.add_argument("--yes", action="store_true", help="run the install pass")
+    pins.set_defaults(func=cmd_install)
+
+    pcr = sub.add_parser("cred", help="record a credential you found by hand so obol can use "
+                                      "it (login / tunnels / flag hunt)")
+    pcr_sub = pcr.add_subparsers(dest="cred_cmd")
+    pcra = pcr_sub.add_parser("add", help="add a validated credential")
+    pcra.add_argument("--user", required=True, help="username (e.g. Administrator)")
+    pcra.add_argument("--password", default="", help="plaintext password")
+    pcra.add_argument("--nthash", default="", help="NT hash for pass-the-hash")
+    pcra.add_argument("--domain", default="", help="domain, if any")
+    pcra.add_argument("--admin", action="store_true", help="mark this as an admin credential")
+    pcra.add_argument("--target", default="", help="host it belongs to (default: active target)")
+    pcra.add_argument("--note", default="", help="how you found it (recorded as lineage)")
+    pcra.set_defaults(func=cmd_cred)
+
+    def _cred_usage(_a):
+        print("usage: obol cred add --user U [--password P | --nthash H] [--domain D] [--admin]",
+              file=sys.stderr)
+        raise SystemExit(1)
+    pcr.set_defaults(func=_cred_usage)
 
     pi = sub.add_parser("ingest", help="parse output from a command you ran yourself into "
                                        "facts (paste on stdin or --file) — the way back into cruise")

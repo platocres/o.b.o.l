@@ -954,7 +954,18 @@ on the exam: an automated-*exploitation* tool, and obol *auto-firing* an exploit
   Unreleased changelog. `autonomy.decide` (reach × mode × override), profile-driven exam/
   lab/default modes, the two uncrossable exam invariants, visible/settable policy, and the
   invariant tests.
-- **(b) Getting-on-the-box moves + fingerprint matcher — TODO.** Wire the built primitives
+- **(b) Getting-on-the-box moves — DONE (fingerprint matcher still TODO).** A `listener`
+  move (local/auto, catch a reverse shell) offered on a code-exec path; `obol cred add`
+  (+ `POST /api/cred` + a web Add-credential form) so a hand-found password/NT hash becomes
+  `credential.available` and immediately unlocks login/tunnels/flags; and the **initial
+  engagement discovery sweep** now runs inside `cruise_engagement` (`obol cruise --all`
+  sweeps authorized scope ranges first, gated by the autonomy policy — auto in lab/`--sweep`,
+  a pending checkpoint on the exam) so cruise can start from a bare /24. **Still TODO in (b):**
+  the **fingerprint → probable-exploit matcher** (service/version/OS → ranked candidate
+  exploits, extending `exploits.py`), `connect` (bind shell) and SMB-exec logins, and a
+  `stage`-as-move with loose-priv-dir auto-detection — its own focused follow-up (needs a
+  curated known-exploit dataset).
+- **(b-orig) Getting-on-the-box moves + fingerprint matcher — TODO.** Wire the built primitives
   into the frontier as moves with the right reach: `listener` (start a penelope/nc listener
   — **local**, auto-safe) + reverse-shell payload prep; `login` extensions (SMB exec) and
   `connect` (bind shell) — **target**; `stage` (push a cached tool to an auto-detected
@@ -967,7 +978,15 @@ on the exam: an automated-*exploitation* tool, and obol *auto-firing* an exploit
   Also add the **initial engagement discovery sweep as a move** (the analogue of the
   through-tunnel sweep — so `obol cruise --all` can populate targets from a bare scope
   range, not just cruise existing ones).
-- **(c) Followed sessions — TODO.** obol follows the operator through a *manual* login it
+- **(c) Followed sessions — DONE.** `obol/follow.py`: `obol follow -- <cmd>` runs the
+  operator's own interactive tool in a logged PTY and `parse_transcript` live-parses it
+  into `operator-session:` facts (no copy-paste, no auto-login); `obol follow --penelope`
+  (+ `POST /api/follow/penelope`) tails penelope's own session logs; `capture_screenshot`
+  grabs a REAL desktop screenshot at a proof moment (never a forgery), degrading when no
+  display/tool. Copy-paste ingest is now the fallback for un-wrappable channels (RDP).
+  **Still TODO:** true *live* incremental parsing (v1 parses on session end) and proof-
+  moment prompting for the combined `ip a && cat proof.txt`.
+- **(c-orig) Followed sessions — TODO.** obol follows the operator through a *manual* login it
   does not perform: `obol follow -- <interactive cmd>` runs the operator's own tool
   (evil-winrm/ssh/…) inside a logged PTY and live-parses the transcript into
   `operator-session:` facts as they type; plus native **tailing of penelope's session
@@ -977,7 +996,14 @@ on the exam: an automated-*exploitation* tool, and obol *auto-firing* an exploit
   objective, degrading to a captured proof-text block. RDP (graphical) stays copy-paste/
   screenshot. Copy-paste ingest (§ pillar III) demotes to the fallback for un-wrappable
   channels.
-- **(d) One-pass local provisioning + sudo — TODO.** `obol` computes every referenced tool
+- **(d) One-pass local provisioning + sudo — DONE.** `tools.missing_tools`/`install_plan`/
+  `run_install` + `obol install [--dry-run] [--yes]` (and `GET /api/install`): computes the
+  catalogue tools that are absent and installable, batches them into one apt line + pipx
+  lines, and runs the pass with **sudo prompting on the real TTY** (obol never sees or
+  stores the password). Local *read* is auto; the install (a local system change) asks
+  once. **Still TODO:** the web memory-only `sudo -S` opt-in (the web currently hands off
+  the commands).
+- **(d-orig) One-pass local provisioning + sudo — TODO.** `obol` computes every referenced tool
   that isn't installed and offers a **one-pass install** (apt + pipx, from `tools.py`
   hints). Local *read/prep* is auto; local *system change* (install / sudo) is **ask-once**.
   Sudo default: let sudo prompt on the real TTY (obol never sees the password); the web

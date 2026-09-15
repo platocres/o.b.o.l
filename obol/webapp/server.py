@@ -1574,6 +1574,23 @@ def create_app(base, *, token: Optional[str] = None):
             return cruise_layer.cruise(ws, h, max_steps=max_steps,
                                        auto_kinds=auto_kinds, surface="web").to_dict()
 
+    @app.get("/api/install")
+    def api_install():
+        """The one-pass install plan for missing tools (show only — running install needs
+        a real terminal for sudo, so the web hands off the commands)."""
+        from .. import tools
+        missing = tools.missing_tools()
+        return {"missing": missing, "plan": tools.install_plan(missing)}
+
+    @app.post("/api/follow/penelope")
+    def api_follow_penelope(payload: dict = Body(...)):
+        """Ingest penelope's session logs into operator-session facts (§15c)."""
+        from .. import follow
+        with _RUN_LOCK:
+            ws = active()
+            return follow.tail_penelope_logs(ws, log_dir=(payload or {}).get("log_dir", ""),
+                                             target=(payload or {}).get("target", ""))
+
     @app.get("/api/autonomy")
     def api_autonomy():
         """The effective autonomy policy — the exam/lab consent separation, made visible."""
@@ -1615,6 +1632,25 @@ def create_app(base, *, token: Optional[str] = None):
                 ws, text, action_id=(payload or {}).get("action", ""),
                 target=(payload or {}).get("target", ""),
                 note=(payload or {}).get("note", ""), surface="web")
+
+    @app.post("/api/cred")
+    def api_cred(payload: dict = Body(...)):
+        """Add a credential the operator found by hand (pillar III) — obol then uses it
+        for login/tunnels/flags. Normalizes into credential.available, operator-attested."""
+        from .. import ingest as ingest_layer
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return ingest_layer.add_credential(
+                    ws, user=(payload or {}).get("user", ""),
+                    password=(payload or {}).get("password", ""),
+                    nthash=(payload or {}).get("nthash", ""),
+                    domain=(payload or {}).get("domain", ""),
+                    admin=bool((payload or {}).get("admin")),
+                    target=(payload or {}).get("target", ""),
+                    note=(payload or {}).get("note", ""), surface="web")
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
 
     @app.post("/api/assert")
     def api_assert(payload: dict = Body(...)):
