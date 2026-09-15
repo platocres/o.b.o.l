@@ -7,6 +7,31 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Completed the pivoting milestone (§6d/e/f) on top of the staging layer:
+  - **Auto-tunnel cascade (§6d).** `tunnels.auto_tunnel` walks a feasibility-ordered
+    cascade (ligolo → sshuttle → chisel → ssh `-D` → ssh `-L` → native `netsh
+    portproxy`) that is **privilege-, OS-, credential-, and tooling-aware** — a method
+    whose binary obol can neither find nor fetch, or that needs admin/creds it lacks,
+    is skipped with a reason. For the chosen transport obol **stages its binary via the
+    §8 transfer layer, confirms the stage landed, records the on-target path +
+    verification on the tunnel, and points the setup command at that staged path** (a
+    generic mechanism for any tunnel tool, driven by `_TUNNEL_MATERIAL`). Falls through
+    on failure down to a native last resort, and is honest that the fallback is a
+    single-port forward, not a full subnet route. `feasible_cascade` exposes the dry
+    plan. `obol tunnel auto` + `GET /api/tunnel/cascade`, `POST /api/run/tunnel/auto`.
+  - **Through-tunnel sweep (§6e).** `discovery.run_tunnel_sweep` re-runs discovery
+    *through* a tunnel with a transport-appropriate technique (SOCKS/forward →
+    `proxychains -q nmap -sT -Pn`; transparent → `nmap -sT -Pn`), adds any live host as
+    a target (the recursion), and **doubles as the health proof** — hosts answering flip
+    the tunnel to `up`, an empty result to `down`. `parse_hosts_with_open_ports` keeps
+    only hosts with an open port (a bare `-Pn` report line is not proof of life).
+    `obol tunnel sweep <id>` + `POST /api/run/tunnel/sweep`.
+  - **Topology map (§6f).** `graph.build_topology` projects the engagement as network
+    **segments joined by tunnel hops** — scope range → its hosts (foothold/session
+    flagged) → the pivot host → its tunnel (transport/status/proxychains/staged binary
+    path) → the exposed segment, with pivot-authorized segments marked distinct from
+    operator scope. `obol topology` + `GET /api/topology`, and the tunnels/auto-tunnel/
+    sweep controls on the web Access / Pivot tab.
 - Started the payload staging & tool-provisioning layer (§8), with a design contract
   in `docs/PAYLOAD_STAGING.md` (posture: enum material auto-runs behind one-click
   approval, exploit material is applicability-gated then stages + crafts a filled-in

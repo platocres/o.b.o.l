@@ -846,6 +846,37 @@ def cmd_pivots(args) -> None:
     print("\nbuild a tunnel: obol tunnel open <host> --kind <ligolo|chisel|sshuttle|ssh-dynamic|ssh-local> --subnet <cidr>")
 
 
+def cmd_topology(args) -> None:
+    """Show the pivot topology: network segments joined by tunnels (§6f)."""
+    from .graph import build_topology
+    ws = _load_or_exit()
+    topo = build_topology(ws)
+    if not topo["segments"]:
+        print("no network segments yet — add a CIDR to scope and sweep it.")
+        return
+    print("PIVOT TOPOLOGY")
+    for seg in topo["segments"]:
+        src = "operator" if seg["source"] == "operator" else f"pivot-authorized via {seg['via_tunnel']}"
+        print(f"\n  ▢ {seg['cidr']}  ({src})")
+        for h in seg["hosts"]:
+            marks = []
+            if h["foothold"]:
+                marks.append("foothold")
+            if h["session"]:
+                marks.append("session")
+            tag = f"  [{', '.join(marks)}]" if marks else ""
+            print(f"      • {h['label']} ({h['host']}){tag}")
+        if not seg["hosts"]:
+            print("      (no hosts discovered yet)")
+    if topo["hops"]:
+        print("\n  TUNNEL HOPS")
+        for hop in topo["hops"]:
+            pxy = " proxychains" if hop["proxychains"] else ""
+            staged = f"  [{hop['staged_material']} @ {hop['staged_path']}]" if hop["staged_material"] else ""
+            frm = hop["from_segment"] or hop["pivot_host"]
+            print(f"    {frm} ──{hop['kind']}/{hop['transport']}[{hop['status']}]{pxy}──▶ {hop['to_segment']}{staged}")
+
+
 def cmd_tunnels(args) -> None:
     """List tunnel transports and any live tunnels."""
     ws = _load_or_exit()
@@ -887,6 +918,51 @@ def cmd_tunnel(args) -> None:
             print("hosts reached through this tunnel are auto-prefixed with `proxychains -q`.")
         print("\nlaunch the tunnel in your terminal:")
         print(f"   $ {res['setup_command']}")
+    elif cmd == "auto":
+        host = args.target or ws.target
+        if not host:
+            print("no target — pass a host or set an active target.", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            res = tunnels.auto_tunnel(ws, host, subnet=args.subnet, lhost=args.lhost,
+                                      remote=args.remote, remote_port=args.remote_port,
+                                      local_port=args.local_port, surface="cli")
+        except TunnelError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print("auto-tunnel cascade:")
+        for a in res["attempts"]:
+            if a.get("ok"):
+                si = a.get("staged_info") or {}
+                staged = f" [staged {si['material']} → {si['remote_path']}, {'verified' if si.get('verified') else 'unverified'}]" if si else ""
+                print(f"  {board.SYM_OK} {a['kind']}{staged}")
+            else:
+                print(f"  × {a['kind']}: {a.get('reason', 'failed')}")
+        if not res["ok"]:
+            print(f"\n× {res.get('reason', 'no tunnel')}", file=sys.stderr)
+            raise SystemExit(1)
+        t = res["tunnel"]
+        print(f"\n{board.SYM_OK} {t['kind']} tunnel {t['id']} ({t['transport']}, status: {t['status']}).")
+        if not res["full_route"]:
+            print("  note: this is a SINGLE-PORT forward, not a full subnet route.")
+        if res["scope_added"]:
+            print(f"  scope auto-extended (pivot-authorized): {res['scope_added']}")
+        if res["proxychains"]:
+            print("  hosts through this tunnel are auto-prefixed with `proxychains -q`.")
+        print(f"\nlaunch it:\n   $ {res['setup_command']}")
+        print(f"\n{res['sweep_hint']}")
+    elif cmd == "sweep":
+        try:
+            res = discovery.run_tunnel_sweep(ws, args.id)
+        except RunnerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"through-tunnel sweep of {res['subnet']} via {res['tunnel']} ({res['transport']})")
+        print(f"  tunnel health: {res['status']}  ·  {len(res['hosts'])} live host(s)")
+        if res["created"]:
+            print(f"  new targets: {', '.join(res['created'])}")
+        if res["existing"]:
+            print(f"  already known: {', '.join(res['existing'])}")
     elif cmd == "close":
         try:
             tunnels.close_tunnel(ws, args.id)
@@ -1285,6 +1361,7 @@ try:
     # pivots + tunnels (§6c/§6d) --------------------------------------------------
     sub.add_parser("pivots", help="show pivot candidates (multi-homed hosts + adjacent subnets)").set_defaults(func=cmd_pivots)
 
+    sub.add_parser("topology", help="show the pivot topology (segments joined by tunnels)").set_defaults(func=cmd_topology)
     sub.add_parser("tunnels", help="list tunnel transports and any live tunnels").set_defaults(func=cmd_tunnels)
     ptunnel = sub.add_parser("tunnel", help="open or manage a pivot tunnel (ligolo/chisel/sshuttle/ssh)")
     tunnel_sub = ptunnel.add_subparsers(dest="tunnel_cmd")
@@ -1299,6 +1376,17 @@ try:
     t_open.add_argument("--remote", default="", help="remote host for a single-port forward (ssh -L)")
     t_open.add_argument("--remote-port", type=int, default=0, dest="remote_port", help="remote port for a single-port forward")
     t_open.set_defaults(func=cmd_tunnel, tunnel_cmd="open")
+    t_auto = tunnel_sub.add_parser("auto", help="auto-tunnel: walk the feasibility cascade, stage the binary, stand up the best pivot")
+    t_auto.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    t_auto.add_argument("--subnet", default="", help="subnet to route (default: inferred from pivot candidates)")
+    t_auto.add_argument("--lhost", default="", help="your listener host/IP")
+    t_auto.add_argument("--local-port", type=int, default=0, dest="local_port", help="local listener/forward port")
+    t_auto.add_argument("--remote", default="", help="remote host for a portforward fallback")
+    t_auto.add_argument("--remote-port", type=int, default=0, dest="remote_port", help="remote port for a portforward fallback")
+    t_auto.set_defaults(func=cmd_tunnel, tunnel_cmd="auto")
+    t_sweep = tunnel_sub.add_parser("sweep", help="through-tunnel sweep: re-run discovery through a tunnel (confirms health, finds hosts)")
+    t_sweep.add_argument("id", help="tunnel id (see `obol tunnels`)")
+    t_sweep.set_defaults(func=cmd_tunnel, tunnel_cmd="sweep")
     for name, helptext in (("close", "mark a tunnel down"),
                            ("rm", "remove a tunnel record (retracts its auto-added scope)")):
         tp = tunnel_sub.add_parser(name, help=helptext)

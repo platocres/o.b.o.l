@@ -291,6 +291,95 @@ def target_phase(facts: FactSet) -> str:
     return max((phase_of_kind(k) for k in kinds), key=lambda p: _PHASE_INDEX[p])
 
 
+def build_topology(ws) -> dict:
+    """The pivot topology (§6f): network segments joined by tunnels.
+
+    A focused projection (distinct from the full engagement graph): each authorized
+    network is a **segment** carrying its hosts; each live/attempted tunnel is a **hop**
+    from a pivot host on one segment to the segment it exposes, tagged with transport,
+    status, proxychains, and the staged transport binary's on-target path. This is the
+    recursive-segment-mapper's map — scope range → its hosts → the multi-homed host →
+    its tunnel → the next segment.
+
+    Read-only; it invents no reachability, only draws the hops proven tunnels created.
+    """
+    import ipaddress
+
+    foothold_kinds = ("foothold.linux", "foothold.windows", "access.shell",
+                      "access.admin", "access.system")
+    active_session_hosts = {s.get("host") for s in ws.sessions if s.get("status") == "active"}
+
+    tunnel_subnets = {}
+    for t in ws.tunnels:
+        sub = t.get("exposed_subnet", "")
+        if sub:
+            tunnel_subnets.setdefault(sub, t.get("id", ""))
+
+    # segments: every CIDR scope entry (operator- or pivot-authorized)
+    segments: list[dict] = []
+    seg_index: dict[str, dict] = {}
+    for entry in ws.scope:
+        if "/" not in entry:
+            continue
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            continue
+        seg = {"cidr": entry, "source": "pivot" if entry in tunnel_subnets else "operator",
+               "via_tunnel": tunnel_subnets.get(entry, ""), "hosts": []}
+        seg_index[entry] = seg
+        segments.append(seg)
+
+    def _place_host(host: str, target: dict) -> None:
+        tf = ws.facts_for_target(host)
+        foothold = any(tf.has(k) for k in foothold_kinds)
+        row = {"host": host, "label": target.get("label") or host,
+               "foothold": foothold, "session": host in active_session_hosts}
+        placed = False
+        try:
+            ip = ipaddress.ip_address(host)
+            for seg in segments:
+                if ip in ipaddress.ip_network(seg["cidr"], strict=False):
+                    seg["hosts"].append(row)
+                    placed = True
+                    break
+        except ValueError:
+            pass
+        if not placed:
+            row["placed"] = False
+            unsegmented.append(row)
+
+    unsegmented: list[dict] = []
+    for target in ws.targets:
+        _place_host(target["host"], target)
+
+    # hops: a tunnel from its pivot host to the segment it exposes
+    hops: list[dict] = []
+    for t in ws.tunnels:
+        pivot = t.get("host", "")
+        exposed = t.get("exposed_subnet", "")
+        from_seg = ""
+        try:
+            pip = ipaddress.ip_address(pivot)
+            for seg in segments:
+                if pip in ipaddress.ip_network(seg["cidr"], strict=False):
+                    from_seg = seg["cidr"]
+                    break
+        except ValueError:
+            pass
+        hops.append({
+            "tunnel_id": t.get("id", ""), "kind": t.get("kind", ""),
+            "transport": t.get("transport", ""), "status": t.get("status", ""),
+            "proxychains": bool(t.get("proxychains")), "pivot_host": pivot,
+            "from_segment": from_seg, "to_segment": exposed,
+            "staged_material": t.get("staged_material", ""), "staged_path": t.get("staged_path", ""),
+            "staged_verified": bool(t.get("staged_verified")),
+        })
+
+    return {"segments": segments, "hops": hops, "unsegmented": unsegmented,
+            "sessions": [s for s in ws.sessions if s.get("status") == "active"]}
+
+
 def build_engagement_graph(ws) -> dict:
     """The engagement-wide map populated from proven scan and path facts.
 

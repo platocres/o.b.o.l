@@ -298,6 +298,8 @@ function onClick(e) {
     case "listener-start": startListenerPrompt(el.dataset.host || state.target, el.dataset.os || "linux"); break;
     case "listener-close": closeListener(el.dataset.id); break;
     case "cache-get": cacheGet(el.dataset.key); break;
+    case "auto-tunnel": autoTunnel(el.dataset.host || state.target); break;
+    case "tunnel-sweep": sweepTunnel(el.dataset.id); break;
   }
 }
 function onChange(e) {
@@ -807,6 +809,13 @@ async function tabAccess(b) {
     ? d.listeners.map((l) => `<div class="row mono" style="gap:8px;font-size:12px">${esc(l.kind)}:${l.port} <span class="pill">${esc(l.status)}</span>
         <span class="spacer" style="flex:1"></span><button class="btn xs" data-act="listener-close" data-id="${esc(l.id)}">close</button></div>`).join("")
     : `<div class="muted">No listeners.</div>`;
+  const tuns = (d.tunnels || []).length
+    ? d.tunnels.map((t) => `<div class="row mono" style="gap:8px;font-size:12px">${esc(t.kind)}/${esc(t.transport)} <span class="pill">${esc(t.status)}</span>
+        ${t.proxychains ? `<span class="pill" title="hosts through this tunnel are proxychained">proxychains</span>` : ""}
+        ${t.exposed_subnet ? `→ ${esc(t.exposed_subnet)}` : ""}${t.staged_path ? ` <span class="muted">[${esc(t.staged_material)} @ ${esc(t.staged_path)}]</span>` : ""}
+        <span class="spacer" style="flex:1"></span>${t.exposed_subnet ? `<button class="btn xs" data-act="tunnel-sweep" data-id="${esc(t.id)}" title="re-run discovery through this tunnel (confirms health, finds hosts)">sweep</button>` : ""}
+        <button class="btn xs" data-act="close-tunnel" data-id="${esc(t.id)}">close</button></div>`).join("")
+    : `<div class="muted">No tunnels.</div>`;
   return `
     <div class="grid-2">
       <div class="card"><div class="panel-h"><h2>Foothold</h2><span class="muted mono">${esc(fos || "none")}</span></div>${sess}
@@ -819,7 +828,30 @@ async function tabAccess(b) {
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Escalate</h2></div>
       <div class="muted" style="margin-bottom:8px">Applicable exploits (gated on proven leads). Crafting shows the exact command; running is approval-gated.</div>
       ${exp}</div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Pivot / tunnels</h2><button class="btn sm" data-act="auto-tunnel" data-host="${esc(host)}">⚡ Auto-tunnel</button></div>
+      <div class="muted" style="margin-bottom:8px">Auto-tunnel walks the feasibility cascade, stages the transport binary, and stands up the best pivot; sweep confirms it and finds the next segment.</div>${tuns}</div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Staged material</h2></div>${staged}</div>`;
+}
+async function autoTunnel(host) {
+  if (!host) return;
+  const subnet = prompt("Subnet to route through the pivot (blank = infer from pivot candidates)", "");
+  if (subnet === null) return;
+  toast("Auto-tunnel", "walking the cascade + staging the transport …", "ok");
+  try {
+    const r = await apiPost("/api/run/tunnel/auto", { target: host, subnet: subnet || "" });
+    if (!r.ok) { toast("Auto-tunnel failed", r.reason || "no feasible transport", "err"); return; }
+    const staged = r.staged ? ` (staged ${r.staged.material} → ${r.staged.remote_path})` : "";
+    toast("Tunnel up: " + r.kind, (r.full_route ? "subnet route" : "single-port forward") + staged, "ok");
+    render();
+  } catch (e) { toast("Auto-tunnel failed", e.message, "err"); }
+}
+async function sweepTunnel(id) {
+  toast("Through-tunnel sweep", "re-running discovery through the tunnel …", "ok");
+  try {
+    const r = await apiPost("/api/run/tunnel/sweep", { id });
+    toast("Tunnel " + r.status, `${(r.hosts || []).length} host(s) · ${(r.created || []).length} new`, r.status === "up" ? "ok" : "err");
+    render();
+  } catch (e) { toast("Sweep failed", e.message, "err"); }
 }
 async function runEnumTool(host, tool) {
   if (!host || !tool) return;
