@@ -10,6 +10,8 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 - Added post-foothold host/network enumeration actions for Linux and Windows
   footholds, gated on proven shell/session facts and routed through the existing
   runner/parser/store path.
+- Added `sshpass` to the tool inventory so Linux post-foothold SSH enum actions
+  have install/preflight parity with the rest of the Tools page.
 - Added pivot-candidate parsing for Linux `ip`/resolver output and Windows
   `ipconfig`/`route`/`arp`/`netstat` output, producing narrow facts for interfaces,
   IPs, routes, neighbors, DNS servers, listening sockets, multi-homed hosts, and
