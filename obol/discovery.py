@@ -116,6 +116,105 @@ def _record_identity_facts(ws: Workspace, record: dict, source: str) -> list[str
     return produced
 
 
+# A focused TCP-connect scan for the through-tunnel sweep (§6e). A pivot carries only
+# TCP connect (SOCKS especially), so ICMP/SYN/UDP discovery finds nothing — we connect
+# to a small set of high-signal ports and treat a host with any open port as live.
+_TUNNEL_PORTS = "21,22,25,53,80,88,135,139,389,443,445,464,636,1433,3268,3389,5985,8080"
+_OPEN_PORT_RE = re.compile(r"^\d+/tcp\s+open\b", re.MULTILINE)
+
+
+def through_tunnel_discovery_command(transport: str, range_: str) -> str:
+    """The discovery command to run *through* a tunnel, picked from its transport.
+
+    A SOCKS (or single-forward) transport must be wrapped in ``proxychains -q`` and can
+    only do a TCP connect scan (``-sT -Pn``); a transparent L3 route (ligolo/sshuttle)
+    runs the same connect scan directly, no proxychains. ``--open`` keeps only open
+    ports so the parser can tell a live host from a dead address under ``-Pn``."""
+    base = f"nmap -sT -Pn -n --open -p {_TUNNEL_PORTS} {range_}"
+    if transport in {"socks", "portforward"}:
+        return f"proxychains -q {base}"
+    return base
+
+
+def parse_hosts_with_open_ports(text: str) -> list[str]:
+    """Hosts that showed at least one open port in an nmap connect scan — the live
+    hosts found through a tunnel. Under ``-Pn`` nmap prints a report for every address,
+    so a bare report line is not proof of life; an open port is."""
+    hosts: list[str] = []
+    seen: set[str] = set()
+    # split into per-host blocks on the report line, keep a block only if it has an open port
+    blocks = re.split(r"(?=^Nmap scan report for )", text or "", flags=re.MULTILINE)
+    for block in blocks:
+        m = _REPORT_RE.search(block)
+        if not m or not _OPEN_PORT_RE.search(block):
+            continue
+        raw = m.group("ip") or m.group("name")
+        norm = normalize_target(raw)
+        try:
+            ipaddress.ip_address(norm)
+        except ValueError:
+            continue
+        if norm and norm not in seen:
+            seen.add(norm)
+            hosts.append(norm)
+    return hosts
+
+
+def run_tunnel_sweep(ws: Workspace, tid: str, *, dry_run: bool = False,
+                     timeout: int = 900) -> dict:
+    """Re-run discovery *through* a live tunnel (§6e): the recursion, and the tunnel's
+    health proof. Scans the tunnel's exposed (already-scoped) subnet with a
+    transport-appropriate technique, adds any live host as a target, and flips the
+    tunnel to ``up`` when hosts answer or ``down`` when none do (an empty/timeout result
+    means the pivot isn't carrying traffic). Recurses the loop onto the next segment."""
+    tunnel = ws.get_tunnel(tid)
+    if not tunnel:
+        raise RunnerError(f"no tunnel {tid!r}")
+    subnet = tunnel.get("exposed_subnet", "")
+    if not subnet:
+        raise RunnerError(f"tunnel {tid!r} exposes no subnet to sweep (a single-port forward)")
+    if subnet not in ws.scope:
+        raise RunnerError(f"scope refused {subnet}: the tunnel's subnet is not authorized")
+
+    command = through_tunnel_discovery_command(tunnel.get("transport", "socks"), subnet)
+    tool = command.split()[0]
+    result = run_command(ws, command=command, tool=tool, timeout=timeout,
+                         dry_run=dry_run, scope_target=subnet)
+    summary: dict = {"tunnel": tid, "subnet": subnet, "transport": tunnel.get("transport", ""),
+                     "command": command, "dry_run": dry_run, "returncode": result.returncode,
+                     "timed_out": result.timed_out, "hosts": [], "created": [], "existing": [],
+                     "status": tunnel.get("status", "")}
+    if dry_run:
+        return summary
+
+    hosts = parse_hosts_with_open_ports(result.stdout)
+    created: list[str] = []
+    existing: list[str] = []
+    for host in hosts:
+        allowed, _ = target_in_scope(host, ws.scope)
+        if not allowed:
+            continue
+        (existing if ws.get_target(host) else created).append(host)
+        ws.add_target(host)
+        if ws.facts.add(Fact("host.up", f"host:{host}", {"target": host, "via_tunnel": tid},
+                             ProofState.SUPPORTED, command)):
+            pass
+
+    # the sweep IS the health proof: hosts answering prove the pivot carries traffic.
+    status = "up" if hosts else "down"
+    ws.update_tunnel(tid, status=status)
+    summary.update(hosts=hosts, created=created, existing=existing, status=status)
+    ws.record_run(
+        tool, command, ["host.up"] if hosts else [],
+        target="", surface="tunnel-sweep", sweep=True, tunnel=tid, range=subnet,
+        returncode=result.returncode, timed_out=result.timed_out, dry_run=False,
+        stdout=str(result.stdout_path), stderr=str(result.stderr_path),
+        duration_ms=result.duration_ms, discovered=len(hosts), created=len(created),
+    )
+    ws.save()
+    return summary
+
+
 def run_sweep(ws: Workspace, range_: str, *, dry_run: bool = False,
               timeout: int = 600) -> dict:
     """Sweep an authorized range for live hosts and add each as a target.
@@ -190,4 +289,7 @@ __all__ = [
     "parse_live_hosts",
     "parse_live_host_records",
     "run_sweep",
+    "through_tunnel_discovery_command",
+    "parse_hosts_with_open_ports",
+    "run_tunnel_sweep",
 ]

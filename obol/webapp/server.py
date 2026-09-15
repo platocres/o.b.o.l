@@ -1728,6 +1728,60 @@ def create_app(base, *, token: Optional[str] = None):
         return {"ok": res["ok"], "tunnel": res["tunnel"], "setup_command": res["setup_command"],
                 "proxychains": res["proxychains"], "scope_added": res["scope_added"]}
 
+    @app.get("/api/topology")
+    def api_topology():
+        """The pivot topology (§6f): network segments joined by tunnels, with live
+        tunnel/session state for the engagement screen."""
+        from ..graph import build_topology
+        return build_topology(active())
+
+    @app.get("/api/tunnel/cascade")
+    def api_tunnel_cascade(host: str = Query(...)):
+        """The auto-tunnel feasibility cascade for a host (dry) — what obol would try
+        and why each is or isn't feasible here."""
+        ws = active()
+        return {"host": host, "cascade": tunnel_layer.feasible_cascade(ws, host)}
+
+    @app.post("/api/run/tunnel/auto")
+    def api_run_tunnel_auto(payload: dict = Body(...)):
+        """Auto-tunnel (§6d): walk the feasibility cascade, stage the transport binary,
+        and stand up the best pivot obol can here."""
+        payload = payload or {}
+        target = payload.get("target", "")
+        if not target:
+            raise HTTPException(422, "target is required")
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, target)
+            try:
+                res = tunnel_layer.auto_tunnel(
+                    ws, target, subnet=payload.get("subnet", ""), lhost=payload.get("lhost", ""),
+                    local_port=int(payload.get("local_port", 0) or 0),
+                    remote=payload.get("remote", ""),
+                    remote_port=int(payload.get("remote_port", 0) or 0), surface="web")
+            except TunnelError as exc:
+                raise HTTPException(400, str(exc))
+            except (staging_layer.StagingError, ActionError) as exc:
+                raise HTTPException(400, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    @app.post("/api/run/tunnel/sweep")
+    def api_run_tunnel_sweep(payload: dict = Body(...)):
+        """Through-tunnel sweep (§6e): re-run discovery through a tunnel to confirm its
+        health and discover the next segment's hosts."""
+        tid = (payload or {}).get("id", "")
+        if not tid:
+            raise HTTPException(422, "id is required")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                res = discovery.run_tunnel_sweep(ws, tid)
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
     @app.post("/api/tunnel/close")
     def api_tunnel_close(payload: dict = Body(...)):
         tid = (payload or {}).get("id", "")
