@@ -1,0 +1,3 @@
+Shortest Path to Domain Admins returned 2 attack paths.
+Owned principal CORP\svc-web has GenericAll over CORP\Helpdesk Admins, which has AddMember rights to Domain Admins.
+Review the path before executing any abuse step.
