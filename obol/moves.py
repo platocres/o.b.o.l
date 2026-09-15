@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import phases
+from . import autonomy, phases
 from .pack import next_actions
 from .scope import normalize_target
 
@@ -53,12 +53,13 @@ class Move:
     ready: bool
     reason: str = ""
     priority: int = 50
+    autonomy: str = "auto"  # how autonomous obol may be (obol/autonomy.py): auto/approve/manual
     detail: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "id": self.id, "label": self.label,
                 "phase": self.phase, "ready": self.ready, "reason": self.reason,
-                "priority": self.priority, "detail": self.detail}
+                "priority": self.priority, "autonomy": self.autonomy, "detail": self.detail}
 
 
 def _rank(moves: list[Move], frontier: int) -> list[Move]:
@@ -96,7 +97,8 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
         moves.append(Move(
             kind="action", id=a.id, label=a.title,
             phase=phases.phase_of_action(a), ready=True,
-            priority=a.priority, detail={"tool": a.tool, "action_id": a.id},
+            priority=a.priority, autonomy=autonomy.tier_of_action(a),
+            detail={"tool": a.tool, "action_id": a.id},
         ))
 
     if not host:
@@ -112,6 +114,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
             label=o.get("label") or f"Log in over {o['kind']}",
             phase=_PRIMITIVE_PHASE["login"], ready=bool(o.get("ready")),
             reason=o.get("reason", ""), priority=_PRIMITIVE_PRIORITY["login"],
+            autonomy=autonomy.PRIMITIVE_TIER["login"],
             detail={"kind": o["kind"], "method": o.get("method", ""),
                     "user": o.get("user", ""), "pth": bool(o.get("pth"))},
         ))
@@ -131,7 +134,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
             kind="enum", id=f"enum:{r['key']}", label=f"Enumerate with {r['key']}",
             phase=_PRIMITIVE_PHASE["enum"], ready=bool(r.get("ready")),
             reason="" if r.get("ready") else "needs a validated credential on a proven foothold",
-            priority=_PRIMITIVE_PRIORITY["enum"],
+            priority=_PRIMITIVE_PRIORITY["enum"], autonomy=autonomy.PRIMITIVE_TIER["enum"],
             detail={"tool": r["key"], "material": r.get("material"),
                     "cached": bool(r.get("cached")), "guided": bool(r.get("guided"))},
         ))
@@ -142,7 +145,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
         moves.append(Move(
             kind="exploit", id=f"exploit:{e['key']}", label=e.get("label") or e["key"],
             phase=_PRIMITIVE_PHASE["exploit"], ready=True,
-            priority=_PRIMITIVE_PRIORITY["exploit"],
+            priority=_PRIMITIVE_PRIORITY["exploit"], autonomy=autonomy.PRIMITIVE_TIER["exploit"],
             detail={"key": e["key"], "lead": e.get("lead"),
                     "outcomes": list(e.get("outcomes", [])), "guided": bool(e.get("guided"))},
         ))
@@ -155,6 +158,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
             kind="tunnel", id=f"tunnel:{t['kind']}", label=t.get("label") or t["kind"],
             phase=_PRIMITIVE_PHASE["tunnel"], ready=bool(t.get("ready")),
             reason=t.get("reason", ""), priority=_PRIMITIVE_PRIORITY["tunnel"],
+            autonomy=autonomy.PRIMITIVE_TIER["tunnel"],
             detail={"kind": t["kind"], "transport": t.get("transport"),
                     "proxychains": bool(t.get("proxychains")),
                     "exposes_subnet": t.get("exposes_subnet", "")},

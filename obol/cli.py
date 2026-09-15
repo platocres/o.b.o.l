@@ -263,7 +263,8 @@ def cmd_moves(args) -> None:
     if ready:
         print("\n  ready now:")
         for m in ready:
-            print(f"    [{m.kind:7}] {m.label:38} {m.phase:9}{_move_extra(m)}")
+            gate = "" if m.autonomy == "auto" else f"  · {m.autonomy}"
+            print(f"    [{m.kind:7}] {m.label:38} {m.phase:9}{gate}{_move_extra(m)}")
     if args.all and waiting:
         print("\n  waiting on input:")
         for m in waiting:
@@ -287,12 +288,15 @@ def cmd_do(args) -> None:
         if v:
             params[k] = v
     try:
-        res = dispatch.run_move(ws, args.id, host=host, dry_run=args.dry_run, params=params)
+        # a direct `obol do` is the operator's explicit choice — that is the approval for
+        # an approve-tier move (the unattended cruise loop is what pauses instead).
+        res = dispatch.run_move(ws, args.id, host=host, dry_run=args.dry_run,
+                                approve=True, params=params)
     except dispatch.DispatchError as exc:
         print(f"cannot run {args.id!r}: {exc}", file=sys.stderr)
         raise SystemExit(1)
     tag = {"ran": "ran", "dry-run": "preview", "handoff": "handoff",
-           "craft": "crafted"}.get(res["posture"], res["posture"])
+           "craft": "crafted", "needs-approval": "needs approval"}.get(res["posture"], res["posture"])
     print(f"\n[{tag}] {res['label']}")
     if res.get("summary"):
         print(f"  {res['summary']}")

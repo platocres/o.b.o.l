@@ -48,6 +48,8 @@ class Action:
     does_not_prove: str = ""
     priority: int = 50
     phase: str = ""                    # optional pack override; else derived from produces
+    autonomy: str = ""                 # optional pack override (auto/approve/manual);
+                                       # else derived (obol/autonomy.py)
     requires_all: list[str] = field(default_factory=list)
     requires_any: list[str] = field(default_factory=list)
     produces: list[str] = field(default_factory=list)   # fact kinds
@@ -95,6 +97,7 @@ class Action:
             command=(cmds[0]["run"] if cmds else d.get("command", "")),
             proves=d.get("proves", ""), does_not_prove=d.get("does_not_prove", ""),
             priority=int(d.get("priority", 50)), phase=d.get("phase", ""),
+            autonomy=d.get("autonomy", ""),
             requires_all=list(d.get("requires_all", [])),
             requires_any=list(d.get("requires_any", [])),
             produces=list(d.get("produces", [])),

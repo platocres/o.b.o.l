@@ -85,11 +85,40 @@ def test_login_move_runs_the_proof_and_hands_off(tmp_path, monkeypatch):
     ws.save()
     monkeypatch.setattr(service, "run_command",
                         _fake_runner(f"WINRM {host} 5985 HOST [+] d\\svc\nd\\svc\n"))
-    res = dispatch.run_move(ws, "login:winrm", host=host)
+    # a login is approve-tier (it touches the box), so it needs approval to run
+    res = dispatch.run_move(ws, "login:winrm", host=host, approve=True)
     assert res["ok"] and res["posture"] == "handoff"
     assert "evil-winrm" in res["command"] and "s3rvice" in res["command"]  # secrets shown
     assert "foothold.windows" in res["added"]
     assert ws.facts.has("foothold.windows")
+
+
+# ── the autonomy gate (cruise stop-contract) ──────────────────────────────────
+def test_approve_tier_move_pauses_without_approval(tmp_path, monkeypatch):
+    """An approve-tier move (a login) does not run unattended: without approval it
+    returns a needs-approval checkpoint and touches nothing."""
+    ws = _ws(tmp_path)
+    host = ws.target
+    ws.facts.add(Fact("winrm.reachable", f"host:{host}", {"tool": "nxc"}, source="x"))
+    ws.facts.add(Fact("credential.available", f"host:{host}",
+                      {"user": "svc", "password": "s3rvice"}, source="crack"))
+    ws.save()
+    # a runner that would explode if called — proves nothing executed
+    monkeypatch.setattr(service, "run_command",
+                        lambda *a, **k: pytest.fail("approve-tier move ran without approval"))
+    res = dispatch.run_move(ws, "login:winrm", host=host)  # approve defaults False
+    assert not res["ok"] and res["posture"] == "needs-approval"
+    assert not ws.facts.has("foothold.windows")
+
+
+def test_auto_tier_action_runs_without_approval(tmp_path, monkeypatch):
+    """An auto-tier recon/enum action runs unattended (cruise auto-advances it)."""
+    ws = _ws(tmp_path, "10.10.10.161")
+    seed_forest(ws)
+    ws.save()
+    monkeypatch.setattr(service, "run_command", _fake_runner("SMB 10.10.10.161 445 [+] ok"))
+    res = dispatch.run_move(ws, "ad-dc-identify", host="10.10.10.161")  # no approve
+    assert res["ok"] and res["posture"] == "ran"
 
 
 # ── exploit dispatch is craft-only (never fires) ──────────────────────────────

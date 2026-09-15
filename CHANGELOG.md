@@ -7,6 +7,28 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **move autonomy tiers** (`obol/autonomy.py`) — cruise-control's stop-contract as
+  data, the last piece before the `obol cruise` loop. Every move (from
+  `moves.frontier_moves`) now carries a tier saying how autonomous obol may be with it:
+  **`auto`** (recon/enum + Quick Start's existing safe baseline — cruise auto-advances),
+  **`approve`** (everything past the recon/enum boundary, plus the box-touching primitives
+  login/enum/tunnel — a checkpoint that pauses for explicit approval), and **`manual`** (a
+  privesc exploit — obol crafts and hands off, never fires). The classification is
+  **data-driven, not a hardcoded lab rule** (AGENTS.md principle 10): a pack action's tier
+  is an explicit `autonomy` field in its pack data if set, else derived from the shared
+  phase model (`obol/phases.py`) and `quickstart.QUICKSTART_ACTION_IDS` — the boundary the
+  ROADMAP already draws — and it is deliberately conservative (anything not clearly
+  recon/enum defaults to `approve`, so cruise never auto-fires something unclassified).
+  `dispatch.run_move` now **enforces the gate in one place**: an approve/manual move will
+  not run unattended without approval (it returns a `needs-approval` checkpoint and
+  touches nothing), while `obol do` treats the operator's explicit invocation as the
+  approval and the web `POST /api/move/run` requires a real confirm. `Action` gained an
+  optional `autonomy` field; `Move`/`GET /api/moves` expose the tier; `obol moves` tags
+  each non-auto move (`· approve` / `· manual`). Locked by `tests/test_autonomy.py`
+  (derivation, the Quick Start baseline as auto, explicit-override both directions, fixed
+  primitive tiers, and the frontier carrying the tier) plus a `test_dispatch.py` gate case
+  (an approve-tier login pauses without approval and runs with it).
+
 - Added the **move execution handle** (`obol/dispatch.py`) — cruise-control **pillar
   I→II** bridge. `run_move(ws, id)` runs any frontier move (from `moves.frontier_moves`)
   by id through its **existing** shared primitive — `service.run_action` for a pack

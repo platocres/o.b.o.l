@@ -258,6 +258,12 @@ obol/
                  branches per kind. Fact-gated (a move must be offered+ready to run) and
                  posture-tagged (ran/dry-run/handoff/craft — the stop-contract seed);
                  exploits are crafted, never auto-fired
+  autonomy.py    move autonomy tiers (cruise stop-contract): how autonomous obol may be
+                 with a move — auto (recon/enum + Quick Start's safe baseline), approve
+                 (past that boundary + box-touching primitives login/enum/tunnel), manual
+                 (a privesc exploit — craft, never fire). Data-driven (an explicit pack
+                 `autonomy` overrides the phase/quickstart derivation), conservative by
+                 default; dispatch.run_move enforces it as the approval gate
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
                  overview / moves / do / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus

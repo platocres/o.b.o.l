@@ -26,6 +26,7 @@ outcome/credential/listener surface; the dispatcher only crafts, by design.
 """
 from __future__ import annotations
 
+from . import autonomy
 from . import moves as moves_layer
 
 # Move-id prefixes that name a primitive; anything else is a pack action id.
@@ -80,6 +81,17 @@ def run_move(ws, move_id: str, *, host: str = "", approve: bool = False,
                             "(run `obol moves` to see what is)")
     if not move.ready and move.kind != "action":
         raise DispatchError(f"{move_id!r} is not ready: {move.reason or 'a required input is missing'}")
+
+    # Autonomy gate (the cruise stop-contract in one place): an approve/manual-tier move
+    # will not run unattended. A dry-run preview is always allowed; an exploit is always
+    # craft-only (handled below), so it is never blocked here. `obol do` passes approve=True
+    # (the operator's explicit invocation IS the approval); the web/cruise pass it only
+    # after a real confirmation.
+    if (autonomy.needs_approval(move.autonomy) and move.kind != "exploit"
+            and not approve and not dry_run):
+        return _result(move, ok=False, posture="needs-approval",
+                       summary=f"{move.label} needs approval ({move.autonomy}) — "
+                               "confirm to run this box-touching move")
 
     kind, key = parse_move_id(move_id)
     try:
