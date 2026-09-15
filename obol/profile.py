@@ -150,6 +150,13 @@ def normalize_profile(data: dict | None) -> dict:
         out["flag_names"] = names
     if formats:
         out["flag_formats"] = formats
+    # operator autonomy overrides (kind -> auto|ask|never) ride on the profile so they
+    # persist with it; the autonomy layer validates and interprets them (obol/autonomy.py).
+    autonomy = data.get("autonomy")
+    if isinstance(autonomy, dict):
+        clean = {str(k): str(v) for k, v in autonomy.items() if v in ("auto", "ask", "never")}
+        if clean:
+            out["autonomy"] = clean
     return out
 
 

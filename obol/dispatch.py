@@ -82,16 +82,20 @@ def run_move(ws, move_id: str, *, host: str = "", approve: bool = False,
     if not move.ready and move.kind != "action":
         raise DispatchError(f"{move_id!r} is not ready: {move.reason or 'a required input is missing'}")
 
-    # Autonomy gate (the cruise stop-contract in one place): an approve/manual-tier move
-    # will not run unattended. A dry-run preview is always allowed; an exploit is always
-    # craft-only (handled below), so it is never blocked here. `obol do` passes approve=True
-    # (the operator's explicit invocation IS the approval); the web/cruise pass it only
-    # after a real confirmation.
-    if (autonomy.needs_approval(move.autonomy) and move.kind != "exploit"
-            and not approve and not dry_run):
+    # Autonomy gate (the whole exam/lab separation, in one place): the engagement policy
+    # resolves this move to auto / ask / never. `never` is forbidden this engagement (the
+    # exam floor); `ask` needs an explicit approval unless it is a craft-only exploit. A
+    # dry-run preview is always allowed. `obol do` passes approve=True (the operator's
+    # explicit invocation IS the approval); the web/cruise pass it only after a real confirm.
+    decision = autonomy.decide(ws, kind=move.kind, base_tier=move.autonomy,
+                               tool=(move.detail or {}).get("tool", ""))
+    if decision == "never":
+        raise DispatchError(f"{move_id} is not permitted in {autonomy.mode_of(ws)} mode "
+                            "— the exam floor forbids it")
+    if decision == "ask" and move.kind != "exploit" and not approve and not dry_run:
         return _result(move, ok=False, posture="needs-approval",
-                       summary=f"{move.label} needs approval ({move.autonomy}) — "
-                               "confirm to run this box-touching move")
+                       summary=f"{move.label} needs approval — confirm to run this "
+                               "box-touching move")
 
     kind, key = parse_move_id(move_id)
     try:

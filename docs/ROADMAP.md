@@ -934,6 +934,62 @@ report this feeds), spine pillar III (operator-supplied evidence lineage), and t
 existing `obol/screenshots.py` (headless PNGs for the debug package — a different,
 non-proof use). Builds on `obol/report.py` + `build_report_context`.
 
+## 15. Getting on the box: autonomy policy, sessions/shells, followed sessions, provisioning
+
+The milestone that turns cruise from "drives a box you already footholded" into "drives a
+box from a bare IP", with the operator in control. Worked out in the design conversation;
+built in four slices (a→d).
+
+**Model — autonomy is three axes, not one tier:** **reach** (local prep on obol's own box
+vs. target-touching), **consequence** (reversible / the exam floor / manual-required), and
+the operator's **per-engagement policy** (profile presets). The whole OSCP-exam vs HTB/lab
+separation is one default-deny, auditable, test-locked gate (`autonomy.decide`), never a
+flag scattered through the code — that is why obol can be *confident* in the separation
+where Charon never was. The **exam line** (clarified): everything *up to* the trigger is
+automatable — recon, enum, **service/version fingerprinting → most-probable exploit**,
+staging, command-crafting, and (per policy) logins/tunnels. Only two things are forbidden
+on the exam: an automated-*exploitation* tool, and obol *auto-firing* an exploit.
+
+- **(a) Autonomy policy + presets + `obol autonomy` + exam-floor tests — DONE.** See the
+  Unreleased changelog. `autonomy.decide` (reach × mode × override), profile-driven exam/
+  lab/default modes, the two uncrossable exam invariants, visible/settable policy, and the
+  invariant tests.
+- **(b) Getting-on-the-box moves + fingerprint matcher — TODO.** Wire the built primitives
+  into the frontier as moves with the right reach: `listener` (start a penelope/nc listener
+  — **local**, auto-safe) + reverse-shell payload prep; `login` extensions (SMB exec) and
+  `connect` (bind shell) — **target**; `stage` (push a cached tool to an auto-detected
+  loose-priv dir — `C:\Windows\Temp`/`C:\Users\Public`/`/dev/shm`, with override) —
+  **target**. Add a **fingerprint → probable-exploit matcher** (service/version/OS →
+  ranked candidate exploits, extending `exploits.py`'s lead-gating): obol stages + crafts
+  the most-probable exploit, `manual` run (never auto-fired on the exam). Plus **`obol cred
+  add`** and a web **Add credential** form — a manually-found admin password/hash becomes a
+  `credential.available` fact and immediately unlocks PtH login, tunnels, and flag hunt.
+  Also add the **initial engagement discovery sweep as a move** (the analogue of the
+  through-tunnel sweep — so `obol cruise --all` can populate targets from a bare scope
+  range, not just cruise existing ones).
+- **(c) Followed sessions — TODO.** obol follows the operator through a *manual* login it
+  does not perform: `obol follow -- <interactive cmd>` runs the operator's own tool
+  (evil-winrm/ssh/…) inside a logged PTY and live-parses the transcript into
+  `operator-session:` facts as they type; plus native **tailing of penelope's session
+  logs** (obol knows the path because it started the listener, or watches the configured
+  default). On proof detection it prompts for the OSCP-shaped combined command and fires a
+  **real desktop screenshot** (`scrot`/`import`, genuine — never a forgery) attached to the
+  objective, degrading to a captured proof-text block. RDP (graphical) stays copy-paste/
+  screenshot. Copy-paste ingest (§ pillar III) demotes to the fallback for un-wrappable
+  channels.
+- **(d) One-pass local provisioning + sudo — TODO.** `obol` computes every referenced tool
+  that isn't installed and offers a **one-pass install** (apt + pipx, from `tools.py`
+  hints). Local *read/prep* is auto; local *system change* (install / sudo) is **ask-once**.
+  Sudo default: let sudo prompt on the real TTY (obol never sees the password); the web
+  hands off the command, with an explicit opt-in memory-only `sudo -S` pass that is never
+  persisted and never in the debug package.
+- **(e) obol as a reverse-shell handler — DEFERRED (lowest priority).** The far-future
+  option to have obol *host* the caught shell itself (pwncat/penelope-style: obol is in the
+  channel, interleaves its own probes, stabilizes the PTY, stages over the shell) instead
+  of wrapping/tailing the operator's tools. Powerful but redundant with penelope and a large
+  surface; the "follow, don't host" approach (c) gets ~90% of the value. Build only after
+  everything else.
+
 ## UX guardrails (product decision — keep these)
 
 This is a fast OSCP-exam tool. The UI shows **only the live options that matter**:

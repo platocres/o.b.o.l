@@ -54,23 +54,34 @@ class Move:
     ready: bool
     reason: str = ""
     priority: int = 50
-    autonomy: str = "auto"  # how autonomous obol may be (obol/autonomy.py): auto/approve/manual
+    autonomy: str = "auto"  # base tier (obol/autonomy.py): auto/approve/manual
+    decision: str = "auto"  # effective policy decision for this engagement: auto/ask/never
     detail: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "id": self.id, "label": self.label,
                 "phase": self.phase, "ready": self.ready, "reason": self.reason,
-                "priority": self.priority, "autonomy": self.autonomy, "detail": self.detail}
+                "priority": self.priority, "autonomy": self.autonomy,
+                "decision": self.decision, "detail": self.detail}
 
 
-def _rank(moves: list[Move], frontier: int) -> list[Move]:
-    """Order moves by the planner's own key: on-flow (at/behind the frontier) first,
-    ready before not-ready within a band, then priority, then a stable label tiebreak.
+def _rank(ws, moves: list[Move], frontier: int) -> list[Move]:
+    """Resolve each move's effective policy decision, drop the ones this engagement
+    forbids (``never`` — e.g. an automated exploiter in exam mode), and order the rest by
+    the planner's own key: on-flow first, ready before not-ready within a band, then
+    priority, then a stable label tiebreak.
 
-    Mirrors `pack.next_actions`'s ``(prematurity, -priority)`` exactly, with a ready
-    tier inserted so a primitive still waiting on one input sorts under the moves you
-    can actually fire in the same phase."""
-    return sorted(moves, key=lambda m: (
+    Mirrors `pack.next_actions`'s ``(prematurity, -priority)``, with a ready tier inserted
+    so a primitive still waiting on one input sorts under the moves you can actually fire.
+    """
+    kept: list[Move] = []
+    for m in moves:
+        m.decision = autonomy.decide(ws, kind=m.kind, base_tier=m.autonomy,
+                                     tool=(m.detail or {}).get("tool", ""))
+        if m.decision == "never":
+            continue  # forbidden this engagement (the exam floor) — not an option
+        kept.append(m)
+    return sorted(kept, key=lambda m: (
         max(0, phases.phase_index(m.phase) - frontier),
         0 if m.ready else 1,
         -m.priority,
@@ -103,7 +114,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
         ))
 
     if not host:
-        return _rank(moves, frontier)
+        return _rank(ws, moves, frontier)
 
     # 2) session logins (§6a) — offered on a reachable service; ready with a credential.
     from . import sessions
@@ -126,7 +137,7 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
     # foothold to keep the frontier a set of genuine next moves, not pre-foothold noise.
     from . import staging
     if not staging._foothold_os(ws, host):
-        return _rank(moves, frontier)
+        return _rank(ws, moves, frontier)
 
     # 3) enum run-and-rank (§8) — a read-only enum tool over a proven foothold.
     from . import enumrun
@@ -182,4 +193,4 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
             detail={"tunnel": tid, "subnet": subnet, "transport": t.get("transport", "")},
         ))
 
-    return _rank(moves, frontier)
+    return _rank(ws, moves, frontier)

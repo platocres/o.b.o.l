@@ -252,6 +252,19 @@ class Workspace:
         from . import profile as _profile
         return _profile.resolve_flag_config(self.profile)
 
+    def set_autonomy(self, kind: str, decision: str) -> dict:
+        """Set (or, with 'clear', remove) an operator autonomy override for a move-kind
+        (auto/ask/never). Stored on the profile so it persists; the autonomy layer clamps
+        it to the exam floor (obol/autonomy.py). Returns the stored profile."""
+        prof = dict(self.profile or {})
+        overrides = dict(prof.get("autonomy") or {})
+        if decision == "clear":
+            overrides.pop(kind, None)
+        else:
+            overrides[kind] = decision
+        prof["autonomy"] = overrides
+        return self.set_profile(prof)
+
     # ---- targets -------------------------------------------------------------
     def _target_record(self, data: dict) -> dict:
         host = normalize_target(data.get("host", ""))

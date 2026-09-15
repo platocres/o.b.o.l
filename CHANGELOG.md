@@ -7,6 +7,32 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **operator autonomy policy** (`obol/autonomy.py`) — how autonomous obol may be
+  this engagement, and the true, auditable **OSCP-exam vs HTB/lab separation**. The policy
+  resolves every move to `auto` / `ask` / `never` from three inputs — **reach** (local
+  prep on obol's own box vs. target-touching), **mode** (from the §7 profile: `exam` for
+  OSCP, `lab` for HTB/THM/CTF, `default` conservative), and an **operator per-kind
+  override** — enforced in ONE place (`autonomy.decide`, read by `dispatch.run_move`,
+  `cruise`, and `moves.frontier_moves`), so the separation is a single default-deny gate,
+  not a flag scattered through the code (the Charon lesson). Behavior:
+  - **Local prep always auto** (a listener on obol's box, crafting a command) — even on
+    the exam, because it never touches the target.
+  - **The exam floor is exactly two uncrossable invariants:** an automated-*exploitation*
+    tool (sqlmap, autopwn, …) is `never`, and an exploit *run* is never `auto` (obol
+    fingerprints → stages → crafts → hands off, but never fires it). Everything *up to*
+    the trigger — recon, enum, fingerprinting, staging, command-crafting, and (per policy)
+    logins/tunnels — is automatable. An operator override cannot widen the floor.
+  - **Lab mode auto-runs the getting-on-the-box + setup primitives** (login/stage/tunnel/
+    sweep/enum) by default; `default`/exam leave them at `ask` until the operator opts in.
+  - Forbidden (`never`) moves are dropped from the frontier entirely.
+  Made **visible and settable**: `obol autonomy` (and `GET /api/autonomy`) print the
+  resolved decision for every move-kind so the operator can *see* the separation rather
+  than trust it; `obol autonomy set <kind> <auto|ask|never|clear>` (and `POST /api/autonomy`)
+  set per-kind overrides, persisted on the profile. Locked by the exam-floor invariants in
+  `tests/test_autonomy.py` (local-prep always auto, automated exploiters blocked, exploit
+  never auto-fired even with an override, exam asks before target-touching while automating
+  prep, lab auto-runs the primitives, overrides widen only within the floor).
+
 - **Cruise now carries the operator through the pivot and onward** — the §6 recursive
   segment mapper, wired into the loop:
   - The **through-tunnel sweep is a first-class move** (`moves.py`, `kind: "sweep"`):

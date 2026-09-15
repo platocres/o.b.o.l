@@ -265,7 +265,14 @@ obol/
                  (past that boundary + box-touching primitives login/enum/tunnel), manual
                  (a privesc exploit — craft, never fire). Data-driven (an explicit pack
                  `autonomy` overrides the phase/quickstart derivation), conservative by
-                 default; dispatch.run_move enforces it as the approval gate
+                 default; dispatch.run_move enforces it as the approval gate. autonomy.decide
+                 (ws, kind, base_tier, tool) is the ONE policy gate for the OSCP-exam vs
+                 HTB/lab separation — resolves each move to auto/ask/never from reach
+                 (local prep vs target-touching) × mode (exam/lab/default, from the §7
+                 profile) × operator per-kind override. Exam floor (uncrossable): automated
+                 exploiters = never, an exploit RUN is never auto (craft + hand off). Read
+                 by dispatch/cruise/moves; visible + settable via `obol autonomy [set …]`,
+                 GET/POST /api/autonomy
   cruise.py      obol cruise — supervised cruise control (pillar II) + the pause
                  briefing. The loop over moves.frontier_moves + dispatch.run_move +
                  autonomy: runs the highest-ranked un-attempted AUTO move, re-ranks,
@@ -296,8 +303,8 @@ obol/
                  as the marked escape hatch. Invents no parser/fact kind. `obol ingest`,
                  `obol assert`
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / moves / do / cruise / objectives / ingest / assert / next /
-                 explain / run / playbook(s) / sweep / login /
+                 overview / moves / do / cruise / autonomy / objectives / ingest / assert /
+                 next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used
