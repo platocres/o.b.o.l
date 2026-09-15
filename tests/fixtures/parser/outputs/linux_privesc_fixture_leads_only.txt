@@ -1,0 +1,9 @@
+Linux app01 5.15.0-91-generic #101-Ubuntu SMP x86_64 GNU/Linux
+uid=1000(app) gid=1000(app) groups=1000(app),108(lxd),999(docker)
+User app may run the following commands on app01:
+    (root) NOPASSWD: /usr/bin/find
+/usr/local/bin/backup
+/usr/bin/find
+/usr/bin/python3 = cap_setuid+ep
+-rw-rw-rw- 1 root root 2234 Jan 1 00:00 /etc/passwd
+/srv/share *(rw,sync,no_root_squash)
