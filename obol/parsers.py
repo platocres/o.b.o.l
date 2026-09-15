@@ -68,6 +68,39 @@ _ESC_RE = re.compile(r"\bESC(\d{1,2})\b")
 _CERTIPY_TEMPLATE_RE = re.compile(r"Template Name\s*:\s*(?P<name>\S[^\n]*)", re.IGNORECASE)
 _CERTIPY_UPN_RE = re.compile(r"certificate with UPN '(?P<upn>[^']+)'", re.IGNORECASE)
 _PFX_SAVED_RE = re.compile(r"saved[^\n]*?(?P<pfx>[A-Za-z0-9_./\\-]+\.pfx)", re.IGNORECASE)
+_AD_CONTROL_RIGHT_RE = re.compile(
+    r"\b(GenericAll|GenericWrite|WriteDACL|WriteDacl|WriteOwner|FullControl|"
+    r"AllExtendedRights|ForceChangePassword|AddMember|WriteMembers|ReadGMSAPassword|"
+    r"msDS-AllowedToActOnBehalfOfOtherIdentity|AllowedToAct|RBCD)\b",
+    re.IGNORECASE,
+)
+_AD_CONTROL_SUCCESS_RE = re.compile(
+    r"\b(?:success(?:fully)?|modified|changed|granted|added|written|set)\b.*"
+    r"\b(?:groupMember|member|owner|GenericAll|FullControl|DACL|delegation|"
+    r"msDS-AllowedToAct|AllowedToAct|RBCD|rights?)\b|"
+    r"\b(?:groupMember|owner|GenericAll|FullControl|DACL|delegation|"
+    r"msDS-AllowedToAct|AllowedToAct|RBCD|rights?)\b.*\b(?:success(?:fully)?|"
+    r"modified|changed|granted|added|written|set)\b",
+    re.IGNORECASE,
+)
+_ADD_COMPUTER_SUCCESS_RE = re.compile(
+    r"\b(?:success(?:fully)?\s+)?(?:added|created)\s+(?:machine|computer)\s+"
+    r"(?:account\s+)?['\"]?(?P<name>[A-Za-z0-9_.-]+\$?)['\"]?",
+    re.IGNORECASE,
+)
+_TICKET_FILE_RE = re.compile(
+    r"\b(?:Saving|Saved|Wrote|Writing|Ticket written)\b[^\n]*?(?P<file>[A-Za-z0-9_./\\-]+\.(?:ccache|kirbi))",
+    re.IGNORECASE,
+)
+_IMPERSONATE_RE = re.compile(r"\bimpersonat(?:e|ing)\s+(?:user\s+)?['\"]?(?P<user>[A-Za-z0-9._$-]+)", re.IGNORECASE)
+_GMSA_HASH_RE = re.compile(
+    r"(?:(?P<domain>[A-Za-z0-9_.-]+)\\)?(?P<user>[A-Za-z0-9._-]+\$)\s*[:\s]+"
+    r"(?:NTLM|NTHASH|RC4_HMAC|rc4_hmac)\s*[:=]\s*(?P<nt>[0-9a-fA-F]{32})",
+    re.IGNORECASE,
+)
+_LAPS_PASSWORD_RE = re.compile(r"\b(?:ms-Mcs-AdmPwd|msLAPS-Password|LAPS\s+Password|Password)\s*[:=]\s*(?P<pw>\S+)", re.IGNORECASE)
+_LAPS_COMPUTER_RE = re.compile(r"\b(?:Computer|Name|sAMAccountName)\s*[:=]\s*(?P<computer>[A-Za-z0-9_.-]+\$?)", re.IGNORECASE)
+_LAPS_USER_RE = re.compile(r"\b(?:User|Username|Account)\s*[:=]\s*(?P<user>[A-Za-z0-9._$-]+)", re.IGNORECASE)
 _JOHN_SHOW_RE = re.compile(r"^(?P<user>[A-Za-z0-9._$-]{2,}):(?P<password>[^:\s][^:\r\n]*)(?::.*)?$")
 _CPASSWORD_RE = re.compile(r"\bcpassword\s*=\s*[\"']?([^\"'\s<>]+)", re.IGNORECASE)
 _GPP_FILE_RE = re.compile(r"\b(?:Groups|ScheduledTasks|Services|DataSources|Printers|Drives)\.xml\b", re.IGNORECASE)
@@ -202,6 +235,10 @@ _LINUX_PRIVESC_ACTION_IDS = {
     "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
 }
 _WINDOWS_PRIVESC_ACTION_IDS = _PRIVESC_ACTION_IDS - _LINUX_PRIVESC_ACTION_IDS
+_AD_ABUSE_ACTION_IDS = {
+    "bloodyad-acl", "ad-acl-abuse", "delegation-abuse", "getst-impersonation",
+    "gmsa-read", "laps-read", "ticket-reuse", "kerberos-tickets",
+}
 _UNAME_RE = re.compile(
     r"\bLinux\s+(?P<host>\S+)\s+(?P<kernel>[0-9][^\s]+).*?\b(?P<arch>x86_64|i[3-6]86|aarch64|armv\w+)\b",
     re.IGNORECASE,
@@ -607,6 +644,8 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "certipy" in lowered_command or "pywhisker" in lowered_command:
         _parse_adcs(text, ws, command, source, facts)
+    if _is_ad_abuse_command(command) or action.id in _AD_ABUSE_ACTION_IDS:
+        _parse_ad_abuse_output(action.id, text, ws, command, source, facts)
 
     if _is_web_vhost_command(command):
         _parse_web_vhosts(text, ws, source, facts)
@@ -1370,6 +1409,260 @@ def _parse_bloodhound_analysis(text: str, ws: Workspace, source: str, facts: lis
     if not _ATTACK_PATH_RE.search(text):
         return
     _add(facts, Fact("ad.attack_paths", _scope_for_domain(ws), {"tool": "bloodhound", "evidence": "analysis_output"}, ProofState.SUPPORTED, source))
+
+
+def _is_ad_abuse_command(command: str) -> bool:
+    lowered = command.lower()
+    return any(
+        token in lowered
+        for token in (
+            "bloodyad", "dacledit", "addcomputer", "impacket-rbcd", "rbcd.py",
+            "impacket-getst", "getst.py", "impacket-gettgt", "gettgt.py",
+            "gmsadumper", "msds-managedpassword", " ms-mcs-admpwd", " laps",
+            " -m laps", "get-adcomputer", "get-adserviceaccount", "rubeus",
+            "klist", "kinit",
+        )
+    )
+
+
+def _parse_ad_control_paths(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered_command = command.lower()
+    rights = {_canonical_right(match.group(1)) for match in _AD_CONTROL_RIGHT_RE.finditer(text)}
+    operation = ""
+    if "groupmember" in lowered_command or "add groupmember" in lowered_command:
+        operation = "group_member_write"
+        rights.add("WriteMembers")
+    elif "set owner" in lowered_command or "writeowner" in lowered_command:
+        operation = "owner_write"
+        rights.add("WriteOwner")
+    elif "genericall" in lowered_command or "dacledit" in lowered_command:
+        operation = "dacl_write"
+        rights.add("GenericAll")
+    elif "rbcd" in lowered_command or "msds-allowedtoact" in text.lower():
+        operation = "rbcd_write"
+        rights.add("RBCD")
+
+    evidence: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if _AD_CONTROL_RIGHT_RE.search(line) or _AD_CONTROL_SUCCESS_RE.search(line):
+            evidence.append(line[:220])
+        if len(evidence) >= 5:
+            break
+
+    success = bool(evidence) or bool(_AD_CONTROL_SUCCESS_RE.search(text))
+    if not success:
+        return
+
+    value = {
+        "rights": sorted(rights, key=str.lower) or ["control_path"],
+        "method": _ad_abuse_tool(command),
+        "evidence": evidence or [_line_for_match(text, _AD_CONTROL_SUCCESS_RE.search(text))],
+    }
+    if operation:
+        value["operation"] = operation
+    target = _command_arg(command, "--target", "-target", "-delegate-to") or _command_arg(command, "-target-sam")
+    if target:
+        value["target"] = target.strip("'\"")
+    principal = _command_arg(command, "-principal", "--principal", "-delegate-from")
+    if principal:
+        value["principal"] = principal.strip("'\"")
+    _add(facts, Fact("ad.control_paths", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
+
+
+def _canonical_right(right: str) -> str:
+    mapping = {
+        "writedacl": "WriteDACL",
+        "genericall": "GenericAll",
+        "genericwrite": "GenericWrite",
+        "writeowner": "WriteOwner",
+        "fullcontrol": "FullControl",
+        "allextendedrights": "AllExtendedRights",
+        "forcechangepassword": "ForceChangePassword",
+        "addmember": "WriteMembers",
+        "writemembers": "WriteMembers",
+        "readgmsapassword": "ReadGMSAPassword",
+        "msds-allowedtoactonbehalfofotheridentity": "RBCD",
+        "allowedtoact": "RBCD",
+        "rbcd": "RBCD",
+    }
+    return mapping.get(right.strip().lower(), right.strip())
+
+
+def _ad_abuse_tool(command: str) -> str:
+    lowered = command.lower()
+    for tool in ("bloodyad", "dacledit", "addcomputer", "rbcd", "getst", "gettgt", "gmsadumper", "rubeus"):
+        if tool in lowered:
+            return tool
+    if "laps" in lowered:
+        return "laps"
+    return "ad-abuse"
+
+
+def _parse_added_computer(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = (text + "\n" + command).lower()
+    if "addcomputer" not in lowered and "machine account" not in lowered and "computer account" not in lowered:
+        return
+    if re.search(r"\b(error|failed|denied|constraint|already exists)\b", text, re.IGNORECASE):
+        return
+    success = bool(_ADD_COMPUTER_SUCCESS_RE.search(text)) or bool(re.search(r"\b(success|created|added)\b", text, re.IGNORECASE))
+    if not success:
+        return
+    name = _command_arg(command, "-computer-name", "--computer-name") or ""
+    match = _ADD_COMPUTER_SUCCESS_RE.search(text)
+    if not name and match:
+        name = match.group("name")
+    name = name.strip("'\"")
+    if name and not name.endswith("$"):
+        name = f"{name}$"
+    if not _valid_username(name):
+        return
+    value = {"computer": name, "method": "addcomputer"}
+    password = _command_arg(command, "-computer-pass", "--computer-pass")
+    if _valid_password(password):
+        value["password_set"] = True
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                _scope_for_domain(ws),
+                {"kind": "machine_account", "user": name, "password": password, "method": "addcomputer"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    _add(facts, Fact("ad.computer_added", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
+
+
+def _parse_kerberos_ticket_material(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = text.lower()
+    files = sorted({match.group("file").replace("\\", "/") for match in _TICKET_FILE_RE.finditer(text)}, key=str.lower)
+    klist_success = "default principal:" in lowered and ("krbtgt/" in lowered or "service principal" in lowered)
+    ticket_signal = (
+        bool(files)
+        or "got tgt" in lowered
+        or ("ticket" in lowered and "saved" in lowered)
+        or klist_success
+    )
+    if not ticket_signal:
+        return
+    principal = _command_arg(command, "-impersonate", "--impersonate")
+    match = _IMPERSONATE_RE.search(text)
+    if not principal and match:
+        principal = match.group("user")
+    if not principal:
+        principal = _command_arg(command, "-u", "--user", "--username") or _command_arg(command, "user")
+    value = {"method": _ad_abuse_tool(command)}
+    if files:
+        value["files"] = files
+    if principal:
+        value["principal"] = _clean_username(principal)
+    spn = _command_arg(command, "-spn", "--spn")
+    if spn:
+        value["spn"] = spn.strip("'\"")
+    _add(facts, Fact("kerberos.tickets", _scope_for_domain(ws), value, ProofState.SUPPORTED, source))
+
+
+def _parse_gmsa_material(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = (text + "\n" + command).lower()
+    if "gmsa" not in lowered and "msds-managedpassword" not in lowered:
+        return
+    entries: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _GMSA_HASH_RE.finditer(text):
+        user = _clean_username(match.group("user"))
+        nt = match.group("nt").lower()
+        if not _valid_username(user) or (user.lower(), nt) in seen:
+            continue
+        seen.add((user.lower(), nt))
+        item = {"user": user, "nthash": nt, "method": "gmsa"}
+        domain = match.group("domain") or _domain_from_facts(ws)
+        if domain:
+            item["domain"] = domain
+        entries.append(item)
+        _add(facts, Fact("credential.ntlm_hash", _scope_for_domain(ws, domain), item, ProofState.SUPPORTED, source))
+    if entries:
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                _scope_for_domain(ws),
+                {"kind": "gmsa_ntlm_hash", "count": len(entries), "users": [e["user"] for e in entries]},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+    elif "msds-managedpassword" in lowered:
+        _add(facts, Fact("credential.candidate", _scope_for_domain(ws), {"kind": "gmsa_managed_password_blob"}, ProofState.SUPPORTED, source))
+
+
+def _parse_laps_material(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    lowered = (text + "\n" + command).lower()
+    if "laps" not in lowered and "ms-mcs-admpwd" not in lowered and "mslaps-password" not in lowered:
+        return
+    current_computer = ""
+    current_user = "Administrator"
+    creds: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        computer = _extract_laps_computer(line) or current_computer
+        user_match = _LAPS_USER_RE.search(line)
+        if user_match:
+            current_user = _clean_username(user_match.group("user")) or current_user
+        pw_match = _LAPS_PASSWORD_RE.search(line)
+        if _LAPS_COMPUTER_RE.search(line):
+            current_computer = _extract_laps_computer(line) or current_computer
+        if not pw_match:
+            continue
+        password = pw_match.group("pw").strip().strip("'\"")
+        if not _valid_password(password):
+            continue
+        computer = computer.strip().strip("'\"")
+        if computer and not computer.endswith("$"):
+            computer = f"{computer}$"
+        if not _valid_username(computer):
+            continue
+        key = (computer.lower(), current_user.lower(), password)
+        if key in seen:
+            continue
+        seen.add(key)
+        creds.append({"kind": "laps_password", "computer": computer, "user": current_user, "password": password})
+    for cred in creds:
+        _add(facts, Fact("credential.candidate", _scope_for_domain(ws), cred, ProofState.SUPPORTED, source))
+
+
+def _extract_laps_computer(line: str) -> str:
+    match = _LAPS_COMPUTER_RE.search(line)
+    if match:
+        return match.group("computer")
+    # NetExec module output often keeps the computer name as a free token near the
+    # password field: `WS01$ Administrator Password: ...`.
+    before_password = re.split(r"\b(?:ms-Mcs-AdmPwd|msLAPS-Password|LAPS\s+Password|Password)\b", line, maxsplit=1, flags=re.IGNORECASE)[0]
+    tokens = re.findall(r"\b[A-Za-z0-9_.-]+\$?\b", before_password)
+    for token in reversed(tokens):
+        if token.upper() in {"LDAP", "SMB", "WINRM", "PASSWORD", "ADMINISTRATOR"}:
+            continue
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", token):
+            continue
+        if token.isdigit():
+            continue
+        return token
+    return ""
+
+
+def _parse_ad_abuse_output(action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    if not (_is_ad_abuse_command(command) or action_id in _AD_ABUSE_ACTION_IDS):
+        return
+    _parse_ad_control_paths(text, ws, command, source, facts)
+    _parse_added_computer(text, ws, command, source, facts)
+    _parse_kerberos_ticket_material(text, ws, command, source, facts)
+    _parse_gmsa_material(text, ws, command, source, facts)
+    _parse_laps_material(text, ws, command, source, facts)
 
 
 def _exec_tool(command: str) -> str:
