@@ -83,9 +83,10 @@ _CATEGORY_ORDER = {
     "credential": 4,
     "access": 5,
     "privesc": 6,
-    "loot": 7,
-    "config": 8,
-    "web": 9,
+    "objective": 7,
+    "loot": 8,
+    "config": 9,
+    "web": 10,
     "other": 99,
 }
 
@@ -115,6 +116,8 @@ def _fact_category(kind: str) -> str:
         return "access"
     if kind.startswith("privesc."):
         return "privesc"
+    if kind.startswith("objective."):
+        return "objective"
     if kind.startswith("loot."):
         return "loot"
     if kind.startswith(("config.", "vuln.", "exploit.")):
@@ -515,6 +518,14 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
         host = t["host"]
         tf = ws.facts_for_target(host)
         tfacts = [f for f in tf.facts if f.scope == f"host:{host}"]
+        flags = [{
+            "kind": f.kind,
+            "slot": f.value.get("slot", "unknown"),
+            "name": f.value.get("name", ""),
+            "path": f.value.get("path", ""),
+            "flag": f.value.get("flag", ""),
+            "evidence": _source_for(f, include_secrets=include_secrets),
+        } for f in sorted(tfacts, key=_fact_sort_key) if f.kind.startswith("objective.")]
         targets_out.append({
             "host": host,
             "label": t.get("label") or host,
@@ -527,6 +538,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "access": target_access_level(tf),
             "phase": target_phase(tf),
             "open_ports": _target_open_ports(tfacts),
+            "flags": flags,
             "findings": [{
                 "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
                 "value": _redact_value(f.value, include_secrets=include_secrets),

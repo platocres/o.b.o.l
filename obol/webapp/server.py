@@ -426,6 +426,7 @@ CATEGORY_TITLE = {
     "credential": "Credentials & hashes",
     "access": "Access",
     "privesc": "Privilege escalation",
+    "objective": "Flags & objectives",
     "loot": "Loot",
     "config": "Config / vuln",
     "web": "Web",

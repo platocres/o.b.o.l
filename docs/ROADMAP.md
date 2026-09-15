@@ -379,12 +379,18 @@ For obol:
   scoring/points model, and an optional exam timer.
 - **Target category.** A `machine_type` per target (standalone / AD DC / member /
   workstation / lab) that can also nudge exam-flow ranking (item 2).
-- **Flag capture stays proof-bound.** When obol has a shell (from §6), it hunts the
-  platform's flag file and, on **actually reading it**, records an objective fact
-  (e.g. `objective.local_flag` / `objective.root_flag`, host-scoped, with the
-  command that read it) — a captured flag is proof, not a checkbox. Per-target
-  objective progress (initial access → privesc → local → root) then displays and
-  feeds the report.
+- **Flag capture stays proof-bound — FIRST SLICE DONE.** When obol has a foothold
+  (from §6), it hunts the flag files and, on **actually reading one**, records an
+  objective fact (`objective.local_flag` / `objective.root_flag` /
+  `objective.flag`, host-scoped, with the command that read it) — a captured flag
+  is proof, not a checkbox. Landed: the `obol_flag_hunt_2026_09` pack
+  (`flag-hunt-linux`/`flag-hunt-windows`, gated on a proven foothold + credential),
+  the proof-bound parser (`obol/flags.py`), the `objective` finding category, and
+  per-target captured-flag display on the web engagement screen. Still open: a
+  configurable flag-name/format set driven by the engagement profile (below),
+  hunting over a Penelope reverse shell / guided-paste channel (today it uses the
+  SSH/WinRM proof channel), and the full per-target objective ladder (initial
+  access → privesc → local → root) as a progress meter.
 
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).

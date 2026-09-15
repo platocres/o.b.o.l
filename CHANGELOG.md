@@ -7,6 +7,26 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added post-foothold flag capture: a thorough, non-interactive search for the
+  well-known flag files (`user.txt`, `root.txt`, `local.txt`, `proof.txt`,
+  `flag.txt`) run through the existing SSH/WinRM proof channel once a foothold is
+  proven (`flag-hunt-linux`, `flag-hunt-windows` in the new
+  `obol_flag_hunt_2026_09` pack), gated on a proven foothold + credential and
+  routed through the one runner/parser/store path.
+- Added a proof-bound flag parser (`obol/flags.py`) that records an `objective.*`
+  fact (`objective.local_flag` / `objective.root_flag` / `objective.flag`,
+  host-scoped) only when a flag file was actually read and its content looks like a
+  real flag (hex, brace-format, or a lone short token), citing the command that
+  captured it — a captured flag is proof, not a checkbox.
+- Added an `objective` finding category so captured flags appear in the engagement
+  findings roll-up, the report, and the evidence-by-category chart.
+- Added per-target captured-flag display on the web engagement screen: each target
+  card shows a flag count pill and the captured flag values, fed by a new `flags`
+  list in the per-target report rollup.
+- Added flag-capture parser regressions covering local/root capture, Windows
+  marker output, action-id scoping, empty/unreadable output, non-flag filenames,
+  de-duplication, value-extraction boundaries, and the per-target rollup.
+
 - Added post-foothold host/network enumeration actions for Linux and Windows
   footholds, gated on proven shell/session facts and routed through the existing
   runner/parser/store path.
