@@ -7,6 +7,14 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **AD Abuse Success-Signal Parser Coverage v1**: outputs from `bloodyAD`,
+  Impacket addcomputer/RBCD/getST, NetExec LAPS, and gMSA hash dumping now produce
+  proof-bound facts for object-control paths, added computer accounts, Kerberos
+  ticket material, LAPS password candidates, and gMSA NTLM hash material. These
+  parsers deliberately do **not** turn control-path edits, tickets, LAPS reads, or
+  machine/gMSA material into admin/SYSTEM access, footholds, or validated login
+  credentials until a later command proves that access. The parser fixture corpus
+  now includes AD-abuse positive and anti-overclaim cases.
 - Added **Parser Coverage + Fixture Corpus v3**: SQLMap output now records
   confirmed SQL injection, database names/tables, database credential-material
   candidates, and SQLMap webshell context without claiming OS admin/root/SYSTEM or
