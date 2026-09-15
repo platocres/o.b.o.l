@@ -68,6 +68,30 @@ def test_assert_requires_a_kind(tmp_path):
         ingest.assert_fact(ws, "", target="10.10.10.50")
 
 
+def test_fact_origin_classifies_lineage(tmp_path):
+    ws = _ws(tmp_path)
+    ingest.ingest_output(ws, NMAP, note="nmap -sV 10.10.10.50", target="10.10.10.50")
+    ingest.assert_fact(ws, "access.shell", target="10.10.10.50", note="by hand")
+    by_kind = {f.kind: f for f in ws.facts.facts}
+    assert ingest.fact_origin(by_kind["access.shell"]) == "operator-attested"
+    assert ingest.fact_origin(by_kind["port:22"]) == "operator-executed"
+    # a seeded/plain fact is obol-origin
+    from obol.facts import Fact
+    assert ingest.fact_origin(Fact("x", "host:1", {}, source="nmap ...")) == "obol"
+
+
+def test_report_visibly_distinguishes_operator_facts(tmp_path):
+    from obol import report
+    ws = _ws(tmp_path)
+    ingest.assert_fact(ws, "access.shell", target="10.10.10.50",
+                       value={"user": "www-data"}, note="manual RCE")
+    ctx = report.build_report_context(ws, include_secrets=True)
+    shell = next(f for f in ctx["facts"] if f["kind"] == "access.shell")
+    assert shell["origin"] == "operator-attested"
+    md = report.build_report(ws, include_secrets=True)
+    assert "operator-attested" in md  # the markdown tags it visibly
+
+
 def test_assert_honors_an_explicit_state_and_scope(tmp_path):
     ws = _ws(tmp_path)
     res = ingest.assert_fact(ws, "ad.anonymous_bind", scope="domain:htb.local",

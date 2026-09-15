@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import (board, bloodhound, discovery, enumrun as enum_layer, exploits as exploit_layer,
+                ingest as ingest_layer,
                 library, listeners as listener_layer, moves as moves_layer,
                 profile as obol_profile, provision as material_cache,
                 sessions as session_layer, staging as staging_layer, tools as tool_inventory,
@@ -748,6 +749,7 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
     findings = [{"kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
                  "value": _redact_value(f.value, include_secrets=_show_secrets()),
                  "evidence": redact_command(f.source or "", include_secrets=_show_secrets()),
+                 "origin": ingest_layer.fact_origin(f),
                  "state": f.state.value} for f in host_facts]
 
     commands = [{"tool": r.get("tool"), "command": redact_command(r.get("command", ""), include_secrets=_show_secrets()),

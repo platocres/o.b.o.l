@@ -176,6 +176,18 @@ def _source_for(fact: Fact, *, include_secrets: bool) -> str:
     return redact_command(src, include_secrets=include_secrets)
 
 
+def _origin_tag(fact: Fact) -> str:
+    """A visible markdown tag when a fact came from the operator, not obol's runner —
+    so a reviewer can always tell obol-proven evidence from operator-supplied evidence."""
+    from .ingest import fact_origin
+    origin = fact_origin(fact)
+    if origin == "operator-attested":
+        return " _(operator-attested)_"
+    if origin == "operator-executed":
+        return " _(operator-executed)_"
+    return ""
+
+
 def _fact_sort_key(fact: Fact) -> tuple[int, str, str, str]:
     category = _fact_category(fact.kind)
     return (_CATEGORY_ORDER.get(category, 99), fact.kind, fact.scope, fact.state.value)
@@ -286,7 +298,7 @@ def _render_facts(ws: Workspace, *, include_secrets: bool) -> list[str]:
             lines.append("")
         state = fact.state.value
         label = friendly(fact.kind)
-        lines.append(f"- **{label}** (`{fact.kind}`, {state})")
+        lines.append(f"- **{label}** (`{fact.kind}`, {state}){_origin_tag(fact)}")
         lines.append(f"  - Scope: `{fact.scope or 'unscoped'}`")
         if fact.value:
             lines.append(f"  - Value: `{_json(fact.value, include_secrets=include_secrets)}`")
@@ -478,6 +490,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
     from (facts, run ledger, lineage) plus the shared graph model — so the HTML
     report and `obol report` never disagree. Secrets are redacted unless asked.
     """
+    from .ingest import fact_origin
     facts = ws.facts
     domain = facts.values("ad.domain_known")
     if facts.has("access.system"):
@@ -505,6 +518,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "scope": fact.scope,
             "value": _redact_value(fact.value, include_secrets=include_secrets),
             "evidence": _source_for(fact, include_secrets=include_secrets),
+            "origin": fact_origin(fact),
             "at": fact.created_at,
         })
 
@@ -546,6 +560,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "path": f.value.get("path", ""),
             "flag": f.value.get("flag", ""),
             "evidence": _source_for(f, include_secrets=include_secrets),
+            "origin": fact_origin(f),
         } for f in sorted(tfacts, key=_fact_sort_key) if f.kind.startswith("objective.")]
         targets_out.append({
             "host": host,
@@ -565,6 +580,8 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
                 "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
                 "value": _redact_value(f.value, include_secrets=include_secrets),
                 "evidence": _source_for(f, include_secrets=include_secrets),
+                "origin": fact_origin(f),
+            "origin": fact_origin(f),
             } for f in sorted(tfacts, key=_fact_sort_key)],
             "evidence": [_evidence_view(e) for e in ws.evidence_for(host)],
         })

@@ -84,10 +84,15 @@ function shortJson(value, limit = 150) {
   if (s.length > limit) s = s.slice(0, limit - 1) + "…";
   return s;
 }
+function originBadge(f) {
+  if (!f || !f.origin || f.origin === "obol") return "";
+  const attested = f.origin === "operator-attested";
+  return `<span class="cat-chip" title="Supplied by the operator, not obol's own run" style="border-color:#E0A96D66;color:#E0A96D">${attested ? "op-attested" : "op-run"}</span>`;
+}
 function factChip(f) {
   const val = shortJson(f.value);
   return `<div class="fact-chip">
-    <div class="fc-top"><span class="fc-label">${esc(f.label || f.kind)}</span><span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category || "other")}</span></div>
+    <div class="fc-top"><span class="fc-label">${esc(f.label || f.kind)}</span>${originBadge(f)}<span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category || "other")}</span></div>
     <div class="fc-kind">${esc(f.kind)}</div>
     ${val ? `<code class="fc-val">${esc(val)}</code>` : ""}
     ${f.evidence ? `<div class="fc-src" title="${esc(f.evidence)}">${esc(f.evidence)}</div>` : ""}</div>`;
@@ -1069,7 +1074,7 @@ async function toggleChecklist(host, item, checked, el) {
 }
 
 function tabFindings(b) {
-  const rows = b.findings.map((f) => `<tr><td class="kind">${esc(f.kind)}</td><td>${esc(f.label)}${Object.keys(f.value || {}).length ? `<div class="fd muted mono" style="font-size:11px">${esc(JSON.stringify(f.value))}</div>` : ""}</td>
+  const rows = b.findings.map((f) => `<tr><td class="kind">${esc(f.kind)}</td><td>${esc(f.label)} ${originBadge(f)}${Object.keys(f.value || {}).length ? `<div class="fd muted mono" style="font-size:11px">${esc(JSON.stringify(f.value))}</div>` : ""}</td>
     <td><span class="cat-chip" style="border-color:${(CAT_COLOR[f.category] || "#6B7591")}66;color:${CAT_COLOR[f.category] || "#B0B8C9"}">${esc(f.category)}</span></td>
     <td class="mono muted" style="font-size:11px;max-width:320px;word-break:break-all">${esc(f.evidence)}</td></tr>`).join("")
     || `<tr><td colspan="4"><div class="empty">No findings for this target yet.</div></td></tr>`;

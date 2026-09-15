@@ -36,6 +36,20 @@ OPERATOR_SOURCE = "operator"          # lineage prefix for parsed external outpu
 OPERATOR_ATTESTED = "operator-attested"   # lineage prefix for a bare assertion
 
 
+def fact_origin(fact) -> str:
+    """Classify a fact's lineage from its ``source`` prefix, so surfaces can visibly
+    distinguish operator-supplied evidence from obol's own runs:
+    ``operator-attested`` (a bare assertion), ``operator-executed`` (parsed from output
+    the operator ran), or ``obol`` (obol's own runner). This keeps the honesty story
+    end-to-end — a fact the operator vouched for is never shown as one obol proved."""
+    src = (getattr(fact, "source", "") or "")
+    if src.startswith(OPERATOR_ATTESTED + ":"):
+        return "operator-attested"
+    if src.startswith(OPERATOR_SOURCE + ":"):
+        return "operator-executed"
+    return "obol"
+
+
 def _resolve_action(action_id: str) -> Action:
     """The action whose parsers should run over the pasted output. A named id scopes the
     action-specific parsers (e.g. `linux-enum` local-enum, `flag-hunt-*` flags); with none

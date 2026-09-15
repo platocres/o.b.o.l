@@ -624,7 +624,10 @@ def cmd_findings(args) -> None:
             print(f"\n[{category}]")
         state_prefix = "" if state == "supported" else f"{state} "
         detail = _value_summary(value)
-        print(f"  {origin:18} {state_prefix}{friendly(kind)}" + (f" — {_trim(detail)}" if detail else ""))
+        op = (" [op-attested]" if source.startswith("operator-attested:")
+              else " [op]" if source.startswith("operator:") else "")
+        print(f"  {origin:18} {state_prefix}{friendly(kind)}{op}"
+              + (f" — {_trim(detail)}" if detail else ""))
         if not args.no_evidence and source:
             print(f"    source: {_trim(redact_command(source, include_secrets=include_secrets))}")
         shown += 1

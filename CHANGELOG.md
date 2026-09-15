@@ -7,6 +7,17 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Operator-sourced facts are now **visibly distinguished** everywhere they surface,
+  closing the pillar III honesty loop end to end. A shared classifier
+  (`ingest.fact_origin`) reads a fact's lineage from its `source` prefix —
+  `operator-executed` (parsed from output the operator ran), `operator-attested` (a bare
+  assertion), or `obol` (obol's own runner) — and it is surfaced in the OSCP markdown
+  report (an `_(operator-attested)_` / `_(operator-executed)_` tag on the finding), the
+  structured report context and per-target findings payloads (an `origin` field), the web
+  findings tables and fact chips (an `op-run` / `op-attested` badge), and `obol findings`
+  (an `[op]` / `[op-attested]` tag). A reviewer can always tell what obol proved from what
+  the operator vouched for.
+
 - Added the **cruise pause briefing** and **external-action ingestion** — the checkpoint
   UX and cruise-control **pillar III (resumable handoff)**, folded into one build so the
   pause and the way back in land together.
