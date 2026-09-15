@@ -36,8 +36,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import (board, bloodhound, discovery, library, sessions as session_layer,
-                tools as tool_inventory, tunnels as tunnel_layer)
+from .. import (board, bloodhound, discovery, library, provision as material_cache,
+                sessions as session_layer, tools as tool_inventory, tunnels as tunnel_layer)
 from ..sessions import SessionError
 from ..tunnels import TunnelError
 from ..graph import (
@@ -1375,6 +1375,41 @@ def create_app(base, *, token: Optional[str] = None):
         if key not in {t.key for t in tool_inventory.REGISTRY}:
             raise HTTPException(404, f"unknown tool {key!r}")
         return tool_inventory.install(key)
+
+    # ── material cache (stageable tools/exploits on this Kali box, §8) ─────────
+    @app.get("/api/cache")
+    def api_cache():
+        return material_cache.scan()
+
+    @app.post("/api/cache/get")
+    def api_cache_get(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        try:
+            res = material_cache.download(key)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
+        if not res.get("ok"):
+            raise HTTPException(502, res.get("error", "download failed"))
+        return res
+
+    @app.post("/api/cache/use")
+    def api_cache_use(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        path = (payload or {}).get("path", "").strip()
+        try:
+            return material_cache.use_local(key, path)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
+        except FileNotFoundError:
+            raise HTTPException(400, f"no file at {path!r}")
+
+    @app.post("/api/cache/rm")
+    def api_cache_rm(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        try:
+            return material_cache.remove(key)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
 
     # ── run-from-site ────────────────────────────────────────────────────────
     @app.post("/api/run/action")

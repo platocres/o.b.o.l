@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, quickstart, service, sessions, tunnels
+from . import __version__, board, discovery, library, provision, quickstart, service, sessions, tunnels
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -905,6 +905,69 @@ def cmd_tunnel(args) -> None:
         cmd_tunnels(args)
 
 
+def cmd_cache(args) -> None:
+    """The Kali-side material cache: what obol can stage onto a foothold, and a
+    one-click download for anything missing. Machine-scoped — no engagement needed."""
+    cmd = getattr(args, "cache_cmd", "list")
+    if cmd == "get":
+        print(f"$ fetching {args.key} into {provision.cache_dir()} …")
+        try:
+            res = provision.download(args.key)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        if not res.get("ok"):
+            print(f"error: {res.get('error')}", file=sys.stderr)
+            raise SystemExit(1)
+        vtag = "verified" if res.get("verified") else "unverified (no pinned digest)"
+        print(f"{board.SYM_OK} cached {args.key}: {res['path']}")
+        print(f"   sha256 {res['sha256']}  ({res['bytes']} bytes, {vtag})")
+        return
+    if cmd == "use":
+        try:
+            res = provision.use_local(args.key, args.path)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        except FileNotFoundError:
+            print(f"no such file: {args.path}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"{board.SYM_OK} registered local {args.key}: {res['path']}")
+        return
+    if cmd == "rm":
+        try:
+            provision.remove(args.key)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"removed {args.key} from the cache")
+        return
+    if cmd == "path":
+        path = provision.resolve_path(args.key)
+        if not path:
+            print(f"{args.key}: not present locally (try `obol cache get {args.key}`)", file=sys.stderr)
+            raise SystemExit(1)
+        print(path)
+        return
+    # default: list the inventory
+    s = provision.scan()
+    print(f"MATERIAL CACHE  ({s['present']}/{s['total']} present)   {s['cache_dir']}")
+    mark = {"cached": board.SYM_OK, "installed": board.SYM_OK, "missing": "·"}
+    for g in s["groups"]:
+        print(f"\n  {g['category']}")
+        for m in g["materials"]:
+            sym = mark.get(m["status"], "·")
+            hint = ""
+            if m["status"] == "missing":
+                hint = (f"  → obol cache get {m['key']}" if m.get("downloadable")
+                        else f"  → obol cache use {m['key']} <path>")
+            elif m["status"] == "installed":
+                hint = "  (on PATH)"
+            print(f"    {sym} {m['label']:<26} {m['os']:<7} {m['status']:<9}{hint}")
+    print("\none-click download fetches into the cache and records a sha256; "
+          "pinned-digest mismatches are rejected.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1047,6 +1110,24 @@ try:
         tp.add_argument("id", help="tunnel id (see `obol tunnels`)")
         tp.set_defaults(func=cmd_tunnel, tunnel_cmd=name)
     ptunnel.set_defaults(func=cmd_tunnel, tunnel_cmd="list")
+
+    pcache = sub.add_parser("cache", help="list/download stageable materials on this Kali box (linpeas, potatoes, chisel/ligolo)")
+    cache_sub = pcache.add_subparsers(dest="cache_cmd")
+    cache_sub.add_parser("list", help="list the material cache").set_defaults(func=cmd_cache, cache_cmd="list")
+    c_get = cache_sub.add_parser("get", help="download a material into the cache (verifies sha256)")
+    c_get.add_argument("key", help="material key (see `obol cache`)")
+    c_get.set_defaults(func=cmd_cache, cache_cmd="get")
+    c_use = cache_sub.add_parser("use", help="register an operator-supplied local file as a material")
+    c_use.add_argument("key", help="material key (see `obol cache`)")
+    c_use.add_argument("path", help="path to the local file")
+    c_use.set_defaults(func=cmd_cache, cache_cmd="use")
+    c_rm = cache_sub.add_parser("rm", help="drop a material from the cache")
+    c_rm.add_argument("key", help="material key (see `obol cache`)")
+    c_rm.set_defaults(func=cmd_cache, cache_cmd="rm")
+    c_path = cache_sub.add_parser("path", help="print the local path of a cached material")
+    c_path.add_argument("key", help="material key (see `obol cache`)")
+    c_path.set_defaults(func=cmd_cache, cache_cmd="path")
+    pcache.set_defaults(func=cmd_cache, cache_cmd="list")
 
     pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")

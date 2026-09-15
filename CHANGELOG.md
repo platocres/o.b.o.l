@@ -7,6 +7,25 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Started the payload staging & tool-provisioning layer (§8), with a design contract
+  in `docs/PAYLOAD_STAGING.md` (posture: enum material auto-runs behind one-click
+  approval, exploit material is applicability-gated then stages + crafts a filled-in
+  privesc command with an add-user or reverse-shell-to-obol outcome, all proof-bound
+  and approval-gated). First slice: the **Kali-side material cache/provisioner**
+  (`obol/provision.py`). A curated registry of stageable materials (linPEAS/winPEAS,
+  linux-exploit-suggester, pspy, GodPotato/PrintSpoofer, RunasCs, SharpHound/Rubeus,
+  chisel/ligolo-ng, nc64/socat) each with an OS, provisioning kind (cache-source/
+  cache-binary/manual), download URL, and optional pinned sha256. A global cache under
+  `$OBOL_HOME/cache/` with an index; a one-click `download()` that computes and records
+  each file's sha256 (trust-on-first-use) and rejects+deletes a pinned-digest mismatch;
+  `ensure()` (the "check Kali first, fetch if missing" preface every later stage/tunnel
+  action calls); an operator override to register a local file for materials with no
+  stable public asset; and a `scan()` inventory grouped by category. obol references
+  the tools' public download URLs and never vendors the binaries (attribution in the
+  module's NOTICE and `obol/packs/NOTICE.md`).
+- Added `obol cache` with `list` / `get` / `use` / `rm` / `path` subcommands (terminal
+  parity for the material cache), and web endpoints `GET /api/cache`, `POST
+  /api/cache/get`, `POST /api/cache/use`, `POST /api/cache/rm`.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works
