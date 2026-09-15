@@ -309,6 +309,31 @@ def cmd_do(args) -> None:
     print()
 
 
+def cmd_cruise(args) -> None:
+    from . import cruise as cruise_layer
+    ws = _load_or_exit()
+    host = args.host or ws.target
+    if not host:
+        print("no active target. add one with `obol target add <ip>` or pass a host.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    print(f"\ncruising {host} — running safe (auto) moves, stopping at the first checkpoint\n")
+
+    def on_step(step):
+        mark = "+" if step.ok else "x"
+        print(f"  {mark} [{step.kind}] {step.label} — {step.summary}")
+
+    res = cruise_layer.cruise(ws, host, max_steps=args.max_steps, on_step=on_step)
+    if not res.ran:
+        print("  (no auto moves to run)")
+    print()
+    lead = {"checkpoint": "stopped at a checkpoint", "done": "cruise complete",
+            "blocked": "stopped", "max-steps": "paused", "no-target": "stopped"}.get(
+        res.stop_reason, "stopped")
+    print(f"{lead}: {res.message}")
+    print(f"ran {res.ran_ok} move(s).\n")
+
+
 def cmd_explain(args) -> None:
     ws = _load_or_exit()
     board.render_command(_pick(ws, args.n), ws)
@@ -1413,6 +1438,12 @@ try:
     pd.add_argument("--outcome", default="",
                     help="exploit outcome to craft: add-user|system-shell|revshell")
     pd.set_defaults(func=cmd_do)
+
+    pc = sub.add_parser("cruise", help="auto-run the safe (recon/enum) moves for a target, "
+                                       "stopping at the first move that needs your approval")
+    pc.add_argument("host", nargs="?", default="", help="target host (default: active target)")
+    pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per run")
+    pc.set_defaults(func=cmd_cruise)
 
     pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)

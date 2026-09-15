@@ -7,6 +7,27 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **`obol cruise`** (`obol/cruise.py`) — supervised cruise control, **ROADMAP
+  cruise-control pillar II**, the loop the whole spine was built for. `cruise(ws, host)`
+  drives a target move by move: it runs the highest-ranked un-attempted **`auto`** move
+  (recon/enum + the safe baseline) through `dispatch.run_move`, re-parses, re-ranks, and
+  repeats — stopping at the first move that needs approval (`approve`/`manual`), which it
+  hands back as a **checkpoint it never fires**, or when nothing safe remains (`done`), or
+  at a step cap. It stands entirely on the three pieces already shipped
+  (`moves.frontier_moves` + `dispatch.run_move` + `obol/autonomy.py`) and is **not a new
+  engine** — every command still goes through the one scope-enforced runner/parser/store
+  and the proof boundaries. Termination is guaranteed: each move runs **at most once** per
+  cruise (a move that yields no new facts can't spin the loop), and a move that fails to
+  run (e.g. a missing tool) is recorded and skipped, not fatal — so cruise degrades to the
+  **resumable-handoff** rhythm (obol stops at friction; the operator fixes it or does the
+  step by hand, re-ingests, and runs `obol cruise` again to continue). Terminal `obol
+  cruise [host] [--max-steps N]` streams each step live and prints the stop reason +
+  checkpoint; web `POST /api/cruise` returns the same result (synchronous under the run
+  lock). Locked by `tests/test_cruise.py` (auto-only unattended execution, stopping at a
+  checkpoint without firing the primitive, termination when nothing settles, and the
+  no-target guard). Still open: a per-step live web view, objective-complete (§7 ladder)
+  as an explicit stop, and an approve-and-continue flow.
+
 - Added **move autonomy tiers** (`obol/autonomy.py`) — cruise-control's stop-contract as
   data, the last piece before the `obol cruise` loop. Every move (from
   `moves.frontier_moves`) now carries a tier saying how autonomous obol may be with it:

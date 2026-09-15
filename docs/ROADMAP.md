@@ -68,6 +68,16 @@ pillars:
   — see pillar I's landed slices below). Terminal `obol cruise` + a web toggle, full
   parity. **Not** "autopilot": cruise control keeps forward motion while the operator's
   hands stay near the wheel and disengages the instant they tap the brake.
+  **First slice landed:** `obol/cruise.py` — `cruise(ws, host)` loops the highest-ranked
+  un-attempted `auto` move → `dispatch.run_move` → re-rank, and stops at the first
+  `approve`/`manual` move (returned as the checkpoint, never fired), when nothing safe
+  remains (`done`), or at a step cap. Each move runs at most once (always terminates); a
+  failed move (a missing tool) is recorded and skipped, not fatal — the operator fixes it
+  or does it by hand and re-runs cruise (the resumable-handoff rhythm). `obol cruise
+  [host] [--max-steps N]` and `POST /api/cruise`. **Still open:** a per-step live web view
+  (it runs synchronously today, like a background job would — §9), objective-complete
+  detection (§7 ladder) as an explicit stop, and the approve-a-checkpoint-and-continue
+  flow (today: handle the checkpoint with `obol do`, then `obol cruise` again).
 - **(III) Resumable handoff + external-action ingestion (the anti-brittleness pillar).**
   The seam Charon lacked. When cruise stops stuck, the operator acts outside obol and
   re-enters from facts:
