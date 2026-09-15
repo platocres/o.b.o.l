@@ -7,6 +7,31 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- **Cruise now carries the operator through the pivot and onward** — the §6 recursive
+  segment mapper, wired into the loop:
+  - The **through-tunnel sweep is a first-class move** (`moves.py`, `kind: "sweep"`):
+    once a tunnel is up and exposes a subnet obol has not swept, the frontier offers
+    "sweep the pivoted segment" (`approve`-tier, dispatched to
+    `discovery.run_tunnel_sweep`, offered once per tunnel — a prior sweep settles it,
+    re-sweeping stays a manual `obol tunnel sweep`). So the loop finally *knows about* the
+    sweep instead of ending at the tunnel.
+  - **Engagement cruise** (`cruise.cruise_engagement`, `obol cruise --all`, `POST
+    /api/cruise {all:true}`): cruise every in-scope target breadth-first, re-reading the
+    target list each pass so hosts a just-run sweep discovers get cruised in the same run.
+    Its result lists every host's stop + checkpoint (the operator's cross-engagement
+    to-do list).
+  - **Auto-sweep elevation** (`cruise(..., auto_kinds={"sweep"})`, `obol cruise --sweep`,
+    `POST /api/cruise {sweep:true}`, web "auto-sweep pivots" toggle): elevates through-
+    tunnel sweeps of already-opened pivots to run unattended, so `obol cruise --all
+    --sweep` sweeps the pivots the operator has opened, discovers the new segment, and
+    cruises its hosts — all in one run. Opening a tunnel (the pivot decision) is **never**
+    elevated; it stays a per-host checkpoint. The autonomy posture across a hop stays
+    honest: pivot (approve) → sweep (approve, or elevated) → the new segment's recon/enum
+    (auto) → its checkpoints (approve).
+  Locked by `tests/test_pivot_recursion.py` (the sweep move offered/settled, dispatch
+  running a sweep, the auto_kinds elevation vs. checkpoint, and engagement cruise walking
+  + recursing into a newly-discovered segment).
+
 - Added the **web cruise surface** — a **Cruise control** card on the per-target Overview
   that brings `obol cruise` to the browser with full terminal parity. A ▶ Cruise button
   runs cruise (`POST /api/cruise`) and renders the whole pause briefing as a live panel:

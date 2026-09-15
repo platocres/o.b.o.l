@@ -29,11 +29,12 @@ from .scope import normalize_target
 # Within-phase priority hints that place a primitive move sensibly among the pack
 # actions of the same phase (pack actions keep their own pack priority). Ranking is
 # dominated by the phase/frontier bucket; these only order within a band.
-_PRIMITIVE_PRIORITY = {"login": 78, "enum": 66, "exploit": 60, "tunnel": 46}
+_PRIMITIVE_PRIORITY = {"login": 78, "enum": 66, "exploit": 60, "tunnel": 46, "sweep": 52}
 
 # The phase each primitive move advances (the frontier layout the map/planner share).
+# A through-tunnel sweep discovers the next segment, so it advances the escalate/pivot band.
 _PRIMITIVE_PHASE = {"login": "access", "enum": "escalate",
-                    "exploit": "escalate", "tunnel": "escalate"}
+                    "exploit": "escalate", "tunnel": "escalate", "sweep": "escalate"}
 
 
 @dataclass
@@ -162,6 +163,23 @@ def frontier_moves(ws, host: str = "") -> list[Move]:
             detail={"kind": t["kind"], "transport": t.get("transport"),
                     "proxychains": bool(t.get("proxychains")),
                     "exposes_subnet": t.get("exposes_subnet", "")},
+        ))
+
+    # 6) through-tunnel sweep (§6e) — the recursion: once a tunnel is up and exposes a
+    #    subnet obol has not swept yet, offer to sweep *through* it to discover the next
+    #    segment's hosts (they become targets). Offered once per tunnel (a prior sweep run
+    #    settles it); re-sweeping stays a manual `obol tunnel sweep`.
+    swept = {r.get("tunnel") for r in ws.runs if r.get("sweep")}
+    for t in ws.tunnels_for(host):
+        tid, subnet = t.get("id"), t.get("exposed_subnet", "")
+        if t.get("status") != "up" or not subnet or tid in swept:
+            continue
+        moves.append(Move(
+            kind="sweep", id=f"sweep:{tid}",
+            label=f"Sweep the pivoted segment {subnet} (tunnel {tid})",
+            phase=_PRIMITIVE_PHASE["sweep"], ready=True,
+            priority=_PRIMITIVE_PRIORITY["sweep"], autonomy=autonomy.PRIMITIVE_TIER["sweep"],
+            detail={"tunnel": tid, "subnet": subnet, "transport": t.get("transport", "")},
         ))
 
     return _rank(moves, frontier)

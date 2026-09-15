@@ -1564,10 +1564,15 @@ def create_app(base, *, token: Optional[str] = None):
         from .. import cruise as cruise_layer
         host = (payload or {}).get("host", "")
         max_steps = int((payload or {}).get("max_steps", cruise_layer.DEFAULT_MAX_STEPS))
+        auto_kinds = frozenset({"sweep"}) if (payload or {}).get("sweep") else frozenset()
         with _RUN_LOCK:
             ws = active()
+            if (payload or {}).get("all"):
+                return cruise_layer.cruise_engagement(ws, max_steps=max_steps,
+                                                      auto_kinds=auto_kinds, surface="web").to_dict()
             h = host or ws.target or ""
-            return cruise_layer.cruise(ws, h, max_steps=max_steps, surface="web").to_dict()
+            return cruise_layer.cruise(ws, h, max_steps=max_steps,
+                                       auto_kinds=auto_kinds, surface="web").to_dict()
 
     @app.get("/api/objectives")
     def api_objectives(host: str = Query("")):

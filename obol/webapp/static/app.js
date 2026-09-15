@@ -31,7 +31,7 @@ const NODE_COLOR = { scope: "#64748B", domain: "#6366F1", target: "#38BDF8",
 
 const state = { view: "engagement", target: null, tab: "overview", redact: false,
   toolTarget: "", lastRun: null, playbook: null, scrollTo: null, findHost: "",
-  cruise: {}, cruiseBusy: false };
+  cruise: {}, cruiseBusy: false, cruiseSweep: false };
 // charts[id] = { el: <canvas>, chart: Chart } — tracked so morphdom-preserved
 // canvases keep their Chart instance and orphaned ones are torn down.
 const charts = {};
@@ -320,6 +320,7 @@ function onChange(e) {
     case "sec-toggle": state.redact = el.checked; render(); break;
     case "redact-global": state.redact = el.checked; render(); break;
     case "chk": toggleChecklist(el.dataset.host, el.dataset.item, el.checked, el); break;
+    case "cruise-sweep-toggle": state.cruiseSweep = el.checked; break;
     case "bh-upload": uploadBloodhound(el); break;
   }
 }
@@ -890,7 +891,7 @@ async function runCruise(host) {
   state.cruiseBusy = true; render();
   toast("Cruising " + host, "running the safe moves, stopping at the first checkpoint …", "ok");
   try {
-    const r = await apiPost("/api/cruise", { host });
+    const r = await apiPost("/api/cruise", { host, sweep: state.cruiseSweep });
     state.cruise[host] = r;
     const stop = r.stop_reason === "objective-complete" ? "objective complete"
       : r.stop_reason === "checkpoint" ? "checkpoint" : r.stop_reason;
@@ -919,7 +920,8 @@ function objectiveBar(obj) {
 function cruiseCard(b) {
   const host = b.meta.host;
   const r = state.cruise[host];
-  const btn = `<button class="btn sm primary" data-act="cruise" data-host="${esc(host)}" ${state.cruiseBusy ? "disabled" : ""}>${state.cruiseBusy ? "Cruising…" : "▶ Cruise"}</button>`;
+  const sweep = `<label class="muted" style="font-size:11px;display:inline-flex;align-items:center;gap:4px" title="Auto-run through-tunnel sweeps of pivots you have already opened, carrying cruise into the new segment"><input type="checkbox" data-act="cruise-sweep-toggle" ${state.cruiseSweep ? "checked" : ""}> auto-sweep pivots</label>`;
+  const btn = `<div class="row" style="gap:8px;align-items:center">${sweep}<button class="btn sm primary" data-act="cruise" data-host="${esc(host)}" ${state.cruiseBusy ? "disabled" : ""}>${state.cruiseBusy ? "Cruising…" : "▶ Cruise"}</button></div>`;
   let body = `<div class="muted">Auto-run the safe (recon/enum) moves, stopping at the first move that needs your approval.</div>`;
   if (r && r.briefing) {
     const brf = r.briefing;

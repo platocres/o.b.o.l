@@ -312,18 +312,48 @@ def cmd_do(args) -> None:
 def cmd_cruise(args) -> None:
     from . import cruise as cruise_layer
     ws = _load_or_exit()
+    auto_kinds = frozenset({"sweep"}) if args.sweep else frozenset()
+
+    def on_step(step):
+        mark = "+" if step.ok else "x"
+        print(f"  {mark} [{step.kind}] {step.label} — {step.summary}")
+
+    if args.all:
+        if not ws.targets:
+            print("no targets to cruise. add one with `obol target add <ip>` or run a scan.",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        sweep_note = " (auto-sweeping open pivots)" if args.sweep else ""
+        print(f"\ncruising the engagement — every in-scope target{sweep_note}\n")
+
+        def on_host(entry, res):
+            lead = {"checkpoint": "checkpoint", "done": "done", "objective-complete": "COMPLETE",
+                    "blocked": "blocked", "max-steps": "paused"}.get(entry["stop_reason"], entry["stop_reason"])
+            cp = entry.get("checkpoint")
+            tail = f" → {cp['ask']}: {cp['label']}" if cp else ""
+            print(f"  {entry['host']:16} [{lead}] ran {entry['ran']}{tail}")
+
+        eng = cruise_layer.cruise_engagement(ws, max_steps=args.max_steps,
+                                             auto_kinds=auto_kinds, on_host=on_host, on_step=None)
+        s = eng.to_dict()["summary"]
+        print(f"\ncruised {s['cruised']} target(s): {s['checkpoints']} at a checkpoint, "
+              f"{s['complete']} complete.")
+        opens = [e for e in eng.hosts if e.get("checkpoint")]
+        if opens:
+            print("\nyour checkpoints:")
+            for e in opens:
+                cp = e["checkpoint"]
+                print(f"  {e['host']:16} [{cp['ask']}] {cp['label']}  → obol do {cp['id']} {e['host']}")
+        print()
+        return
+
     host = args.host or ws.target
     if not host:
         print("no active target. add one with `obol target add <ip>` or pass a host.",
               file=sys.stderr)
         raise SystemExit(1)
     print(f"\ncruising {host} — running safe (auto) moves, stopping at the first checkpoint\n")
-
-    def on_step(step):
-        mark = "+" if step.ok else "x"
-        print(f"  {mark} [{step.kind}] {step.label} — {step.summary}")
-
-    res = cruise_layer.cruise(ws, host, max_steps=args.max_steps, on_step=on_step)
+    res = cruise_layer.cruise(ws, host, max_steps=args.max_steps, auto_kinds=auto_kinds, on_step=on_step)
     if not res.ran:
         print("  (no auto moves to run)")
     _print_briefing(res)
@@ -1551,7 +1581,12 @@ try:
     pc = sub.add_parser("cruise", help="auto-run the safe (recon/enum) moves for a target, "
                                        "stopping at the first move that needs your approval")
     pc.add_argument("host", nargs="?", default="", help="target host (default: active target)")
-    pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per run")
+    pc.add_argument("--all", action="store_true",
+                    help="cruise every in-scope target (the recursion across segments)")
+    pc.add_argument("--sweep", action="store_true",
+                    help="auto-run through-tunnel sweeps of already-opened pivots "
+                         "(carries cruise into the pivoted segment; opening a tunnel still asks)")
+    pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per target")
     pc.set_defaults(func=cmd_cruise)
 
     po = sub.add_parser("objectives", help="show the per-target objective ladder "

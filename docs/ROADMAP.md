@@ -512,7 +512,16 @@ The build sequence (each a reviewable PR):
     forward, not a full subnet route** — obol must say so, never imply a full pivot it
     didn't get. Interlocks with §8 (stage the chisel/ligolo binary when it isn't
     already on the target) and §6(e)/(f) (the health probe, and the tunnel display).
-- **(e) Through-tunnel sweep (the recursion + health proof).** Once (d) is up and
+- **(e) Through-tunnel sweep — now driven by cruise.** `discovery.run_tunnel_sweep`
+  landed earlier; it is now a **first-class move** in the frontier (`kind: "sweep"`,
+  offered once per live tunnel that exposes an un-swept subnet, `approve`-tier) dispatched
+  through `dispatch.run_move`, so the loop knows about it. `obol cruise --all` cruises
+  every in-scope target breadth-first and re-reads the target list each pass, and
+  `obol cruise --sweep` (auto_kinds={"sweep"}) elevates the sweep to auto once the operator
+  has opened the pivot — so cruise sweeps the pivoted segment, its new hosts become
+  targets, and cruise recurses onto them, all supervised (opening the tunnel still asks).
+  This closes the §6 "recursive segment mapper" loop for cruise. **Original design below.**
+- **(e-orig) Through-tunnel sweep (the recursion + health proof).** Once (d) is up and
   scope auto-extended, re-run the discovery sweep (0b/0c) **through** the tunnel. The
   scan technique is picked from the transport: SOCKS → `nmap -sT -Pn` (SOCKS carries
   only TCP connect; ICMP/UDP/SYN find nothing), ligolo → `-Pn` connect. This doubles
