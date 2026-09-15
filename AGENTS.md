@@ -264,8 +264,15 @@ obol/
                  (a privesc exploit — craft, never fire). Data-driven (an explicit pack
                  `autonomy` overrides the phase/quickstart derivation), conservative by
                  default; dispatch.run_move enforces it as the approval gate
+  cruise.py      obol cruise — supervised cruise control (pillar II): the loop over
+                 moves.frontier_moves + dispatch.run_move + autonomy. Runs the
+                 highest-ranked un-attempted AUTO move, re-ranks, repeats, and STOPS at
+                 the first approve/manual move (a checkpoint it hands back, never fires) or
+                 when nothing safe remains. Each move runs at most once (always
+                 terminates); a failed move is recorded and skipped, not fatal. Not a new
+                 engine — only orders calls to the primitives. `obol cruise [host]`
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / moves / do / next / explain / run / playbook(s) / sweep / login /
+                 overview / moves / do / cruise / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used

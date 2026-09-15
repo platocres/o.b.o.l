@@ -1554,6 +1554,19 @@ def create_app(base, *, token: Optional[str] = None):
             except dispatch.DispatchError as exc:
                 raise HTTPException(400, str(exc))
 
+    @app.post("/api/cruise")
+    def api_cruise(payload: dict = Body(...)):
+        """Supervised cruise control (pillar II): auto-run the safe moves for a target,
+        stopping at the first checkpoint. Runs synchronously under the run lock; the
+        result lists what ran and the checkpoint it stopped at."""
+        from .. import cruise as cruise_layer
+        host = (payload or {}).get("host", "")
+        max_steps = int((payload or {}).get("max_steps", cruise_layer.DEFAULT_MAX_STEPS))
+        with _RUN_LOCK:
+            ws = active()
+            h = host or ws.target or ""
+            return cruise_layer.cruise(ws, h, max_steps=max_steps, surface="web").to_dict()
+
     # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
     @app.get("/api/exploits")
     def api_exploits(host: str = Query(...)):
