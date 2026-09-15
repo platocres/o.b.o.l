@@ -22,6 +22,7 @@ Localhost-only, token-gated (`X-Obol-Token` header or `?token=`).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import json
 import mimetypes
@@ -102,6 +103,35 @@ STATIC_DIR = Path(__file__).parent / "static"
 # redact switch. This is deliberately the opposite of a shareable artifact like the
 # debug package, which stays redacted-by-default. See docs/ROADMAP.md.
 WEB_SHOW_SECRETS = True
+
+# The engagement-wide redact switch. Secrets show by default (above); the SPA's one
+# toggle sends `include_secrets=0` (or `redact=1`) on every read, and a per-request
+# context var carries that choice to every payload builder — so the findings roll-up,
+# command ledger, per-target findings, sessions, and report all honor the same switch
+# instead of each surface owning its own. Default is WEB_SHOW_SECRETS (show), so the
+# behavior is unchanged unless the client opts into redaction. See docs/ROADMAP.md.
+_SHOW_SECRETS_VAR: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "obol_web_show_secrets", default=WEB_SHOW_SECRETS)
+
+
+def _show_secrets() -> bool:
+    """Whether the current request should render secrets (defaults to the show-by-default
+    product setting; the SPA's redact switch flips it per request)."""
+    return _SHOW_SECRETS_VAR.get()
+
+
+def _request_show_secrets(request) -> bool:
+    """Resolve show-vs-redact for one request from its query params: `include_secrets`
+    (1/0) or `redact` (1 ⇒ redact). Absent ⇒ the show-by-default setting."""
+    q = request.query_params
+    falsey = {"0", "false", "no", "off"}
+    if "include_secrets" in q:
+        return str(q["include_secrets"]).lower() not in falsey
+    if "redact" in q:
+        return str(q["redact"]).lower() in falsey  # redact=1 ⇒ do NOT show secrets
+    return WEB_SHOW_SECRETS
+
+
 PHASES = ["recon", "enum", "creds", "access", "escalate", "loot"]
 PHASE_LABEL = {"recon": "Recon", "enum": "Enumerate", "creds": "Credentials",
                "access": "Access", "escalate": "Escalate", "loot": "Loot / domain"}
@@ -285,7 +315,7 @@ def _command_preflight(action, ws: Workspace, *, target: str = "", command_index
     return {
         "action_id": action.id,
         "command_index": command_index + 1,
-        "command": redact_command(command, include_secrets=WEB_SHOW_SECRETS),
+        "command": redact_command(command, include_secrets=_show_secrets()),
         "tool": tool_state,
         "parser": _parser_status(action, command),
         "missing_inputs": missing,
@@ -412,8 +442,8 @@ def _fact_view(f) -> dict:
     return {
         "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
         "scope": f.scope, "state": f.state.value,
-        "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
-        "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
+        "value": _redact_value(f.value, include_secrets=_show_secrets()),
+        "evidence": redact_command(f.source or "", include_secrets=_show_secrets()),
         "created_at": f.created_at,
     }
 
@@ -507,8 +537,8 @@ def _engagement_findings(ws: Workspace) -> dict:
         buckets.setdefault(cat, []).append({
             "kind": f.kind, "label": friendly(f.kind), "category": cat,
             "host": host, "origin": origin, "origin_kind": origin_kind,
-            "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
-            "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
+            "value": _redact_value(f.value, include_secrets=_show_secrets()),
+            "evidence": redact_command(f.source or "", include_secrets=_show_secrets()),
             "at": f.created_at,
         })
         total += 1
@@ -535,7 +565,7 @@ def _engagement_timeline(ws: Workspace, limit: int = 40) -> list[dict]:
         tgt = row.get("target", "") or ""
         out.append({
             "tool": row.get("tool", "tool"),
-            "command": redact_command(row.get("command", ""), include_secrets=WEB_SHOW_SECRETS),
+            "command": redact_command(row.get("command", ""), include_secrets=_show_secrets()),
             "status": _run_status(row),
             "produced": list(row.get("produced") or []),
             "at": row.get("at"),
@@ -615,7 +645,7 @@ def _outcome_view(outcome) -> dict:
     added = [_fact_view(f) for f in outcome.added]
     return {
         "action_id": outcome.action_id,
-        "command": redact_command(outcome.command, include_secrets=WEB_SHOW_SECRETS),
+        "command": redact_command(outcome.command, include_secrets=_show_secrets()),
         "tool": outcome.tool,
         "dry_run": outcome.dry_run,
         "success": success,
@@ -705,7 +735,7 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
             except ActionError:
                 cmd = a.command
             items.append({"id": a.id, "title": a.title,
-                          "command": redact_command(cmd, include_secrets=WEB_SHOW_SECRETS),
+                          "command": redact_command(cmd, include_secrets=_show_secrets()),
                           "tools": a.tools or ([a.tool] if a.tool else []),
                           "checked": bool(ticks.get(a.id))})
         if items:
@@ -713,11 +743,11 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
 
     host_facts = [f for f in tf.facts if f.scope == f"host:{host}"]
     findings = [{"kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
-                 "value": _redact_value(f.value, include_secrets=WEB_SHOW_SECRETS),
-                 "evidence": redact_command(f.source or "", include_secrets=WEB_SHOW_SECRETS),
+                 "value": _redact_value(f.value, include_secrets=_show_secrets()),
+                 "evidence": redact_command(f.source or "", include_secrets=_show_secrets()),
                  "state": f.state.value} for f in host_facts]
 
-    commands = [{"tool": r.get("tool"), "command": redact_command(r.get("command", ""), include_secrets=WEB_SHOW_SECRETS),
+    commands = [{"tool": r.get("tool"), "command": redact_command(r.get("command", ""), include_secrets=_show_secrets()),
                  "status": _run_status(r), "produced": r.get("produced") or [],
                  "at": r.get("at"), "playbook": r.get("playbook")}
                 for r in ws.runs if r.get("target") == host or (not r.get("target") and host == ws.target)][::-1][:60]
@@ -1067,7 +1097,13 @@ def create_app(base, *, token: Optional[str] = None):
             if not supplied or not secrets.compare_digest(supplied, token):
                 return JSONResponse({"detail": "missing or invalid token — open the URL from `obol serve`"},
                                     status_code=401)
-        return await call_next(request)
+        # carry the engagement-wide redact choice to every payload builder for this
+        # request (the SPA sends include_secrets=0 / redact=1 when the switch is on).
+        secrets_token = _SHOW_SECRETS_VAR.set(_request_show_secrets(request))
+        try:
+            return await call_next(request)
+        finally:
+            _SHOW_SECRETS_VAR.reset(secrets_token)
 
     # ── engagements ──────────────────────────────────────────────────────────
     @app.get("/api/engagements")
@@ -1104,7 +1140,7 @@ def create_app(base, *, token: Optional[str] = None):
     @app.get("/api/overview")
     def api_overview():
         ws = active()
-        ctx = build_report_context(ws, include_secrets=WEB_SHOW_SECRETS)
+        ctx = build_report_context(ws, include_secrets=_show_secrets())
         activity = [{"tool": r["tool"], "command": r["command"], "status": r["status"],
                      "produced": r["produced"], "at_display": r["at_display"],
                      "playbook": r.get("playbook")} for r in ctx["timeline"][-14:][::-1]]

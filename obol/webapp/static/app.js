@@ -42,6 +42,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 // ── api ──────────────────────────────────────────────────────────────────
 async function api(path) {
+  // engagement-wide redact switch: when on, every read asks the server to redact
+  // secrets (unless the caller already set include_secrets explicitly).
+  if (state.redact && !/[?&](include_secrets|redact)=/.test(path))
+    path += (path.includes("?") ? "&" : "?") + "include_secrets=0";
   const r = await fetch(path, { headers: { "X-Obol-Token": TOKEN } });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
   return r.json();
@@ -298,6 +302,7 @@ function onChange(e) {
     case "eng-activate": activateEngagement(el.value); break;
     case "tool-target": state.toolTarget = el.value; break;
     case "sec-toggle": state.redact = el.checked; render(); break;
+    case "redact-global": state.redact = el.checked; render(); break;
     case "chk": toggleChecklist(el.dataset.host, el.dataset.item, el.checked, el); break;
     case "bh-upload": uploadBloodhound(el); break;
   }
@@ -362,6 +367,8 @@ async function render() {
 function updateNav() {
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", state.view === b.dataset.view));
+  const rg = $("#redact-global");   // keep the global switch in sync with state
+  if (rg) rg.checked = state.redact;
 }
 function paint(html) {
   const c = $("#content");

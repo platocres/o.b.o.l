@@ -104,6 +104,9 @@ code, .mono { font-family: var(--mono); }
 .topbar .spacer { flex: 1; }
 .flash { font-size: 12px; color: var(--green-2); opacity: 0; transition: opacity .3s; }
 .flash.show { opacity: 1; }
+.redact-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  color: var(--text-2); cursor: pointer; margin-right: 12px; user-select: none; white-space: nowrap; }
+.redact-toggle input { margin: 0; cursor: pointer; }
 .content { padding: 24px 26px 60px; max-width: 1180px; width: 100%; }
 
 /* ── primitives ───────────────────────────────────────────────────────── */

@@ -7,6 +7,16 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added a self-contained offline path graph for the static `obol web` snapshot
+  (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
+  as inline SVG phase columns — no script, web font, or CDN — so its path graph works
+  on an offline exam box, matching the live `obol serve` surface. Drops the previous
+  CDN Mermaid embed that left the snapshot's graph blank offline.
+- Added an engagement-wide redact switch the whole SPA respects: one header toggle
+  sends `include_secrets=0` on every read, carried to every payload builder via a
+  per-request context, so the findings roll-up, command ledger, per-target findings,
+  sessions, and report all honor the same switch. Secrets still show by default (the
+  single-operator localhost console product call); redaction is opt-in.
 - Added the tunnels layer and a route-aware runner (§6d): `obol/tunnels.py` is a
   registry of pivot transports (ligolo-ng, sshuttle, chisel, ssh `-D`, ssh `-L`),
   each carrying its transport (transparent L3 vs SOCKS vs single-port forward), the
@@ -105,6 +115,15 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Changed
 
+- Fixed the engagement-map credential model: the map now draws one node per distinct
+  `(user, domain)` credential and a credential→host edge only where a fact ties them
+  (a host-scoped credential fact, or a session logged in as that user) instead of one
+  credential node glued to every foothold host; a credential links only to its own
+  domain, with no arbitrary domain fallback.
+- Fixed an exam-flow ranking nit: quiet AS-REP roasting now ranks above the noisy,
+  lockout-risky password spray off a user list (an importer exam-flow override, since
+  spraying produces a validated credential the weight table would otherwise score
+  higher). Regenerating the AD pack keeps the new order.
 - Local privilege escalation leads now unlock their matching abuse cards without
   claiming admin/root/SYSTEM unless command output explicitly proves it.
 - Validated-credential recording is now hash-aware: a `user:<hash>` NetExec auth

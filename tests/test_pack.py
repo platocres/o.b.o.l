@@ -94,6 +94,22 @@ def test_running_ldap_enum_unlocks_asrep():
     assert "asrep-roast" in {a.id for a in next_actions(ws.facts)}
 
 
+def test_quiet_roasting_ranks_before_noisy_password_spray():
+    """Exam-flow ranking: off a user list, quiet AS-REP roasting (no creds, no
+    lockout risk) must outrank the noisy, premature password spray — even though
+    spraying produces a validated credential the weight table scores higher."""
+    facts = FactSet([
+        Fact("ad.user_list", "domain:htb.local", {"users": ["a", "b"]}, source="x"),
+        Fact("ad.dc_candidate", "host:10.10.10.5", {}, source="x"),
+        Fact("kerberos.reachable", "host:10.10.10.5", {}, source="x"),
+    ])
+    ids = [a.id for a in next_actions(facts)]
+    assert "asrep-roast" in ids and "password-spray" in ids
+    assert ids.index("asrep-roast") < ids.index("password-spray")
+    by_id = {a.id: a for a in load_pack()}
+    assert by_id["asrep-roast"].priority > by_id["password-spray"].priority
+
+
 def test_produced_facts_are_supported_and_sourced():
     ws = Workspace(Path("/tmp/obol-test-ws3"))
     seed_forest(ws)

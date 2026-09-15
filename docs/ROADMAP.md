@@ -565,13 +565,18 @@ summary that links into it.
   deliberate product call for a single-operator localhost lab/exam console (see
   `webapp/server.py WEB_SHOW_SECRETS`). The shareable **debug package stays redacted
   by default** — it is an artifact meant to leave the box; `--include-secrets` opts
-  in. Remaining: an engagement-wide redact switch the whole SPA respects (the
-  findings roll-up and command ledger have no per-view toggle yet).
-- **The engagement-map credential model is thin** (from ChatGPT's map PR #24): it
+  in. ~~Remaining: an engagement-wide redact switch the whole SPA respects (the
+  findings roll-up and command ledger have no per-view toggle yet).~~ **DONE.** One
+  header toggle sends `include_secrets=0` on every read, carried to every payload
+  builder via a per-request context, so the findings roll-up, command ledger,
+  per-target findings, sessions, and report all honor the same switch.
+- ~~**The engagement-map credential model is thin** (from ChatGPT's map PR #24): it
   creates only one credential node, attaches it to *every* foothold+ host, and
-  falls back to an arbitrary domain when the credential has none. Fix: one node per
-  distinct credential, and a cred→host edge only where a fact ties that credential
-  to that host. Largely subsumed by §6(f) (the topology-map redesign).
+  falls back to an arbitrary domain when the credential has none.~~ **DONE.** The map
+  now draws one node per distinct `(user, domain)` credential and a cred→host edge
+  only where a fact ties them (a host-scoped credential fact or a session logged in
+  as that user); a credential links only to its own domain. (§6(f)'s topology-map
+  redesign will build on this.)
 - ~~**Terminal parity for 0e:** an `obol findings` roll-up (and/or a richer `obol
   overview`) so the CLI operator gets the same cross-host, category-organized
   findings view the web Activity view added.~~ **DONE.** `obol findings` prints an
@@ -580,12 +585,15 @@ summary that links into it.
 - ~~`run`'s "new facts" detail line is still sparse for port/service facts.~~
   **DONE.** CLI run feedback now uses compact fact summaries for ports, services,
   web titles, shares, banners, users, redirects, and other common parser payloads.
-- Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
-  ahead of roasting).
-- `obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its
-  path graph is blank offline. The live `obol serve` surface is fully offline
-  (vendored Chart.js, SVG flow chart); porting the static snapshot onto
-  `build_graph_model`'s SVG renderer would close the gap.
+- ~~Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
+  ahead of roasting).~~ **PARTLY DONE.** Quiet AS-REP roasting now ranks above the
+  noisy password spray off a user list (an importer exam-flow override). The broader
+  phase/flow model (item 2) is still the real fix for ranking beyond this spine.
+- ~~`obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its
+  path graph is blank offline.~~ **DONE.** The static snapshot renders the shared
+  graph model as inline SVG phase columns (`graph.build_graph_svg`) — no script, web
+  font, or CDN — so its path graph works offline, matching the live `obol serve`
+  surface.
 - ~~The web surface loads the whole `.obol/state.json` per request (flat fact list,
   whole-file rewrites, single-target shape).~~ **DONE.** The store is now SQLite
   (`.obol/state.db`, `obol/store.py`): WAL, idempotent/targeted writes so the

@@ -1,6 +1,6 @@
 """The path graph is one projection: the structured model, the mermaid render, and
 the web all agree because they come from build_graph_model."""
-from obol.graph import build_graph_model, build_mermaid, phase_of_kind, PHASES
+from obol.graph import build_graph_model, build_graph_svg, build_mermaid, phase_of_kind, PHASES
 from obol.seed import seed_forest
 from obol.workspace import Workspace
 
@@ -59,3 +59,26 @@ def test_mermaid_renders_from_model(tmp_path):
     model = build_graph_model(facts)
     for n in model["nodes"]:
         assert n["id"] in mm
+
+
+def test_graph_svg_is_offline_and_covers_every_node(tmp_path):
+    """The offline SVG renderer (for the static `obol web` snapshot) draws the same
+    model with no script, web font, or CDN — so the path graph works offline."""
+    facts = _seeded(tmp_path).facts
+    svg = build_graph_svg(facts)
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+    low = svg.lower()
+    # no external fetches (the xmlns namespace URL is not a network load, so it's fine)
+    assert "cdn" not in low and "<script" not in low and "mermaid" not in low
+    assert "src=" not in low and "href=" not in low and "<link" not in low
+    # a phase header for the earliest populated stage, and one rect + full-label
+    # tooltip per model node
+    assert "RECON" in svg
+    model = build_graph_model(facts)
+    assert svg.count("<rect") == len(model["nodes"])
+    assert svg.count("<title>") == len(model["nodes"])
+
+
+def test_graph_svg_handles_empty_path(tmp_path):
+    svg = build_graph_svg(Workspace(tmp_path).facts)
+    assert svg.startswith("<svg") and "run a scan" in svg

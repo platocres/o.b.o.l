@@ -16,6 +16,7 @@ progression" feel the roadmap asks for — instead of a raw dependency DAG.
 """
 from __future__ import annotations
 
+import html
 import re
 
 from .facts import FactSet
@@ -335,18 +336,40 @@ def build_engagement_graph(ws) -> dict:
         nodes.append({"id": sid, "type": "scope", "tier": 0,
                       "label": entry, "meta": {"scope": entry}})
 
-    # A validated credential reused across hosts is the classic cross-target link.
-    cred_facts = ws.facts.values("credential.available") + ws.facts.values("credential.plaintext")
-    cred_id = None
-    if cred_facts:
-        who = cred_facts[0].get("user") or "credential"
-        cred_domain = str(cred_facts[0].get("domain") or "").lower()
-        cred_id = _nid("cred_" + str(who) + "_" + cred_domain)
-        nodes.append({"id": cred_id, "type": "credential", "tier": 2,
-                      "label": f"cred: {who}", "meta": {}})
-        did = add_domain(cred_domain) if cred_domain else next(iter(domain_ids.values()), "")
-        if did:
-            _add_edge(edges, seen_edges, did, cred_id, "credential")
+    # Credentials: one node per DISTINCT (user, domain), tied to a host only where a
+    # fact or a session actually connects that credential to that host — never one
+    # credential node glued to every foothold, and never an arbitrary domain fallback.
+    creds: dict[tuple[str, str], dict] = {}
+    for f in ws.facts.facts:
+        if f.kind not in ("credential.available", "credential.plaintext") or not _supported(f):
+            continue
+        v = f.value or {}
+        user = str(v.get("user") or "").strip()
+        domain = str(v.get("domain") or "").strip().lower()
+        rec = creds.setdefault((user.lower(), domain),
+                               {"user": user or "credential", "domain": domain, "hosts": set()})
+        if f.scope.startswith("host:"):
+            rec["hosts"].add(f.scope[5:])   # a host-scoped credential fact ties them
+    # a live session is direct evidence a credential's user logged into that host
+    for s in getattr(ws, "sessions", []):
+        suser = str(s.get("user") or "").strip().lower()
+        shost = s.get("host") or ""
+        if not suser or not shost:
+            continue
+        for (user, _domain), rec in creds.items():
+            if user == suser:
+                rec["hosts"].add(shost)
+
+    cred_ids: dict[tuple[str, str], str] = {}
+    for key, rec in creds.items():
+        cid = _nid("cred_" + rec["user"] + "_" + rec["domain"])
+        cred_ids[key] = cid
+        nodes.append({"id": cid, "type": "credential", "tier": 2,
+                      "label": f"cred: {rec['user']}",
+                      "meta": {"user": rec["user"], "domain": rec["domain"]}})
+        # link to the credential's OWN domain only (evidence-backed by the cred fact)
+        if rec["domain"]:
+            _add_edge(edges, seen_edges, add_domain(rec["domain"]), cid, "credential")
 
     for t in ws.targets:
         host = t["host"]
@@ -386,9 +409,11 @@ def build_engagement_graph(ws) -> dict:
             })
             _add_edge(edges, seen_edges, tid, sid, "exposes")
 
-        # a validated credential that granted access on this host links them
-        if cred_id and level in ("foothold", "privileged"):
-            _add_edge(edges, seen_edges, cred_id, tid, "authenticates")
+        # a credential links to this host only where evidence ties them (a host-scoped
+        # credential fact, or a session logged in as that user) — not merely a foothold.
+        for key, cid in cred_ids.items():
+            if host in creds[key]["hosts"]:
+                _add_edge(edges, seen_edges, cid, tid, "authenticates")
 
     # BloodHound overlay (engagement-wide): high-value groups + roastable principals.
     bh = ws.bloodhound or {}
@@ -421,6 +446,96 @@ _MERMAID_CLASSES = {
     ("fact", "proven"): "proven", ("fact", "future"): "future",
     ("action", "done"): "done", ("action", "next"): "next",
 }
+
+
+# Node fills for the offline SVG — the same palette as the mermaid classes above and
+# the live surface's flow chart, so all three renderers read alike.
+_SVG_NODE_STYLE = {
+    ("fact", "proven"): ("#1f7a1f", "#0d3b0d", "#ffffff", False),
+    ("fact", "future"): ("#e5e7eb", "#9ca3af", "#374151", True),
+    ("action", "done"): ("#2b5d8a", "#173952", "#ffffff", False),
+    ("action", "next"): ("#0e7490", "#083344", "#ffffff", False),
+}
+_PHASE_SVG_COLOR = {
+    "recon": "#6b7ba6", "enum": "#4f8ac9", "creds": "#c9a227",
+    "access": "#3fb950", "escalate": "#d2691e", "loot": "#a371f7",
+}
+
+
+def _svg_text(label: str, limit: int = 24) -> str:
+    label = label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
+    return html.escape(label)
+
+
+def build_graph_svg(facts: FactSet, pack: list[Action] | None = None) -> str:
+    """Render the shared graph model to a self-contained inline SVG flow chart.
+
+    This is the offline counterpart to the live web surface's JS renderer and the
+    terminal/report mermaid: phase columns left-to-right, proven/future facts and
+    done/next actions, edges as curves. Pure SVG — no script, no web font, no CDN —
+    so the static `obol web` snapshot's path graph works on an offline exam box.
+    """
+    model = build_graph_model(facts, pack)
+    by_phase: dict[str, list[dict]] = {p: [] for p in PHASES}
+    for node in model["nodes"]:
+        by_phase.setdefault(node["phase"], []).append(node)
+    cols = [p for p in PHASES if by_phase.get(p)]
+    if not cols:
+        return ('<svg viewBox="0 0 320 60" width="320" height="60" '
+                'xmlns="http://www.w3.org/2000/svg"><text x="12" y="34" fill="#8b98a5" '
+                'font-family="system-ui,sans-serif" font-size="13">Nothing on the path '
+                'yet — run a scan.</text></svg>')
+
+    NW, NH, COLW, ROW, PADX, PADY = 178, 42, 214, 56, 22, 46
+    pos: dict[str, dict] = {}
+    for ci, p in enumerate(cols):
+        for ri, node in enumerate(by_phase[p]):
+            pos[node["id"]] = {"x": PADX + ci * COLW, "y": PADY + ri * ROW, "node": node}
+    tallest = max(len(by_phase[p]) for p in cols)
+    height = PADY + tallest * ROW + 14
+    width = PADX * 2 + (len(cols) - 1) * COLW + NW
+
+    edges: list[str] = []
+    for e in model["edges"]:
+        a, b = pos.get(e["from"]), pos.get(e["to"])
+        if not a or not b:
+            continue
+        x1, y1 = a["x"] + NW, a["y"] + NH / 2
+        x2, y2 = b["x"], b["y"] + NH / 2
+        mx = (x1 + x2) / 2
+        future = b["node"]["type"] == "fact" and b["node"]["state"] == "future"
+        dash = ' stroke-dasharray="4 4"' if future else ""
+        edges.append(f'<path d="M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}" fill="none" '
+                     f'stroke="{"#3D4D75" if future else "#4b5a86"}" stroke-width="1.5"{dash}/>')
+
+    headers: list[str] = []
+    for ci, p in enumerate(cols):
+        cx = PADX + ci * COLW
+        color = _PHASE_SVG_COLOR.get(p, "#8b98a5")
+        headers.append(
+            f'<text x="{cx + NW // 2}" y="24" text-anchor="middle" fill="{color}" '
+            f'font-size="11" font-weight="700" letter-spacing="1.2">{p.upper()}</text>'
+            f'<line x1="{cx}" y1="32" x2="{cx + NW}" y2="32" stroke="{color}" '
+            f'stroke-opacity="0.35" stroke-width="1.5"/>')
+
+    node_svg: list[str] = []
+    for meta in pos.values():
+        node = meta["node"]
+        fill, stroke, text_color, dashed = _SVG_NODE_STYLE[(node["type"], node["state"])]
+        x, y = meta["x"], meta["y"]
+        rx = 16 if node["type"] == "fact" else 6   # facts rounded (stadium-ish), actions boxy
+        dash = ' stroke-dasharray="3 2"' if dashed else ""
+        node_svg.append(
+            f'<rect x="{x}" y="{y}" width="{NW}" height="{NH}" rx="{rx}" fill="{fill}" '
+            f'stroke="{stroke}" stroke-width="1.5"{dash}/>'
+            f'<text x="{x + NW // 2}" y="{y + NH // 2 + 4}" text-anchor="middle" '
+            f'fill="{text_color}" font-size="12" font-family="system-ui,sans-serif">'
+            f'<title>{html.escape(node["label"])}</title>{_svg_text(node["label"])}</text>')
+
+    return (f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+            f'preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg" '
+            f'font-family="system-ui,sans-serif">'
+            f'{"".join(headers)}{"".join(edges)}{"".join(node_svg)}</svg>')
 
 
 def build_mermaid(facts: FactSet, pack: list[Action] | None = None) -> str:
