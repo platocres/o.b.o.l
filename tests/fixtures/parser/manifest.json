@@ -23,6 +23,8 @@
       "stdout": "outputs/nmap_service_script_metadata.txt",
       "expected_supported_kinds": [
         "host.up",
+        "host.os_hint",
+        "host.os_family",
         "scan.nmap.version",
         "scan.nmap.udp",
         "ports.open",
@@ -47,6 +49,10 @@
         {
           "kind": "snmp.info",
           "value_contains": {"name": "edge-router-02", "description": "Linux edge-router-02 5.15"}
+        },
+        {
+          "kind": "host.os_family",
+          "value_contains": {"family": "linux"}
         },
         {
           "kind": "ssh.hostkey",
@@ -127,6 +133,8 @@
       "expected_supported_kinds": [
         "ssh.reachable",
         "ftp.reachable",
+        "host.os_hint",
+        "host.os_family",
         "ssh.authenticated",
         "ftp.authenticated",
         "credential.available"
@@ -136,6 +144,10 @@
           "kind": "credential.available",
           "scope": "domain:corp.local",
           "value_contains": {"user": "svc-audit", "password": "Spring2026!", "domain": "corp.local", "method": "nxc"}
+        },
+        {
+          "kind": "host.os_family",
+          "value_contains": {"family": "linux"}
         },
         {
           "kind": "ssh.authenticated",
@@ -155,12 +167,18 @@
       "command": "nxc smb 10.10.10.10 -u svc-audit -p WrongPassword",
       "stdout": "outputs/nxc_failed_login_refutes_validation.txt",
       "expected_supported_kinds": [
+        "host.os_hint",
+        "host.os_family",
         "smb.reachable"
       ],
       "expected_refuted_kinds": [
         "credential.validation"
       ],
       "expected_facts": [
+        {
+          "kind": "host.os_family",
+          "value_contains": {"family": "windows"}
+        },
         {
           "kind": "credential.validation",
           "state": "refuted",
@@ -179,6 +197,7 @@
       "command": "nc -nv 10.10.10.10 22",
       "stdout": "outputs/ssh_banner_no_shell.txt",
       "expected_supported_kinds": [
+        "host.os_hint",
         "ssh.reachable",
         "ssh.banner"
       ]
@@ -191,12 +210,18 @@
       "stdout": "outputs/ssh_id_proves_linux_shell.txt",
       "expected_supported_kinds": [
         "access.shell",
-        "foothold.linux"
+        "foothold.linux",
+        "host.os_hint",
+        "host.os_family"
       ],
       "expected_facts": [
         {
           "kind": "foothold.linux",
           "value_contains": {"service": "ssh", "identity": "appuser"}
+        },
+        {
+          "kind": "host.os_family",
+          "value_contains": {"family": "linux"}
         }
       ],
       "forbidden_supported_kinds": [

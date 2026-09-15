@@ -556,7 +556,7 @@ def _target_fact_summary(tf) -> list[dict]:
         key=lambda f: (f.created_at, f.kind),
     )
     sections = [
-        ("target", "Target", lambda k: k == "target.configured" or k == "host.up"),
+        ("target", "Target", lambda k: k in {"target.configured", "host.up", "host.os_family", "host.os_hint"}),
         ("network", "Network & services",
          lambda k: k.startswith("port:") or k.startswith("scan.") or k.startswith("service.")
          or k in {"ldap.reachable", "smb.reachable", "kerberos.reachable", "winrm.reachable", "http.reachable"}),

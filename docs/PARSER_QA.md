@@ -25,6 +25,9 @@ Every parser must follow these rules:
   produced it.
 - Record metadata as metadata. Banners, HTTP headers, titles, redirects, SNMP
   system info, and host keys are context, not access.
+- Record OS evidence at the narrowest level. `host.os_hint` is a clue; only strong,
+  non-conflicting evidence should become `host.os_family` and drive OS-specific
+  action filtering.
 - Do not turn authentication into a shell. A successful SSH or FTP login proves
   service authentication, not a foothold. SSH only proves a Linux shell when output
   such as `uid=` / `id` proves command execution.
@@ -75,12 +78,12 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 
 | Fixture | Tool Shape | Positive Claims | Forbidden Claims |
 |---|---|---|---|
-| `nmap_service_script_metadata` | nmap service/script output | host up, ports, SSH/FTP/DNS/SNMP/HTTP/RDP reachability, SSH host keys, FTP anonymous login, SNMP info, HTTP redirect, web tech | credentials, footholds, admin, loot, vulnerabilities |
+| `nmap_service_script_metadata` | nmap service/script output | host up, OS family/hints, ports, SSH/FTP/DNS/SNMP/HTTP/RDP reachability, SSH host keys, FTP anonymous login, SNMP info, HTTP redirect, web tech | credentials, footholds, admin, loot, vulnerabilities |
 | `http_curl_whatweb_metadata` | curl headers plus whatweb plugins | HTTP response, redirect, server header, title, tech fingerprints | credentials, web auth, upload/LFI proof |
-| `nxc_ssh_ftp_auth_context_only` | NetExec SSH/FTP success lines | service authentication and usable credential | shells, footholds, admin |
-| `nxc_failed_login_refutes_validation` | NetExec failed SMB login | SMB reachability and refuted credential validation | usable credential or SMB authentication |
-| `ssh_banner_no_shell` | raw SSH banner | SSH reachability and banner | shell, foothold, admin |
-| `ssh_id_proves_linux_shell` | SSH command execution showing `uid=` | shell and Linux foothold | admin unless uid is root |
+| `nxc_ssh_ftp_auth_context_only` | NetExec SSH/FTP success lines | OS family/hints, service authentication, usable credential | shells, footholds, admin |
+| `nxc_failed_login_refutes_validation` | NetExec failed SMB login | Windows OS family/hints, SMB reachability, refuted credential validation | usable credential or SMB authentication |
+| `ssh_banner_no_shell` | raw SSH banner | SSH reachability, OS hint, banner | shell, foothold, OS family, admin |
+| `ssh_id_proves_linux_shell` | SSH command execution showing `uid=` | shell, Linux foothold, Linux OS family/hints | admin unless uid is root |
 | `snmp_timeout_no_facts` | SNMP timeout | no facts | all claims |
 | `ftp_named_login_not_anonymous` | FTP successful named login transcript | FTP reachability and banner | anonymous FTP or credential availability |
 

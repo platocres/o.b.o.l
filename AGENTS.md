@@ -1,8 +1,8 @@
 # obol — agent entrypoint
 
-Read this first, then [`docs/SOURCES.md`](docs/SOURCES.md) (where the methodology
-and reference code live) and [`docs/ROADMAP.md`](docs/ROADMAP.md) (what to build
-next). For the state/sync/render internals see
+Read this first, then [`CHANGELOG.md`](CHANGELOG.md) (what has already shipped),
+[`docs/SOURCES.md`](docs/SOURCES.md) (where the methodology and reference code
+live), and [`docs/ROADMAP.md`](docs/ROADMAP.md) (what to build next). For the state/sync/render internals see
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); for the review bundle see
 [`docs/DEBUG.md`](docs/DEBUG.md). The same contract applies to any coding agent
 (Claude, ChatGPT, etc.). `CLAUDE.md` points here.
@@ -100,6 +100,10 @@ and an OSCP report is narrated from the same fact/run ledger.
 8. **Licensing:** Orange-derived packs are GPL-3.0 and kept as distinct,
    attributed data components (`obol/packs/NOTICE.md`). Do not fold pack contents
    into differently-licensed core code.
+9. **Changelog discipline:** every meaningful build updates `CHANGELOG.md`.
+   Add an `Unreleased` entry for code, parser, pack, runner, report, web, CLI,
+   test, or documentation changes before handing work back. The test suite checks
+   this for non-trivial repo changes, so do not leave the changelog as future work.
 
 ## Architecture / module map
 
@@ -198,7 +202,8 @@ graph.collected, attack_paths, control_paths, trusts, computer_added),
 plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
 (admin, system, desktop, shell), `foothold.windows`, `foothold.linux`,
 `loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), `host.*`
-(up, hostname, fqdn, domain — host identity from discovery/enum, host-scoped;
+(up, hostname, fqdn, domain, os_hint, os_family — host identity and OS awareness
+from discovery/enum, host-scoped;
 they enrich a target's label + domain grouping and the engagement map),
 `winrm.authenticated` / `rdp.authenticated` (a validated interactive login — the
 proof behind a §6a session; the shell itself is `foothold.windows`/`foothold.linux`/

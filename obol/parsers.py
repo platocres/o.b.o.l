@@ -139,6 +139,27 @@ _SNMP_SYSDESCR_RE = re.compile(r"SNMPv2-MIB::sysDescr\.0\s*=\s*(?:STRING:\s*)?(?
 _SNMP_SYSNAME_RE = re.compile(r"SNMPv2-MIB::sysName\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
 _SNMP_SYSLOCATION_RE = re.compile(r"SNMPv2-MIB::sysLocation\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
 _SNMP_SYSCONTACT_RE = re.compile(r"SNMPv2-MIB::sysContact\.0\s*=\s*(?:STRING:\s*)?(?P<value>.+)", re.IGNORECASE)
+_OS_SIGNATURES: dict[str, tuple[re.Pattern, ...]] = {
+    "windows": (
+        re.compile(r"\bMicrosoft Windows\b", re.IGNORECASE),
+        re.compile(r"\bWindows\s+(?:Server|\d|XP|Vista)\b", re.IGNORECASE),
+        re.compile(r"\bOS:\s*Windows\b", re.IGNORECASE),
+        re.compile(r"\bRunning:\s*(?:Microsoft\s+)?Windows\b", re.IGNORECASE),
+        re.compile(r"cpe:/o:microsoft:windows", re.IGNORECASE),
+        re.compile(r"\bMicrosoft-IIS\b", re.IGNORECASE),
+    ),
+    "linux": (
+        re.compile(r"\bLinux\b", re.IGNORECASE),
+        re.compile(r"\bUbuntu\b", re.IGNORECASE),
+        re.compile(r"\bDebian\b", re.IGNORECASE),
+        re.compile(r"\bCentOS\b", re.IGNORECASE),
+        re.compile(r"\bRed Hat\b", re.IGNORECASE),
+        re.compile(r"\bFedora\b", re.IGNORECASE),
+        re.compile(r"\bSamba\b", re.IGNORECASE),
+        re.compile(r"\bUnix\b", re.IGNORECASE),
+        re.compile(r"cpe:/o:linux", re.IGNORECASE),
+    ),
+}
 
 # Post-credential AD path signals.
 _NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -204,6 +225,73 @@ def _add(out: list[Fact], fact: Fact) -> None:
         for existing in out
     ):
         out.append(fact)
+
+
+def _line_for_match(text: str, match: re.Match) -> str:
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    if end == -1:
+        end = len(text)
+    return text[start:end].strip()[:220]
+
+
+def _add_os_observation(
+    facts: list[Fact],
+    ws: Workspace,
+    source: str,
+    *,
+    family: str,
+    evidence: str,
+    confidence: str,
+    tool: str,
+    promote: bool = False,
+) -> None:
+    family = family.strip().lower()
+    if family not in {"windows", "linux"}:
+        return
+    value = {
+        "family": family,
+        "confidence": confidence,
+        "tool": tool,
+        "evidence": evidence.strip()[:220],
+    }
+    _add(facts, Fact("host.os_hint", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if promote:
+        _add(facts, Fact("host.os_family", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+
+def _add_os_from_text(
+    text: str,
+    ws: Workspace,
+    source: str,
+    facts: list[Fact],
+    *,
+    tool: str,
+    confidence: str = "high",
+    promote: bool = False,
+) -> None:
+    matches: dict[str, str] = {}
+    for family, patterns in _OS_SIGNATURES.items():
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                matches[family] = _line_for_match(text, match) or match.group(0)
+                break
+    # Multiple families in one transcript means a proxy, relay, Samba-on-Linux vs
+    # Windows-service mix, or otherwise ambiguous evidence. Keep hints, but do not
+    # promote to a single OS family from conflicting text.
+    promote_single = promote and len(matches) == 1
+    for family, evidence in matches.items():
+        _add_os_observation(
+            facts,
+            ws,
+            source,
+            family=family,
+            evidence=evidence,
+            confidence=confidence,
+            tool=tool,
+            promote=promote_single,
+        )
 
 
 def _clean_username(user: str) -> str:
@@ -484,6 +572,7 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 # --------------------------------------------------------------------------- #
 def _parse_nmap(text: str, ws: Workspace, source: str, facts: list[Fact], action_id: str) -> None:
     open_ports: dict[tuple[int, str], dict] = {}
+    _add_os_from_text(text, ws, source, facts, tool="nmap", confidence="high", promote=True)
 
     for match in _NMAP_DISCOVERED_RE.finditer(text):
         port = int(match.group("port"))
@@ -670,8 +759,24 @@ def _parse_service_reachability(port: int, proto: str, service: str, ws: Workspa
         _add(facts, Fact("kerberos.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if port == 3389 or service_l == "ms-wbt-server" or "rdp" in service_l:
         _add(facts, Fact("rdp.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=f"{port}/{proto} {service or 'rdp'}",
+            confidence="medium",
+            tool="nmap",
+            promote=False,
+        )
     if port in {5985, 5986} or "wsman" in service_l or "winrm" in service_l:
         _add(facts, Fact("winrm.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=f"{port}/{proto} {service or 'winrm'}",
+            confidence="high",
+            tool="nmap",
+            promote=True,
+        )
     if port in {80, 443, 8080, 8000, 8443} or service_l in {"http", "https", "ssl/http"}:
         _add(facts, Fact("http.reachable", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
 
@@ -684,6 +789,7 @@ def _looks_like_ad_ldap(text: str) -> bool:
 # NetExec / LDAP / SMB enumeration
 # --------------------------------------------------------------------------- #
 def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    _add_os_from_text(text, ws, source, facts, tool="nxc", confidence="high", promote=True)
     domain = ""
     domain_match = _DOMAIN_RE.search(text)
     if domain_match:
@@ -733,6 +839,15 @@ def _parse_nxc_common(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         proto = match.group("proto").lower()
         if proto in {"ldap", "smb", "winrm", "rdp", "ssh", "ftp"}:
             _add(facts, Fact(f"{proto}.reachable", f"host:{ws.target}", {"tool": "nxc"}, ProofState.SUPPORTED, source))
+        if proto in {"winrm", "rdp"}:
+            _add_os_observation(
+                facts, ws, source,
+                family="windows",
+                evidence=match.group(0).strip(),
+                confidence="high" if proto == "winrm" else "medium",
+                tool="nxc",
+                promote=(proto == "winrm"),
+            )
 
     if re.search(r"^LDAP\s+.*\[\+\].*(?:\\\\:|anonymous|guest|'')", text, re.IGNORECASE | re.MULTILINE):
         _add(facts, Fact("ad.anonymous_bind", _scope_for_domain(ws, domain), {"tool": "nxc"}, ProofState.SUPPORTED, source))
@@ -1123,6 +1238,14 @@ def _parse_evil_winrm(text: str, ws: Workspace, command: str, source: str, facts
         value["domain"] = domain
     _add(facts, Fact("winrm.authenticated", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="evil-winrm authenticated shell",
+        confidence="high",
+        tool="evil-winrm",
+        promote=True,
+    )
     if user and password and _valid_password(password):
         cred_value = {"user": _clean_username(user), "password": password, "service": "winrm", "method": "evil-winrm"}
         if domain:
@@ -1200,6 +1323,14 @@ def _parse_command_execution(text: str, ws: Workspace, command: str, source: str
             )
         ]
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold_value, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="Windows command execution output",
+        confidence="high",
+        tool=tool,
+        promote=True,
+    )
 
     if is_system:
         _add(
@@ -1234,6 +1365,14 @@ def _parse_ssh_exec(text: str, ws: Workspace, command: str, source: str, facts: 
     _add(facts, Fact("access.shell", f"host:{ws.target}", {"service": "ssh"}, ProofState.SUPPORTED, source))
     _add(facts, Fact("foothold.linux", f"host:{ws.target}",
                      {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="linux",
+        evidence=m.group(0),
+        confidence="high",
+        tool="ssh",
+        promote=True,
+    )
     if m.group("uid") == "0" or user.lower() == "root":
         _add(facts, Fact("access.admin", f"host:{ws.target}",
                          {"service": "ssh", "identity": user}, ProofState.SUPPORTED, source))
@@ -1257,6 +1396,14 @@ def _parse_nxc_rdp(text: str, ws: Workspace, command: str, source: str, facts: l
     if user:
         foothold["identity"] = _clean_username(user)
     _add(facts, Fact("foothold.windows", f"host:{ws.target}", foothold, ProofState.SUPPORTED, source))
+    _add_os_observation(
+        facts, ws, source,
+        family="windows",
+        evidence="nxc rdp authentication succeeded",
+        confidence="high",
+        tool="nxc",
+        promote=True,
+    )
     if "pwn3d" in text.lower():
         _add(facts, Fact("access.admin", f"host:{ws.target}",
                          {"service": "rdp"}, ProofState.SUPPORTED, source))
@@ -1293,9 +1440,25 @@ def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) ->
 
     _add(facts, Fact("access.shell", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
     if os_name == "windows":
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence=info or "penelope reported Windows shell",
+            confidence="high",
+            tool="penelope",
+            promote=True,
+        )
         _add(facts, Fact("foothold.windows", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
         _add(facts, Fact("access.desktop", f"host:{ws.target}", {"session": "penelope"}, ProofState.SUPPORTED, source))
     elif os_name == "linux":
+        _add_os_observation(
+            facts, ws, source,
+            family="linux",
+            evidence=info or "penelope reported Linux shell",
+            confidence="high",
+            tool="penelope",
+            promote=True,
+        )
         _add(facts, Fact("foothold.linux", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
 
 
@@ -1348,6 +1511,7 @@ def _parse_http_metadata(text: str, ws: Workspace, source: str, facts: list[Fact
     Headers, titles, redirects, and technology fingerprints are context for follow-up
     enum. They are not vulnerability, credential, or access facts.
     """
+    _add_os_from_text(text, ws, source, facts, tool="http", confidence="medium", promote=False)
     status_values = []
     for match in _HTTP_STATUS_RE.finditer(text):
         value = {"status": int(match.group("status"))}
@@ -1412,6 +1576,7 @@ def _parse_ssh_banner(text: str, ws: Workspace, source: str, facts: list[Fact]) 
     banners = sorted({match.group(0).strip() for match in _SSH_BANNER_RE.finditer(text)}, key=str.lower)
     if not banners:
         return
+    _add_os_from_text("\n".join(banners), ws, source, facts, tool="ssh", confidence="medium", promote=False)
     _add(facts, Fact("ssh.reachable", f"host:{ws.target}", {"tool": "banner"}, ProofState.SUPPORTED, source))
     _add(facts, Fact("ssh.banner", f"host:{ws.target}", {"banners": banners[:10]}, ProofState.SUPPORTED, source))
 
@@ -1464,6 +1629,15 @@ def _parse_snmp_output(text: str, ws: Workspace, command: str, source: str, fact
     _add(facts, Fact("snmp.reachable", f"host:{ws.target}", {"tool": "snmp"}, ProofState.SUPPORTED, source))
     if value:
         _add(facts, Fact("snmp.info", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add_os_from_text(
+            "\n".join(str(v) for v in value.values()),
+            ws,
+            source,
+            facts,
+            tool="snmp",
+            confidence="high",
+            promote=True,
+        )
         if value.get("name"):
             _add(facts, Fact("host.hostname", f"host:{ws.target}", {"name": value["name"]}, ProofState.SUPPORTED, source))
 

@@ -318,6 +318,8 @@ def _render_targets(ws: Workspace, *, include_secrets: bool) -> list[str]:
         lines.append(f"### {t.get('label') or host} (`{host}`)")
         lines.append("")
         lines.append(f"- Access: {target_access_level(tf)} · phase: {target_phase(tf)}")
+        if t.get("os"):
+            lines.append(f"- OS family: {t['os']}")
         ports = _target_open_ports([f for f in tf.facts if f.scope == f'host:{host}'])
         if ports:
             lines.append(f"- Open ports: {', '.join(ports[:24])}")
