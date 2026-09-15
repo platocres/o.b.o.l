@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from obol.facts import Fact, FactSet
-from obol.pack import load_pack, load_packs, next_actions
+from obol.pack import PACK_NAMES, load_pack, load_packs, next_actions
 from obol.playbook import load_playbook, resolve_steps
 
 
@@ -58,13 +58,10 @@ def test_confirmed_injections_are_not_produced_by_bare_reachability():
     assert "web.sqli_confirmed" in sqlmap.requires_all
 
 
-def test_load_packs_merges_ad_and_web_with_unique_ids():
+def test_load_packs_merges_configured_packs_with_unique_ids():
     merged = load_packs()
-    ad = load_pack("orange_ad_2025_03")
-    web = load_pack("orange_web_2025_03")
-    linux = load_pack("orange_linux_privesc_2025_03")
-    windows = load_pack("orange_windows_privesc_2025_03")
-    assert len(merged) == len(ad) + len(web) + len(linux) + len(windows)
+    configured = [load_pack(name) for name in PACK_NAMES]
+    assert len(merged) == sum(len(pack) for pack in configured)
     ids = [a.id for a in merged]
     assert len(ids) == len(set(ids)), "merged packs must have unique action ids"
 

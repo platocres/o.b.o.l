@@ -65,3 +65,14 @@ Regenerate with:
 node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js linux-privesc > obol/packs/orange_linux_privesc_2025_03.json
 node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js windows-privesc > obol/packs/orange_windows_privesc_2025_03.json
 ```
+
+## obol_local_pivot_2026_09.json
+
+The local pivot action pack is **not Orange-derived**. It is project-authored pack
+data for small post-foothold host/network enumeration commands that bridge the
+sessions/privesc milestone into the later tunnel milestone.
+
+It intentionally records candidate facts only (`host.multihomed`,
+`network.subnet_candidate`, `pivot.candidate`) and never claims that a tunnel,
+route, proxy, or through-pivot scan is working. The later tunnel registry should
+consume these facts and record live tunnel state separately.

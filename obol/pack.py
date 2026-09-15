@@ -24,13 +24,15 @@ PACKS_DIR = Path(__file__).parent / "packs"
 DEFAULT_PACK = "orange_ad_2025_03"
 # Packs loaded together by the planner. Sibling packs reuse the shared fact-kind
 # namespace so cross-domain gating works (e.g. an HTTP port unlocks web actions,
-# a web foothold could unlock a privesc pack). Order is load order only; the
-# planner ranks by each action's priority, not pack order.
+# a web foothold could unlock a privesc pack, and a proven foothold can unlock
+# pivot-candidate local enumeration). Order is load order only; the planner ranks
+# by each action's priority, not pack order.
 PACK_NAMES = [
     "orange_ad_2025_03",
     "orange_web_2025_03",
     "orange_linux_privesc_2025_03",
     "orange_windows_privesc_2025_03",
+    "obol_local_pivot_2026_09",
 ]
 
 
@@ -107,10 +109,24 @@ _FRIENDLY = {
     "host.up": "a live host",
     "host.os_family": "target OS family",
     "host.os_hint": "target OS hint",
+    "host.interface": "host network interface",
+    "host.ip_address": "host IP address",
+    "host.route": "host route",
+    "host.arp_neighbor": "host ARP neighbor",
+    "host.dns_server": "host DNS server",
+    "host.listen_socket": "host listening socket",
+    "host.multihomed": "multi-homed host",
+    "network.subnet_candidate": "candidate adjacent subnet",
+    "pivot.candidate": "pivot candidate",
     "ports.open": "open ports",
     "scan.nmap.quick": "a quick nmap open-port scan",
     "scan.nmap.version": "an nmap service/version scan",
     "scan.nmap.udp": "an nmap UDP scan",
+    "scan.local.interfaces": "local interface enumeration",
+    "scan.local.routes": "local route table enumeration",
+    "scan.local.neighbors": "local neighbor cache enumeration",
+    "scan.local.dns": "local resolver enumeration",
+    "scan.local.listeners": "local listening-socket enumeration",
     "ad.dc_candidate": "a domain-controller candidate", "ad.domain_known": "the domain",
     "ad.base_dn": "the LDAP base DN", "ad.user_list": "a domain user list",
     "ad.anonymous_bind": "anonymous LDAP bind", "ad.graph.collected": "the AD graph",
