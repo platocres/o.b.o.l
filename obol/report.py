@@ -26,6 +26,7 @@ from .graph import (
     target_phase,
 )
 from .pack import friendly, load_packs, next_actions
+from .pivot import pivot_summary
 from .workspace import Workspace
 
 # Access ladder for the report/web progress meter: each stage plus the fact kinds
@@ -82,11 +83,12 @@ _CATEGORY_ORDER = {
     "ad": 3,
     "credential": 4,
     "access": 5,
-    "privesc": 6,
-    "objective": 7,
-    "loot": 8,
-    "config": 9,
-    "web": 10,
+    "pivot": 6,
+    "privesc": 7,
+    "objective": 8,
+    "loot": 9,
+    "config": 10,
+    "web": 11,
     "other": 99,
 }
 
@@ -101,6 +103,10 @@ def _stamp(ts: float | int | None) -> str:
 
 
 def _fact_category(kind: str) -> str:
+    # pivot leads come first so `host.multihomed` groups with the pivot picture
+    # rather than the generic target/network facts below.
+    if kind.startswith(("pivot.", "network.")) or kind == "host.multihomed":
+        return "pivot"
     if kind.startswith(("target.", "host.", "port:", "ports.open")):
         return "target"
     if kind.startswith("scan."):
@@ -332,6 +338,19 @@ def _render_targets(ws: Workspace, *, include_secrets: bool) -> list[str]:
         ports = _target_open_ports([f for f in tf.facts if f.scope == f'host:{host}'])
         if ports:
             lines.append(f"- Open ports: {', '.join(ports[:24])}")
+        piv = pivot_summary(ws, host)
+        if not piv["empty"]:
+            bits = []
+            if piv["multihomed"]:
+                bits.append(f"multi-homed ({piv['interface_count']} interfaces)")
+            if piv["subnets"]:
+                subs = ", ".join(
+                    s["cidr"] + ("" if s["in_scope"] else " (not in scope)")
+                    for s in piv["subnets"][:8]
+                )
+                bits.append(f"candidate subnets: {subs}")
+            if bits:
+                lines.append(f"- Pivot candidates: {'; '.join(bits)}")
         if t.get("notes"):
             lines.append(f"- Notes: {t['notes']}")
         ev = ws.evidence_for(host)
@@ -539,6 +558,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "phase": target_phase(tf),
             "open_ports": _target_open_ports(tfacts),
             "flags": flags,
+            "pivots": pivot_summary(ws, host),
             "findings": [{
                 "kind": f.kind, "label": friendly(f.kind), "category": _fact_category(f.kind),
                 "value": _redact_value(f.value, include_secrets=include_secrets),

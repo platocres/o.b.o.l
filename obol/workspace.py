@@ -86,6 +86,7 @@ class Workspace:
         # Live pivot/login state (NOT facts — a session/tunnel has a status that can
         # flip; only the discoveries it leads to are facts). See docs/ROADMAP.md §6.
         self.sessions: list[dict] = []   # [{id, host, kind, status, user, login_command, ...}]
+        self.tunnels: list[dict] = []    # [{id, host, kind, transport, status, exposed_subnet, ...}]
         # persistence bookkeeping: what is already on disk, and what this session
         # has explicitly removed (so save() writes only diffs and never resurrects
         # or clobbers rows another process wrote).
@@ -94,6 +95,7 @@ class Workspace:
         self._deleted_targets: set[str] = set()
         self._deleted_evidence: set[str] = set()
         self._deleted_sessions: set[str] = set()
+        self._deleted_tunnels: set[str] = set()
 
     # ---- persistence ---------------------------------------------------------
     @property
@@ -139,10 +141,12 @@ class Workspace:
             deleted_targets=self._deleted_targets,
             deleted_evidence=self._deleted_evidence,
             deleted_sessions=self._deleted_sessions,
+            deleted_tunnels=self._deleted_tunnels,
         )
         self._deleted_targets.clear()
         self._deleted_evidence.clear()
         self._deleted_sessions.clear()
+        self._deleted_tunnels.clear()
 
     # ---- JSON interchange (export / import / migration) ----------------------
     def to_payload(self) -> dict:
@@ -162,6 +166,7 @@ class Workspace:
             "checklist": self.checklist,
             "bloodhound": self.bloodhound,
             "sessions": self.sessions,
+            "tunnels": self.tunnels,
         }
 
     def apply_payload(self, data: dict) -> "Workspace":
@@ -183,6 +188,7 @@ class Workspace:
         self.checklist = dict(data.get("checklist", {}))
         self.bloodhound = dict(data.get("bloodhound", {}))
         self.sessions = list(data.get("sessions", []))
+        self.tunnels = list(data.get("tunnels", []))
         self._persisted_fact_hashes = {
             fact_hash(f.kind, f.scope, f.value) for f in self.facts.facts
         }
@@ -448,6 +454,52 @@ class Workspace:
             return False
         self.sessions.remove(rec)
         self._deleted_sessions.add(sid)
+        return True
+
+    # ---- tunnels (live pivot transports, not facts) --------------------------
+    # A tunnel is a live transport (ligolo/chisel/sshuttle/ssh forward) built from a
+    # foothold. Like a session it carries a mutable status (connecting/up/down/closed)
+    # a probe updates — never a Fact. Only the discoveries it leads to are facts.
+    def get_tunnel(self, tid: str) -> dict | None:
+        for t in self.tunnels:
+            if t.get("id") == tid:
+                return t
+        return None
+
+    def tunnels_for(self, host: str) -> list[dict]:
+        norm = normalize_target(host) if host else ""
+        return [t for t in self.tunnels if t.get("host") == norm]
+
+    def add_tunnel(self, *, host: str, kind: str, transport: str = "", status: str = "up",
+                   exposed_subnet: str = "", local_port: int = 0, setup_command: str = "",
+                   proxychains: bool = False, label: str = "") -> dict:
+        norm = normalize_target(host)
+        now = time.time()
+        tid = f"tun{int(now * 1000)}_{len(self.tunnels)}"
+        rec = {
+            "id": tid, "host": norm, "kind": kind, "transport": transport,
+            "status": status, "exposed_subnet": exposed_subnet, "local_port": local_port,
+            "setup_command": setup_command, "proxychains": bool(proxychains),
+            "label": label or kind, "created_at": now, "updated_at": now,
+        }
+        self.tunnels.append(rec)
+        self._deleted_tunnels.discard(tid)
+        return rec
+
+    def update_tunnel(self, tid: str, **fields) -> dict | None:
+        rec = self.get_tunnel(tid)
+        if not rec:
+            return None
+        rec.update(fields)
+        rec["updated_at"] = time.time()
+        return rec
+
+    def remove_tunnel(self, tid: str) -> bool:
+        rec = self.get_tunnel(tid)
+        if not rec:
+            return False
+        self.tunnels.remove(rec)
+        self._deleted_tunnels.add(tid)
         return True
 
     # ---- activity ledger -----------------------------------------------------

@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at REAL,
     data       TEXT
 );
+CREATE TABLE IF NOT EXISTS tunnels (
+    id         TEXT PRIMARY KEY,
+    updated_at REAL,
+    data       TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts     REAL,
@@ -191,6 +196,8 @@ class Store:
             bloodhound = json.loads(bh_row["data"]) if bh_row and bh_row["data"] else {}
             sessions = [json.loads(r["data"]) for r in
                         conn.execute("SELECT data FROM sessions ORDER BY updated_at, rowid")]
+            tunnels = [json.loads(r["data"]) for r in
+                       conn.execute("SELECT data FROM tunnels ORDER BY updated_at, rowid")]
         finally:
             conn.close()
         return {
@@ -206,6 +213,7 @@ class Store:
             "checklist": checklist,
             "bloodhound": bloodhound,
             "sessions": sessions,
+            "tunnels": tunnels,
         }
 
     def data_version(self, conn: sqlite3.Connection | None = None) -> int:
@@ -249,7 +257,8 @@ class Store:
     # ---- writes --------------------------------------------------------------
     def reconcile(self, payload: dict, *, persisted_fact_hashes: set[str],
                   persisted_run_ids: set[str], deleted_targets: set[str],
-                  deleted_evidence: set[str], deleted_sessions: set[str] = frozenset()) -> list[dict]:
+                  deleted_evidence: set[str], deleted_sessions: set[str] = frozenset(),
+                  deleted_tunnels: set[str] = frozenset()) -> list[dict]:
         """Persist the in-memory engagement state in a single transaction, writing
         only what changed and never clobbering another process's concurrent rows.
 
@@ -416,6 +425,30 @@ class Store:
                     "type": "session_added" if row is None else "session_updated",
                     "target": s.get("host", ""),
                     "detail": {"id": sid, "kind": s.get("kind", ""), "status": s.get("status", "")},
+                })
+
+            # tunnels (live pivot transports: upsert by id, emit only on change) ----
+            for tid in deleted_tunnels:
+                conn.execute("DELETE FROM tunnels WHERE id=?", (tid,))
+                events.append({"type": "tunnel_removed", "target": "", "detail": {"id": tid}})
+            for t in payload.get("tunnels", []):
+                tid = t.get("id")
+                if not tid:
+                    continue
+                new_data = json.dumps(t, default=str)
+                row = conn.execute("SELECT data FROM tunnels WHERE id=?", (tid,)).fetchone()
+                if row is not None and row["data"] == new_data:
+                    continue  # unchanged — no write, no event
+                conn.execute(
+                    "INSERT INTO tunnels(id, updated_at, data) VALUES(?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data",
+                    (tid, t.get("updated_at", time.time()), new_data),
+                )
+                events.append({
+                    "type": "tunnel_added" if row is None else "tunnel_updated",
+                    "target": t.get("host", ""),
+                    "detail": {"id": tid, "kind": t.get("kind", ""),
+                               "transport": t.get("transport", ""), "status": t.get("status", "")},
                 })
 
             # change feed ------------------------------------------------------

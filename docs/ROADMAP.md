@@ -308,18 +308,32 @@ The build sequence (each a reviewable PR):
   the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
   login and privesc are two halves of one milestone. The first privesc build also
   added proof-bound `privesc.*` lead parsers and host/engagement visibility.
-- **(c) Post-foothold host enum.** Once on the box, enumerate it (NICs, routes, ARP)
-  through a non-interactive exec channel where creds allow, else guided-paste. A
-  second interface records `host.multihomed` + the reachable subnet as a lead,
-  shown on the target/engagement screen.
-- **(d) Tunnels + route-aware runner.** ligolo-ng (preferred), chisel, sshuttle, and
-  ssh `-L`/`-D` as pack actions, plus a **tunnel registry** (modeled on `tools.py`)
-  carrying each tool's transport (transparent vs SOCKS), its discovery technique, and
-  its **feasibility preconditions** (privilege needed, egress direction, on-target
-  tooling, OS). The runner becomes reachability-aware: a target reachable only via a
-  SOCKS tunnel gets `proxychains -q` auto-prefixed; via ligolo/sshuttle (transparent
-  L3) it does not. obol decides proxychains-or-not from the tunnel type — the operator
-  never manages it.
+- **(c) Post-foothold host enum — DONE.** Once on the box, obol enumerates it (NICs,
+  routes, ARP, DNS) through the non-interactive SSH/WinRM exec channel and maps the
+  output to narrow, proof-bound facts (`host.interface/route/arp_neighbor/dns_server`,
+  `host.multihomed`, `network.subnet_candidate`, `pivot.candidate`). A read-only
+  projection (`obol/pivot.py`) lifts the multi-homed status + reachable adjacent
+  subnets into a single pivot-candidate lead — each subnet tagged in/out of scope —
+  shown on the web target Overview (Pivot candidates card), `obol overview`/`obol
+  pivots`, the report per-target section, and a dedicated "Pivot candidates" category
+  in the engagement findings roll-up. Stays a lead, never a working tunnel or an
+  authorization. (Guided-paste for creds-less footholds is still to do.)
+- **(d) Tunnels + route-aware runner — FIRST SLICE DONE.** `obol/tunnels.py` is the
+  **tunnel registry** (modeled on `tools.py`/`sessions.py`): ligolo-ng, sshuttle,
+  chisel, ssh `-D`, ssh `-L`, each carrying its transport (transparent vs SOCKS vs
+  single-port forward), foothold OS, privilege, and setup command. Tunnels are live
+  state (`Workspace.tunnels`, a SQLite `tunnels` table, a status that can flip), not
+  facts. Opening one that exposes a subnet **auto-extends scope** to that subnet
+  (pivot-authorized via the tunnel, retracted on removal unless a discovered target
+  lives there) — the hard scope gate is auto-populated from a proven foothold, never
+  bypassed. The runner is reachability-aware: `service.build_command` auto-prefixes
+  `proxychains -q` for a host reachable only via a SOCKS tunnel and leaves a
+  transparent L3 route (ligolo/sshuttle) or a directly-scoped host alone. Terminal
+  (`obol tunnels`, `obol tunnel open|close|rm`) and web (`/api/run/tunnel`, tunnel
+  section in the Pivot candidates card) both drive it. **Still open in (d):** the
+  feasibility-aware auto-tunnel cascade, on-target tooling/egress preconditions as a
+  gate, and staging the tunnel binary (§8); a tunnel's status defaults to up until
+  the §6e health sweep confirms it.
 
   - **Auto-tunnel (the cascade + the guarantee).** Working name "auto-tunnel" (could
     also be "tunnel autopilot" / "best-effort pivot" — settle when built). Beyond

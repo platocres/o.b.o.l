@@ -286,6 +286,9 @@ function onClick(e) {
     case "reveal-login": revealLogin(el.dataset.host || state.target, el.dataset.kind, el.dataset.method || ""); break;
     case "probe-session": probeSession(el.dataset.id); break;
     case "close-session": closeSession(el.dataset.id); break;
+    case "open-tunnel": openTunnel(el.dataset.host || state.target, el.dataset.kind, el.dataset.subnet || "", el.dataset.exposes === "1"); break;
+    case "close-tunnel": closeTunnel(el.dataset.id); break;
+    case "rm-tunnel": removeTunnel(el.dataset.id); break;
   }
 }
 function onChange(e) {
@@ -649,6 +652,7 @@ function tabOverview(b) {
       <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b> · OS: <b style="color:var(--text)">${esc(b.meta.os || "unknown")}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
     ${sessionsCard(b)}
+    ${pivotCard(b)}
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Path</h2></div><div class="flow-scroll">${flowSVG(b.graph)}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Next moves — run from here</h2><span class="muted mono">${b.next.length}</span></div>${groups}</div>`;
@@ -682,6 +686,80 @@ function sessionsCard(b) {
     <div class="row" style="gap:6px;flex-wrap:wrap">${offers}</div>
     ${sessions.length ? `<div class="sess-list" style="margin-top:12px">${rows}</div>` : ""}
     <div class="muted" style="margin-top:10px;font-size:11px">obol validates access non-interactively, then hands you the ready-to-paste interactive command to run in your terminal.</div></div>`;
+}
+// ── pivot candidates (§6c: multi-homed + adjacent-subnet leads) ──────────────
+function pivotCard(b) {
+  const p = b.pivots;
+  if (!p || p.empty) return "";
+  const subs = (p.subnets || []).map((s) =>
+    `<span class="pill mono" title="${s.in_scope ? "already in scope" : "not yet in scope — a proven tunnel would authorize it"}">${esc(s.cidr)}${s.in_scope ? "" : ` <span class="muted">· not in scope</span>`}</span>`).join("");
+  const reasons = (p.reasons || []).length ? `<div class="muted" style="margin-top:6px;font-size:12px">${esc((p.reasons || []).join(" · "))}</div>` : "";
+  const dns = (p.dns_servers || []).length ? `<div class="muted" style="margin-top:6px;font-size:12px">internal DNS: ${p.dns_servers.map((d) => `<span class="mono">${esc(d)}</span>`).join(", ")}</div>` : "";
+  const head = p.multihomed
+    ? `multi-homed — ${p.interface_count} interfaces`
+    : "adjacent subnet lead";
+  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Pivot candidates</h2><span class="muted">${esc(head)}</span></div>
+    ${subs ? `<div class="row" style="gap:6px;flex-wrap:wrap">${subs}</div>` : `<div class="muted">Local enumeration found a pivot lead but no candidate subnet.</div>`}
+    ${reasons}${dns}
+    ${tunnelSection(b)}
+    <div class="muted" style="margin-top:10px;font-size:11px">Candidate networks reachable from this foothold — not proven reachable through a working tunnel yet. Building a tunnel here extends scope to that subnet and routes runs through it (proxychains added automatically for SOCKS transports).</div></div>`;
+}
+
+// ── tunnels (§6d: pivot transports built from the foothold) ──────────────────
+function tunnelSection(b) {
+  const p = b.pivots || {};
+  const kinds = (b.tunnel_kinds || []).filter((k) => k.exposes_subnet);   // subnet-route transports (one-click)
+  const tunnels = b.tunnels || [];
+  if (!kinds.length && !tunnels.length) return "";
+  const unscoped = (p.unscoped_subnets || []);
+  let build = "";
+  if (kinds.length && unscoped.length) {
+    build = unscoped.map((cidr) => {
+      const btns = kinds.map((k) => {
+        const t = k.ready ? `Open a ${esc(k.label)} tunnel exposing ${esc(cidr)}${k.proxychains ? " (proxychains auto-added)" : ""}` : esc(k.reason || "");
+        return `<button class="btn xs ${k.ready ? "" : ""}" data-act="open-tunnel" data-host="${esc(b.meta.host)}" data-kind="${esc(k.kind)}" data-subnet="${esc(cidr)}" data-exposes="1" ${k.ready ? "" : "disabled"} title="${t}">${esc(k.label)}</button>`;
+      }).join("");
+      return `<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><span class="muted mono" style="min-width:120px">${esc(cidr)}</span>${btns}</div>`;
+    }).join("");
+    build = `<div style="margin-top:10px"><div class="muted" style="font-size:12px">Build a tunnel into an unscoped candidate:</div>${build}</div>`;
+  }
+  const live = tunnels.map((t) => {
+    const dot = t.status === "up" ? "good" : (t.status === "down" ? "bad" : "wait");
+    const pxy = t.proxychains ? `<span class="pill" title="hosts reached through this tunnel are auto-prefixed with proxychains -q">proxychains</span>` : "";
+    return `<div class="sess-row">
+      <div class="sess-head"><span class="status-dot ${dot}"></span>
+        <span class="mono" style="min-width:64px">${esc(t.kind)}</span>
+        <span class="muted mono">${esc(t.transport)}</span>
+        <span class="mono">${esc(t.exposed_subnet || "—")}</span>
+        ${pxy}
+        <span class="pill" style="text-transform:capitalize">${esc(t.status)}</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn xs" data-act="close-tunnel" data-id="${esc(t.id)}" title="Mark this tunnel down">Down</button>
+        <button class="btn xs" data-act="rm-tunnel" data-id="${esc(t.id)}" title="Remove and retract its auto-added scope">Remove</button></div>
+      ${t.setup_command ? `<div class="row" style="gap:6px;margin-top:6px;align-items:center"><pre class="cmd sm" style="flex:1;margin:0">$ ${esc(t.setup_command)}</pre>
+        <button class="btn xs" data-act="copy" data-copy="${esc(t.setup_command)}" title="Copy the tunnel setup command">⧉</button></div>` : ""}
+    </div>`;
+  }).join("");
+  return `${build}${tunnels.length ? `<div class="sess-list" style="margin-top:12px">${live}</div>` : ""}`;
+}
+async function openTunnel(host, kind, subnet, exposes) {
+  if (!host || !kind) return;
+  if (exposes && !subnet) { toast("Pick a subnet", "this transport exposes a subnet — choose a candidate", "err"); return; }
+  try {
+    const r = await apiPost("/api/run/tunnel", { target: host, kind, subnet });
+    const via = r.proxychains ? " · proxychains auto-added" : "";
+    toast("Tunnel recorded", `${kind}${r.scope_added ? " · scope +" + r.scope_added : ""}${via}`, "ok");
+    if (r.setup_command) copyText(r.setup_command);   // copy the setup command to paste
+    render();
+  } catch (e) { toast("Could not open tunnel", e.message, "err"); }
+}
+async function closeTunnel(id) {
+  try { await apiPost("/api/tunnel/close", { id }); render(); }
+  catch (e) { toast("Could not close tunnel", e.message, "err"); }
+}
+async function removeTunnel(id) {
+  try { const r = await apiDelete(`/api/tunnel?id=${encodeURIComponent(id)}`); toast("Tunnel removed", r.scope_retracted ? "scope retracted: " + r.scope_retracted : "", "ok"); render(); }
+  catch (e) { toast("Could not remove tunnel", e.message, "err"); }
 }
 async function runLogin(host, kind, method) {
   if (!host || !kind) return;
