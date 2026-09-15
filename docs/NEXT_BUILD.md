@@ -196,6 +196,25 @@ weakening proof boundaries:
 - The fixture manifest adds real-shaped positive and anti-overclaim cases for all
   of the above plus Linux/Windows privesc enum leads.
 
+## Shipped: AD Abuse Success-Signal Parser Coverage v1
+
+The AD abuse cards now have a first success-signal parser slice beyond roast/crack
+and lateral-exec basics:
+
+- `bloodyAD` / DACL-style output can record `ad.control_paths` when the transcript
+  shows writable rights or a successful group/owner/GenericAll change.
+- Impacket addcomputer output records `ad.computer_added` plus candidate
+  machine-account material, without turning it into a validated login.
+- RBCD writes and getST output record `ad.control_paths` and `kerberos.tickets`
+  without claiming host admin until a service accepts the ticket and command output
+  proves it.
+- NetExec LAPS and gMSA hash output record LAPS password candidates and
+  `credential.ntlm_hash` material without creating blanket admin access or
+  host-scoped login offers for the wrong target.
+
+The fixture corpus now locks these boundaries with AD-abuse positive and
+anti-overclaim cases.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
@@ -203,9 +222,10 @@ Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
 - **Parser coverage (ROADMAP item 1, still important).** v3 covers the biggest
   post-baseline gaps: NXC/SAM/NTDS material, BloodHound collection vs. path
   analysis, SQLMap success signals, git-dumper source recovery, and privesc leads.
-  Continue with more real fixtures from operator runs, AD abuse-card success
-  signals, tunnel/proxy failure transcripts, and the remaining Orange AD support
-  branches.
+  The AD-abuse success-signal slice now covers ACL writes, addcomputer/RBCD/getST,
+  LAPS, and gMSA material. Continue with more real fixtures from operator runs,
+  tunnel/proxy failure transcripts, Rubeus/TGT capture output, trust/SCCM support
+  branches, and exploit-card success signals that still lack proof-bound parsers.
 - **Pivoting continues (ROADMAP §6 c–f).** §6(a) sessions and item 3 privesc packs
   shipped. Next is post-foothold host/network enum (`host.multihomed`) → one-click
   tunnels + route-aware runner (auto-proxychains for SOCKS, transparent for ligolo)
