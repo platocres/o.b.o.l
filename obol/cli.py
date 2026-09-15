@@ -229,6 +229,50 @@ def cmd_overview(args) -> None:
     board.render_overview(_load_or_exit())
 
 
+def _move_extra(m) -> str:
+    """A short trailing hint for a move line (who/what, not a full card)."""
+    d = m.detail or {}
+    if m.kind == "login" and d.get("user"):
+        return f"  {(d.get('method') or '').strip()} {d['user']}".rstrip()
+    if m.kind == "exploit" and d.get("lead"):
+        return f"  ({d['lead']})"
+    if m.kind == "tunnel" and d.get("transport"):
+        return f"  {d['transport']}"
+    if m.kind == "enum" and not d.get("cached"):
+        return "  (will fetch/stage)"
+    return ""
+
+
+def cmd_moves(args) -> None:
+    from . import moves as moves_layer
+    from .phases import PHASES, frontier_index
+    ws = _load_or_exit()
+    host = args.host or ws.target
+    if not host:
+        print("no active target. add one with `obol target add <ip>` or pass a host.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    all_moves = moves_layer.frontier_moves(ws, host)
+    ready = [m for m in all_moves if m.ready]
+    waiting = [m for m in all_moves if not m.ready]
+    tf = ws.facts_for_target(host)
+    print(f"\nmoves on {host}  (frontier: {PHASES[frontier_index(tf)]})")
+    if not ready and not (args.all and waiting):
+        print("  (no live moves yet — run `obol scan` or gather more evidence)\n")
+        return
+    if ready:
+        print("\n  ready now:")
+        for m in ready:
+            print(f"    [{m.kind:7}] {m.label:38} {m.phase:9}{_move_extra(m)}")
+    if args.all and waiting:
+        print("\n  waiting on input:")
+        for m in waiting:
+            print(f"    [{m.kind:7}] {m.label:38} {m.phase:9}  — {m.reason}")
+    elif waiting:
+        print(f"\n  {len(waiting)} more need one input — see them with `obol moves --all`.")
+    print()
+
+
 def cmd_explain(args) -> None:
     ws = _load_or_exit()
     board.render_command(_pick(ws, args.n), ws)
@@ -1314,6 +1358,13 @@ try:
     pn.set_defaults(func=cmd_next)
 
     sub.add_parser("overview", help="show scope, targets, services, and top next moves").set_defaults(func=cmd_overview)
+
+    pm = sub.add_parser("moves", help="the unified ranked move frontier for a target "
+                                      "(pack actions + logins/enum/exploits/tunnels)")
+    pm.add_argument("host", nargs="?", default="", help="target host (default: active target)")
+    pm.add_argument("--all", action="store_true",
+                    help="also list moves waiting on one input, with the reason")
+    pm.set_defaults(func=cmd_moves)
 
     pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)

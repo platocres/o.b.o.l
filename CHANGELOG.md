@@ -7,6 +7,26 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **unified move frontier** (`obol/moves.py`) — cruise-control **pillar I**,
+  first slice. `frontier_moves(ws, host)` merges the packs' live actions
+  (`pack.next_actions`) with the built-primitive offers — a session login (§6a), enum
+  run-and-rank (§8), an applicable privesc exploit (§8), a pivot tunnel (§6d) — into ONE
+  fact-gated, phase-ranked list of candidate `Move`s per host, so the primitives that
+  used to live outside the ranked "next" list become first-class next moves. It reuses
+  each layer's existing `eligible_*` function verbatim (**not** a second planner) and
+  ranks the merged set by the same phase/frontier model the planner already uses
+  (`obol/phases.py`): on-flow before premature, ready before waiting-on-one-input within a
+  band. Stays proof-bound — logins are offered pre-foothold (that is how you *get* the
+  foothold) but the escalate/pivot moves (enum/exploit/tunnel) only appear once a foothold
+  is proven, an already-proven login is dropped from "next", and the module enumerates and
+  ranks only (it runs nothing and produces no facts). Terminal `obol moves [host] [--all]`
+  (ready moves by default; `--all` also lists moves waiting on one input, with the
+  actionable reason) and web `GET /api/moves`, full parity. Locked by `tests/test_moves.py`
+  (pack actions as dispatchable moves, a login becoming a ready/not-ready move, proven-login
+  exclusion, foothold-gating of escalate moves, and the premature-below-on-flow ordering).
+  This is the frontier `obol cruise` (pillar II) will drive; still open: folding it into
+  `obol next`, the remaining primitives as moves, and a per-`Move` execution handle.
+
 - Framed the **cruise-control spine** in `docs/ROADMAP.md` + `AGENTS.md` (North Star,
   planning/docs only — no code): obol's operator-in-control answer to Charon's one-button
   lab automation. The goal is Charon's reach *without* Charon's brittleness (it beat labs

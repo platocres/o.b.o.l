@@ -37,8 +37,8 @@ from pathlib import Path
 from typing import Optional
 
 from .. import (board, bloodhound, discovery, enumrun as enum_layer, exploits as exploit_layer,
-                library, listeners as listener_layer, profile as obol_profile,
-                provision as material_cache,
+                library, listeners as listener_layer, moves as moves_layer,
+                profile as obol_profile, provision as material_cache,
                 sessions as session_layer, staging as staging_layer, tools as tool_inventory,
                 tunnels as tunnel_layer)
 from ..sessions import SessionError
@@ -1522,6 +1522,15 @@ def create_app(base, *, token: Optional[str] = None):
             "channels": staging_layer.eligible_channels(ws, host),
             "cache_summary": {"present": cache["present"], "total": cache["total"]},
         }
+
+    @app.get("/api/moves")
+    def api_moves(host: str = Query("")):
+        """The unified ranked move frontier (cruise-control pillar I): pack actions
+        plus the built-primitive offers (login/enum/exploit/tunnel), one fact-gated,
+        phase-ranked list per host. Enumerates only — nothing runs here."""
+        ws = active()
+        h = host or ws.target or ""
+        return {"host": h, "moves": [m.to_dict() for m in moves_layer.frontier_moves(ws, h)]}
 
     # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
     @app.get("/api/exploits")

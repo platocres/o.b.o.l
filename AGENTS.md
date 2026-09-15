@@ -245,8 +245,14 @@ obol/
                  narrows what the hunt reads, never relaxing a proof boundary; drives
                  flags.py and the {{flag_inames_linux}}/{{flag_names_windows}} tokens
   seed.py        Forest demo fixture (post-nmap facts)
+  moves.py       the unified move frontier (cruise-control pillar I): merges the packs'
+                 live actions (pack.next_actions) with the built-primitive offers
+                 (login/enum/exploit/tunnel, each via its own eligible_* fn) into ONE
+                 fact-gated, phase-ranked list of candidate moves per host. Enumerates
+                 and ranks only (never runs, produces no facts); the frontier `obol
+                 cruise` will drive. `frontier_moves(ws, host)` -> [Move]
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / next / explain / run / playbook(s) / sweep / login /
+                 overview / moves / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used
