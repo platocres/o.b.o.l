@@ -19,7 +19,8 @@ const PHASE_COLOR = { recon: "#38BDF8", enum: "#818CF8", creds: "#F59E0B",
   access: "#34D399", escalate: "#F472B6", loot: "#A855F7" };
 const SEV_COLOR = { critical: "#E11D48", high: "#F97316", medium: "#EAB308", low: "#3B82F6", info: "#6B7591" };
 const CAT_COLOR = { target: "#38BDF8", scan: "#818CF8", service: "#22D3EE", ad: "#F472B6",
-  credential: "#F59E0B", access: "#34D399", privesc: "#FB7185", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
+  credential: "#F59E0B", access: "#34D399", privesc: "#FB7185", objective: "#10B981", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
+const FLAG_SLOT = { local: "local", root: "root/proof", unknown: "flag" };
 const ACCESS = {
   discovered: { c: "#6B7591", t: "Discovered" }, enumerated: { c: "#3B82F6", t: "Enumerated" },
   credentialed: { c: "#EAB308", t: "Credentialed" }, foothold: { c: "#14B8A6", t: "Foothold" },
@@ -431,6 +432,14 @@ async function buildEngagement() {
   const targetCard = (tg) => {
     const a = ACCESS[tg.access] || ACCESS.discovered;
     const identity = tg.fqdn || tg.hostname || tg.domain || "";
+    const flags = tg.flags || [];
+    const flagPill = flags.length
+      ? `<span class="pill" style="border-color:#10B98166;color:#10B981" title="Captured flags">🚩 ${flags.length} flag${flags.length === 1 ? "" : "s"}</span>`
+      : "";
+    const flagStrip = flags.length
+      ? `<div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">${flags.map((f) =>
+          `<span class="pill mono" style="border-color:#10B98166;color:#10B981;font-size:11px" title="${esc(f.path || f.name)}">${esc(FLAG_SLOT[f.slot] || "flag")}: ${esc(f.flag || "captured")}</span>`).join("")}</div>`
+      : "";
     return `<div class="tcard" data-act="open" data-open="${esc(tg.host)}">
       <div class="tcard-h"><span class="tdot" style="background:${a.c}"></span><span class="t">${esc(tg.label)}</span>
         <span class="spacer" style="flex:1"></span><span class="mono muted" style="font-size:11px">${esc(tg.host)}</span></div>
@@ -440,8 +449,9 @@ async function buildEngagement() {
         <span class="pill">${esc(PHASE_LABEL[tg.phase] || tg.phase)}</span>
         <span class="pill">${(tg.open_ports || []).length} ports</span>
         <span class="pill">${(tg.findings || []).length} findings</span>
+        ${flagPill}
         <span class="spacer" style="flex:1"></span><button class="btn primary sm" data-act="quickstart" data-host="${esc(tg.host)}">Quick Start</button>
-      </div></div>`;
+      </div>${flagStrip}</div>`;
   };
   const tgtCards = s.targets.length ? Object.entries(s.targets.reduce((groups, tg) => {
     const key = tg.domain || "No domain yet";

@@ -379,12 +379,18 @@ For obol:
   scoring/points model, and an optional exam timer.
 - **Target category.** A `machine_type` per target (standalone / AD DC / member /
   workstation / lab) that can also nudge exam-flow ranking (item 2).
-- **Flag capture stays proof-bound.** When obol has a shell (from §6), it hunts the
-  platform's flag file and, on **actually reading it**, records an objective fact
-  (e.g. `objective.local_flag` / `objective.root_flag`, host-scoped, with the
-  command that read it) — a captured flag is proof, not a checkbox. Per-target
-  objective progress (initial access → privesc → local → root) then displays and
-  feeds the report.
+- **Flag capture stays proof-bound — FIRST SLICE DONE.** When obol has a foothold
+  (from §6), it hunts the flag files and, on **actually reading one**, records an
+  objective fact (`objective.local_flag` / `objective.root_flag` /
+  `objective.flag`, host-scoped, with the command that read it) — a captured flag
+  is proof, not a checkbox. Landed: the `obol_flag_hunt_2026_09` pack
+  (`flag-hunt-linux`/`flag-hunt-windows`, gated on a proven foothold + credential),
+  the proof-bound parser (`obol/flags.py`), the `objective` finding category, and
+  per-target captured-flag display on the web engagement screen. Still open: a
+  configurable flag-name/format set driven by the engagement profile (below),
+  hunting over a Penelope reverse shell / guided-paste channel (today it uses the
+  SSH/WinRM proof channel), and the full per-target objective ladder (initial
+  access → privesc → local → root) as a progress meter.
 
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).
@@ -448,6 +454,70 @@ independent branches with per-step approval preserved; and the auto-tunnel casca
 (§6d) can probe candidate methods/ports with bounded concurrency instead of strictly
 in series. Parallelism changes *scheduling* only — never what counts as proven, never
 what may be touched.
+
+## 10. Credential-material harvesting (share/loot sweep + document OCR)
+
+A real, thorough hunt for **credential material** in the files an engagement puts
+in reach — SMB shares, a foothold's filesystem, and recovered `loot.files` —
+returning **ranked likely candidates** the operator can validate, rather than a raw
+grep dump. Inspired by the operator's Charon (`docs/SOURCES.md §3` — *learn from its
+design, reimplement; do not copy its proprietary code*), which at one point could
+sweep a share for secrets and even **OCR PDFs** to pull credentials out of scanned
+documents. This is the loot/creds counterpart to the flag hunt (§7): once you can
+reach files, the highest-value thing in them is usually the next credential.
+
+Why obol should have it: credential reuse is the spine of OSCP/AD progress, and the
+material is routinely sitting in `Passwords.xlsx`, a `web.config`, a
+`unattend.xml`, a KeePass DB, a config backup, or a **scanned PDF** on an open
+share. Today obol can *reach* those files (SMB shares via §5 tools, a foothold's
+disk via §6, `loot.files`) but has no dedicated harvester that reads them, extracts
+secrets, and ranks candidates.
+
+Scope, each a reviewable PR and every non-negotiable intact:
+
+- **Source enumeration (reach the files).** Drive the readable surface obol already
+  proves: mount/spider authorized SMB shares (`smb.shares` + a validated
+  credential, through the one scope-enforced runner — never a share obol hasn't
+  proven reachable), a foothold's filesystem over the existing SSH/WinRM proof
+  channel (§6), and already-recovered `loot.files`. Bounded and polite (size caps,
+  extension/allowlist filters, worker cap per §9) so it does not exfiltrate a whole
+  fileserver.
+- **Content extraction — including PDF OCR.** A pluggable extractor set that reads
+  text out of the high-signal formats: office/OpenDocument, config/XML/INI, scripts,
+  `.kdbx`/credential stores (as *material*, not cracked), plain text, and **PDFs —
+  text-layer first, then OCR (tesseract/ocrmypdf) for scanned/image-only PDFs**. OCR
+  and every heavyweight extractor is an **optional extra** and degrades gracefully
+  when the binary/library is absent (Charon's `tool_provider` degradation lesson,
+  and obol's `tools.py` inventory + install hints already model this) — a missing
+  OCR engine yields a "PDF not OCR'd, install X" note, never a crash or a silent gap.
+- **Candidate detection + ranking (the product value).** Pattern/heuristic matching
+  for passwords, API keys/tokens, private keys, connection strings, `user:pass`
+  pairs, and known secret-bearing filenames — each candidate ranked by confidence
+  (pattern strength × filename/context × proximity to a username) and **de-noised**
+  so the operator gets a short list of *likely* credentials, not every base64 blob.
+  Return candidates with their file, offset/context snippet, and detector.
+- **Stays proof-bound (the obol line).** A harvested secret is **candidate
+  material**, not a working credential — it maps to `credential.candidate` /
+  `loot.files` (host- or share-scoped, citing the file + detector that found it),
+  and only becomes `credential.available` when a login/proof run validates it (§6a's
+  sessions layer is exactly that validator). Never record a found string as a proven
+  credential; never claim access from a file read. The OCR/extraction confidence is
+  detector metadata, not a `ProofState` upgrade.
+- **Surfaces.** Candidates roll up in the engagement **Findings/loot** view and the
+  report (with redaction honoring the existing secrets model — the debug package
+  stays redacted by default), and feed the planner: a ranked `credential.candidate`
+  naturally unlocks the validation/login moves that already gate on it. Keep it off
+  the lean Overview (progressive-disclosure guardrail); a dedicated **Loot /
+  credentials** view or tab is the home for the ranked list and per-file context.
+
+Interlocks: §5 (SMB tools reach the shares), §6 (a foothold/session reaches the
+disk; §6a validates a candidate into an available credential), §8 (staging is the
+reverse direction — this *pulls* material to triage, §8 *pushes* tooling), and §9
+(the sweep is embarrassingly parallel across files/shares under the worker cap).
+Non-negotiables: only authorized, proven-reachable sources (hard scope gate);
+harvested material is a candidate fact, never proven access; extraction/OCR is
+optional and degrades, never a hard dependency; one runner, one store; and no raw
+secret dumping on the lean surfaces.
 
 ## UX guardrails (product decision — keep these)
 

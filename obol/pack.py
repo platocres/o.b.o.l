@@ -33,6 +33,7 @@ PACK_NAMES = [
     "orange_linux_privesc_2025_03",
     "orange_windows_privesc_2025_03",
     "obol_local_pivot_2026_09",
+    "obol_flag_hunt_2026_09",
 ]
 
 
@@ -189,6 +190,9 @@ _FRIENDLY = {
     "foothold.webshell": "a web shell", "db.creds": "database credentials",
     "loot.files": "recovered files", "cloud.aws_access": "AWS cloud access",
     "exploit.candidate": "a candidate exploit",
+    "objective.flag": "a captured flag",
+    "objective.local_flag": "a captured local flag",
+    "objective.root_flag": "a captured root/proof flag",
 }
 
 

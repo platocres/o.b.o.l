@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from . import board
 from .facts import Fact, FactSet
+from .flags import parse_flag_output
 from .localenum import parse_local_enum_output
 from .pack import Action, load_packs, next_actions
 from .parsers import parse_action_output
@@ -85,13 +86,15 @@ def eligible_actions(facts: FactSet, pack: list[Action] | None = None) -> list[A
 def _parsed_facts(action: Action, ws: Workspace, cmd: str, result: RunResult) -> list[Fact]:
     """Run every parser family that knows about this action/output shape.
 
-    `parsers.py` holds the broad external-tool parser corpus. `localenum.py` is kept
-    separate because post-foothold host/network output is pivot-specific and should
-    only become facts for the small local-enum action ids that request it.
+    `parsers.py` holds the broad external-tool parser corpus. `localenum.py` and
+    `flags.py` are kept separate because post-foothold host/network output and
+    flag-file captures are foothold-specific and should only become facts for the
+    small set of action ids that request them.
     """
     facts: list[Fact] = []
     facts.extend(parse_action_output(action, ws, cmd, result.stdout, result.stderr, source=cmd))
     facts.extend(parse_local_enum_output(action, ws, cmd, result.stdout, result.stderr, source=cmd))
+    facts.extend(parse_flag_output(action, ws, cmd, result.stdout, result.stderr, source=cmd))
     return facts
 
 
