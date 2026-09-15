@@ -7,6 +7,24 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **engagement phase/flow ranking model** (ROADMAP item 2): the planner now
+  ranks live actions by the shared phase model (recon → enum → creds → access →
+  escalate → loot) *relative to each target's current frontier*, instead of by a bare
+  scalar priority. A new `obol/phases.py` houses the one phase taxonomy (previously
+  buried in `graph.py`, now imported by both the planner and the map so ranking and
+  layout can never disagree); `graph.py` re-exports its old names. `next_actions`
+  buckets each live action by how far it reaches **past the target's frontier** (the
+  furthest phase reached, plus one) and orders by priority within a bucket — so a
+  premature high-value branch (a loot secrets-dump or a BloodHound collect that becomes
+  eligible mid-enumeration) sorts **below** the recon/enum you should finish first,
+  while a deliberately low-priority recon step (a slow UDP sweep) never leapfrogs the
+  real next move. The frontier is per-factset, so each host ranks by its own progress,
+  and the same action re-ranks as the engagement advances (an escalate move is
+  premature before a foothold, on-flow after one). Actions may carry an optional
+  `phase` in pack data to correct a card the derivation misplaces, with no planner
+  branching. Locked by `tests/test_phase_ranking.py`; the AS-REP-before-spray and
+  content-discovery-before-jwt orderings now hold structurally, not by hand-tuned
+  priority coincidence.
 - Added **Manual Web-Exploitation Success-Signal Parsers** (ROADMAP item 1): the
   curl-driven Orange web cards (LFI, command injection, manual SQLi, SSRF) that
   were explain-only now record proof-bound facts from the *output shape* a

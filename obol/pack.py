@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .facts import Fact, FactSet, ProofState
+from .phases import frontier_index, phase_index, phase_of_action
 
 PACKS_DIR = Path(__file__).parent / "packs"
 DEFAULT_PACK = "orange_ad_2025_03"
@@ -46,6 +47,7 @@ class Action:
     proves: str = ""
     does_not_prove: str = ""
     priority: int = 50
+    phase: str = ""                    # optional pack override; else derived from produces
     requires_all: list[str] = field(default_factory=list)
     requires_any: list[str] = field(default_factory=list)
     produces: list[str] = field(default_factory=list)   # fact kinds
@@ -92,7 +94,7 @@ class Action:
             tool=d.get("tool", ""),
             command=(cmds[0]["run"] if cmds else d.get("command", "")),
             proves=d.get("proves", ""), does_not_prove=d.get("does_not_prove", ""),
-            priority=int(d.get("priority", 50)),
+            priority=int(d.get("priority", 50)), phase=d.get("phase", ""),
             requires_all=list(d.get("requires_all", [])),
             requires_any=list(d.get("requires_any", [])),
             produces=list(d.get("produces", [])),
@@ -281,9 +283,23 @@ def load_packs(names: list[str] | None = None) -> list[Action]:
 # planner                                                                      #
 # --------------------------------------------------------------------------- #
 def next_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:
+    """The live actions, ranked by the engagement phase/flow model.
+
+    Actions are bucketed by how far *ahead of the target's current frontier* they
+    reach (0 = on-flow, at or behind the stage being pushed into) and then, within a
+    bucket, by their pack priority. So recon and low-risk enumeration sort ahead of a
+    premature high-value branch (a loot dump that becomes eligible mid-enumeration
+    drops below the enum you should finish first), while a deliberately low-priority
+    recon step never leapfrogs the real next move — priority still orders the on-flow
+    band. The frontier is per-factset, so each target ranks by its own progress.
+    """
     pack = pack if pack is not None else load_packs()
     live = [a for a in pack if a.eligible(facts) and not a.settled(facts)]
-    return sorted(live, key=lambda a: a.priority, reverse=True)
+    frontier = frontier_index(facts)
+    return sorted(
+        live,
+        key=lambda a: (max(0, phase_index(phase_of_action(a)) - frontier), -a.priority),
+    )
 
 
 def blocked_actions(facts: FactSet, pack: list[Action] | None = None) -> list[Action]:

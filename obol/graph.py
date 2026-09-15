@@ -21,59 +21,14 @@ import re
 
 from .facts import FactSet
 from .pack import Action, load_packs, next_actions, friendly as _friendly
+from .phases import (  # the one phase model — shared with the planner, re-exported here
+    PHASES,
+    PHASE_INDEX as _PHASE_INDEX,
+    phase_of_kind,
+    phase_of_action as _phase_of_action,
+    target_phase,
+)
 from .scope import target_in_scope
-
-# Engagement phases, in order. A fact/action is placed in the latest phase any of
-# its kinds map to, so the flow reads left (early recon) to right (loot/dominance).
-PHASES = ["recon", "enum", "creds", "access", "escalate", "loot"]
-_PHASE_INDEX = {name: i for i, name in enumerate(PHASES)}
-
-# Prefix/exact rules mapping a fact kind to a phase. Ordered longest-first at use.
-_PHASE_RULES: list[tuple[str, str]] = [
-    ("target.", "recon"), ("host.", "recon"), ("ports.open", "recon"),
-    ("port:", "recon"), ("scan.", "recon"),
-    ("ldap.reachable", "recon"), ("smb.reachable", "recon"),
-    ("kerberos.reachable", "recon"), ("winrm.reachable", "recon"),
-    ("http.reachable", "recon"), ("service.", "recon"),
-    ("ad.dc_candidate", "enum"), ("ad.domain_known", "enum"), ("ad.base_dn", "enum"),
-    ("ad.anonymous_bind", "enum"), ("ad.user_list", "enum"),
-    ("smb.null_session", "enum"), ("smb.guest_session", "enum"), ("smb.shares", "enum"),
-    ("enum.deep", "enum"),
-    ("web.content_map", "enum"), ("web.vhost", "enum"), ("web.source", "enum"),
-    ("web.users", "enum"), ("web.parameterized", "enum"),
-    ("hash.", "creds"), ("kerberos.tickets", "creds"), ("credential.", "creds"),
-    ("ldap.authenticated", "access"), ("smb.authenticated", "access"),
-    ("winrm.authenticated", "access"), ("web.authenticated", "access"),
-    ("access.", "access"), ("foothold.", "access"),
-    ("ad.graph.collected", "escalate"), ("ad.attack_paths", "escalate"),
-    ("ad.control_paths", "escalate"), ("ad.trusts", "escalate"),
-    ("ad.computer_added", "escalate"), ("adcs.", "escalate"),
-    ("privesc.", "escalate"),
-    ("relay.success", "escalate"), ("lateral.movement", "escalate"),
-    ("vuln.", "escalate"), ("exploit.candidate", "escalate"),
-    ("web.lfi_confirmed", "escalate"), ("web.sqli_confirmed", "escalate"),
-    ("web.cmdi_confirmed", "escalate"), ("web.ssrf_confirmed", "escalate"),
-    ("web.upload_confirmed", "escalate"),
-    ("loot.", "loot"), ("persistence.", "loot"), ("db.creds", "loot"),
-    ("cloud.", "loot"), ("config.", "loot"),
-]
-
-
-def phase_of_kind(kind: str) -> str:
-    """The engagement phase a fact kind belongs to (defaults to 'escalate')."""
-    for prefix, phase in sorted(_PHASE_RULES, key=lambda r: -len(r[0])):
-        if kind == prefix or kind.startswith(prefix):
-            return phase
-    return "escalate"
-
-
-def _phase_of_action(action: Action) -> str:
-    """An action's phase is the latest phase of anything it produces (fallback: the
-    latest phase of its prerequisites), so a card sorts under the stage it advances."""
-    kinds = list(action.produces) or (action.requires_all + action.requires_any)
-    if not kinds:
-        return "recon"
-    return max((phase_of_kind(k) for k in kinds), key=lambda p: _PHASE_INDEX[p])
 
 
 def _nid(text: str) -> str:
@@ -281,14 +236,6 @@ def target_access_level(facts: FactSet) -> str:
     if any(not f.kind.startswith(("target.", "host.")) for f in facts.facts):
         return "enumerated"
     return "discovered"
-
-
-def target_phase(facts: FactSet) -> str:
-    """The furthest engagement phase a target has reached (by proven fact kinds)."""
-    kinds = [f.kind for f in facts.facts if f.state.value == "supported"]
-    if not kinds:
-        return "recon"
-    return max((phase_of_kind(k) for k in kinds), key=lambda p: _PHASE_INDEX[p])
 
 
 def build_topology(ws) -> dict:

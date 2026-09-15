@@ -168,12 +168,29 @@ Next work should widen this carefully:
   ldapsearch. If `445` is open, prefer nxc SMB/null/guest/RID paths. If HTTP ports
   exist, unlock web enumeration once the web pack exists.
 
-## 2. Exam-flow ranking beyond the first AD spine
+## 2. Exam-flow ranking beyond the first AD spine — DONE
 
-The first nmap/LDAP flow has explicit ordering, but most priorities are still
-derived from the produced fact's "value" in `scripts/import_orange_ad.js`. Add a
-proper phase/flow model so recon and low-risk enumeration sort before high-value
-but premature branches across every pack.
+The first nmap/LDAP flow had explicit ordering, but most priorities were still
+derived from the produced fact's "value" in `scripts/import_orange_ad.js`, and a
+single scalar priority conflated "how valuable is this fact" with "is it time for it
+yet" — so a high-value branch (a loot secrets-dump, a BloodHound collect) could sort
+above the recon/enum you should finish first.
+
+**The phase/flow model now drives ranking** (`obol/phases.py`, the one phase taxonomy
+shared by the planner and the map). `pack.next_actions` buckets each live action by
+how far its phase reaches **past the target's current frontier** (the furthest phase
+reached, plus one) and orders by priority *within* a bucket. So recon and low-risk
+enumeration sort ahead of a premature high-value branch, while a deliberately
+low-priority recon step (a slow UDP sweep) never leapfrogs the real next move — the
+frontier split, not the raw scalar, decides. It applies across every pack (the planner
+merges them), the frontier is per-target so each host ranks by its own progress, and an
+action can carry an optional `phase` in pack data to correct a misplaced card without
+planner branching. Locked by `tests/test_phase_ranking.py`.
+
+Possible follow-ups (not blocking): tune individual card phases now that phase is the
+ranking axis (e.g. whether BloodHound collection reads as enum vs escalate), and feed
+the engagement profile / `machine_type` (§7) into the frontier so a box category can
+nudge which on-flow move ranks first.
 
 ## 3. Sibling packs (web, privesc, pivoting, cracking, …)
 
@@ -648,9 +665,11 @@ summary that links into it.
   **DONE.** CLI run feedback now uses compact fact summaries for ports, services,
   web titles, shares, banners, users, redirects, and other common parser payloads.
 - ~~Exam-flow ranking (item 2) still surfaces some actions oddly (e.g. spraying
-  ahead of roasting).~~ **PARTLY DONE.** Quiet AS-REP roasting now ranks above the
-  noisy password spray off a user list (an importer exam-flow override). The broader
-  phase/flow model (item 2) is still the real fix for ranking beyond this spine.
+  ahead of roasting).~~ **DONE.** Quiet AS-REP roasting ranks above the noisy password
+  spray off a user list, and — the broader fix — the phase/flow model (item 2) now
+  ranks every pack's live actions relative to the target's frontier, so premature
+  high-value branches drop below the recon/enum to do first while a low-priority recon
+  step never leapfrogs the real next move (`obol/phases.py`, `pack.next_actions`).
 - ~~`obol web` (the static one-file snapshot) still embeds mermaid from a CDN, so its
   path graph is blank offline.~~ **DONE.** The static snapshot renders the shared
   graph model as inline SVG phase columns (`graph.build_graph_svg`) — no script, web
