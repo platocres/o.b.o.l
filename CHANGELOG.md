@@ -78,6 +78,16 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   never a fabricated win. `obol exploits [host]`, `obol exploit <key> --outcome
   add-user|system-shell|revshell [--user/--password/--listener] [--run]`, and web
   `GET /api/exploits`, `POST /api/exploit/plan`, `POST /api/run/exploit`.
+- Added the **Access / Pivot tab** (§8 sixth slice) to the live web surface — the
+  point-and-click home for staging, per the progressive-disclosure guardrail (a
+  dedicated per-target tab, not the Overview). One aggregate endpoint
+  (`GET /api/access`) returns the host's foothold OS, sessions, tunnels, staged
+  material, listeners, eligible enum tools, applicable exploits, and cache summary; the
+  tab renders foothold + listeners, one-click **Enumerate** (stage + run linpeas/winpeas
+  → leads), **Escalate** (applicable exploits with craft-and-confirm, approval-gated
+  execution through the runner), a staged-material list, and listener start/close. With
+  this the whole §8 layer has full terminal + web parity, and tunnelling (§6d/e/f) can
+  resume on a complete staging layer.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

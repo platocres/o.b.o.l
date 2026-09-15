@@ -1472,6 +1472,24 @@ def create_app(base, *, token: Optional[str] = None):
                 raise HTTPException(400, str(exc))
         return res
 
+    # ── access / pivot tab: one aggregate call for the per-target console ──────
+    @app.get("/api/access")
+    def api_access(host: str = Query(...)):
+        ws = active()
+        cache = material_cache.scan()
+        return {
+            "host": host,
+            "foothold_os": staging_layer._foothold_os(ws, host),
+            "sessions": ws.sessions_for(host),
+            "tunnels": ws.tunnels_for(host),
+            "staged": ws.staged_for(host),
+            "listeners": ws.listeners,
+            "enum_tools": enum_layer.eligible_enum(ws, host),
+            "exploits": exploit_layer.eligible_exploits(ws, host),
+            "channels": staging_layer.eligible_channels(ws, host),
+            "cache_summary": {"present": cache["present"], "total": cache["total"]},
+        }
+
     # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
     @app.get("/api/exploits")
     def api_exploits(host: str = Query(...)):
