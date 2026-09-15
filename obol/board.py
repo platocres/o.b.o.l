@@ -66,6 +66,18 @@ def command_context(ws: Workspace, target: str = "", extra: dict | None = None) 
         ctx["domain"] = name
         ctx["basedn"] = ",".join(f"DC={p}" for p in name.split("."))
         ctx["dc"] = name
+    # Flag-hunt filename set from the engagement profile (ROADMAP §7), rendered as
+    # the `find -iname a -o -iname b` fragment (Linux) and the `-Include a,b` list
+    # (Windows) so the flag-hunt pack searches the configured names, not a hardcoded
+    # set. Names are validated to safe filename chars inside these helpers.
+    try:
+        flag_cfg = ws.flag_config() if hasattr(ws, "flag_config") else None
+    except Exception:
+        flag_cfg = None
+    _flag_names = (flag_cfg or {}).get("names") if flag_cfg else None
+    from . import profile as _profile
+    ctx["flag_inames_linux"] = _profile.linux_iname_expr(_flag_names)
+    ctx["flag_names_windows"] = _profile.windows_name_list(_flag_names)
     creds = f.values("credential.available") or f.values("credential.plaintext")
     if creds:
         ctx["user"] = creds[0].get("user", "<user>")

@@ -16,15 +16,17 @@ from __future__ import annotations
 
 import re
 
+from . import profile as _profile
 from .facts import Fact
 from .scope import normalize_target
 
 FLAG_HUNT_ACTION_IDS = {"flag-hunt-linux", "flag-hunt-windows"}
 
-# Filenames the hunt targets. A capture is only recorded for a line whose path
-# ends in one of these — the search itself only reads these, but gating on the
-# name keeps a stray `path:value` line from being mistaken for a flag.
-_FLAG_NAMES = {"user.txt", "root.txt", "local.txt", "proof.txt", "flag.txt", "flag"}
+# The default filename set (used when an engagement has no profile). The effective
+# set is resolved per-engagement from the profile (ROADMAP §7): a capture is only
+# recorded for a line whose path ends in a *configured* name, so gating on the name
+# keeps a stray `path:value` line from being mistaken for a flag.
+_FLAG_NAMES = set(_profile.DEFAULT_FLAG_NAMES)
 
 # NetExec prepends rows like ``WINRM 10.10.10.5 5985 HOST`` before command output.
 _NXC_PREFIX_RE = re.compile(r"^(?:SMB|WINRM|WMI|RPC|SSH)\s+\S+\s+\d+\s+\S+\s+(?P<body>.*)$", re.I)
@@ -32,13 +34,6 @@ _NXC_PREFIX_RE = re.compile(r"^(?:SMB|WINRM|WMI|RPC|SSH)\s+\S+\s+\d+\s+\S+\s+(?P
 _WIN_MARKER_RE = re.compile(r"===FLAG:(?P<path>.*?)::(?P<content>.*)$")
 # Linux ``grep -H`` shape: ``/abs/path:content`` (absolute path, no space before ':').
 _LINUX_LINE_RE = re.compile(r"^(?P<path>/[^\s:]+):(?P<content>.*)$")
-
-# Flag value shapes, most specific first.
-_BRACE_RE = re.compile(r"\b[A-Za-z0-9_]{2,20}\{[^}\r\n]{1,200}\}")
-_HEX64_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
-_HEX32_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
-_SINGLE_TOKEN_RE = re.compile(r"^\S{1,64}$")
-
 
 def _scope(ws, target: str = "") -> str:
     host = normalize_target(target or getattr(ws, "target", "") or "")
@@ -55,13 +50,10 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.strip().strip('"').strip("'"))[-1]
 
 
-def _slot_for(name: str) -> str:
+def _slot_for(name: str, slots: dict[str, str] | None = None) -> str:
     lowered = name.lower()
-    if lowered in {"user.txt", "local.txt"}:
-        return "local"
-    if lowered in {"root.txt", "proof.txt"}:
-        return "root"
-    return "unknown"
+    mapping = slots if slots is not None else _profile.DEFAULT_SLOTS
+    return mapping.get(lowered, "unknown")
 
 
 def _kind_for(slot: str) -> str:
@@ -71,23 +63,32 @@ def _kind_for(slot: str) -> str:
     }.get(slot, "objective.flag")
 
 
-def extract_flag_value(content: str) -> str:
+def extract_flag_value(content: str, formats: list[str] | None = None) -> str:
     """Pull a plausible flag value out of captured file content, or "".
 
-    Conservative on purpose: a brace token (``THM{…}``/``HTB{…}``/``flag{…}``) or a
-    32/64-char hex string is a confident flag; otherwise only a lone short token on
-    its own (a single-line file with no spaces) is accepted. Multi-line noise, an
-    error message, or an empty read yields no value — and therefore no fact.
+    Conservative on purpose, and profile-aware: only the *configured* value formats
+    count (a brace token like ``THM{…}``/``HTB{…}``, a 32/64-char hash, a UUID, or a
+    lone short token as a last resort), tried in order. So an OSCP profile that
+    accepts a proof hash but not a brace flag, or a CTF profile that accepts
+    ``flag{…}`` but not a bare token, records only what its platform actually uses.
+    Multi-line noise, an error message, or an empty read yields no value — and
+    therefore no fact. Default (no formats given) is obol's original full order.
     """
     text = (content or "").strip()
     if not text:
         return ""
-    for pattern in (_BRACE_RE, _HEX64_RE, _HEX32_RE):
+    keys = formats or _profile.DEFAULT_FORMATS
+    for key in keys:
+        pattern = _profile.FORMAT_PATTERNS.get(key)
+        if not pattern:
+            continue
+        if key == "token":
+            if pattern.match(text) and any(ch.isalnum() for ch in text):
+                return text
+            continue
         match = pattern.search(text)
         if match:
             return match.group(0)
-    if _SINGLE_TOKEN_RE.match(text) and any(ch.isalnum() for ch in text):
-        return text
     return ""
 
 
@@ -113,6 +114,12 @@ def parse_flag_output(action, ws, command: str, stdout: str, stderr: str = "", *
     scope = _scope(ws)
     if not scope:
         return []
+    # Resolve the engagement's flag config (names/formats/slots) from its profile;
+    # an engagement with no profile gets obol's full defaults (unchanged behavior).
+    cfg = ws.flag_config() if hasattr(ws, "flag_config") else _profile.resolve_flag_config(None)
+    names = set(cfg.get("names") or _profile.DEFAULT_FLAG_NAMES)
+    formats = cfg.get("formats") or _profile.DEFAULT_FORMATS
+    slots = cfg.get("slots") or _profile.DEFAULT_SLOTS
     out: list[Fact] = []
     seen: set[tuple[str, str]] = set()
     src = source or command
@@ -129,12 +136,12 @@ def parse_flag_output(action, ws, command: str, stdout: str, stderr: str = "", *
                 continue
             path, content = linux.group("path"), linux.group("content")
         name = _basename(path)
-        if name.lower() not in _FLAG_NAMES:
+        if name.lower() not in names:
             continue
-        value = extract_flag_value(content)
+        value = extract_flag_value(content, formats)
         if not value:
             continue
-        slot = _slot_for(name)
+        slot = _slot_for(name, slots)
         _emit(out, seen, _kind_for(slot), scope,
               {"name": name, "path": path, "slot": slot, "flag": value}, src)
     return out

@@ -7,6 +7,35 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **engagement profile** (ROADMAP §7, first slice): an engagement now
+  carries a platform/exam type that decides **which flag file names and value
+  formats the post-foothold flag hunt looks for**, instead of the hunt being
+  hard-wired to one lab's conventions. A new `obol/profile.py` holds the preset
+  table — **Hack The Box** (`user.txt`/`root.txt`, hash-shaped), **OffSec/OSCP**
+  (`local.txt`/`proof.txt`), **TryHackMe** (`user.txt`/`root.txt`/`flag.txt`,
+  brace-shaped), **CTF** (`flag.txt`/`flag`, brace/UUID), and **Custom** (obol's
+  full defaults) — each mapping a filename to its objective slot (local/root) and
+  listing the accepted value formats (`brace`/`hex32`/`hex64`/`uuid`/`token`). The
+  operator can also override the flag names/formats directly. The profile is
+  engagement-level operator configuration (stored in the store's `meta`, on
+  `Workspace.profile`), **not a fact**: it never relaxes a proof boundary — a
+  captured flag is still recorded only when a file was actually read and its
+  content matches a *configured* format (`flags.extract_flag_value` and
+  `parse_flag_output` are now profile-driven, falling back to the full defaults
+  when no profile is set). The flag-hunt pack no longer hardcodes filenames: the
+  Linux `find -iname …` fragment and the Windows `-Include …` list come from new
+  `{{flag_inames_linux}}`/`{{flag_names_windows}}` command tokens
+  (`board.command_context`), each validated to safe filename characters so an
+  override can never inject shell/find syntax. Full terminal + web parity: `obol
+  profile [show|list|set <platform> [--flag-names …] [--flag-formats …]]`, and
+  `GET/POST /api/profile` plus a compact profile chip + picker on the web Scope
+  card and the resolved config on `/api/meta` and `/api/overview`. Locked by
+  `tests/test_profile.py` (preset resolution, alias/unknown fallback, format
+  gating, profile-driven hunt, filename-safe tokens, persistence) with CLI and web
+  parity tests. Still open in §7: target `machine_type`, a scoring/points model, an
+  exam timer, and the full per-target objective ladder (initial access → privesc →
+  local → root) as a progress meter.
+
 - Added **Manual Web-Exploitation Success-Signal Parsers v2** (ROADMAP item 1 / §11):
   the remaining explain-only Orange web cards now record proof-bound facts from a
   hand-driven curl's *output shape*, each mapped to its narrowest fact and

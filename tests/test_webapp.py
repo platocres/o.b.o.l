@@ -592,3 +592,25 @@ def test_engagement_activity_surfaces_running_jobs_and_ledger(cx, monkeypatch):
     assert a["active_count"] == 0
     # the finished command is now in the cross-host ledger, tagged with its host
     assert any(r["target"] == "10.10.10.161" and r["produced"] for r in a["timeline"])
+
+
+def test_profile_endpoint_get_set_and_meta(cx):
+    # default profile is the safe custom fallback, and the preset catalogue is served
+    r = cx.get("/api/profile", headers=H).json()
+    assert r["config"]["platform"] == "custom"
+    assert {p["id"] for p in r["presets"]} >= {"htb", "oscp", "thm", "ctf", "custom"}
+
+    # set a platform; the resolved flag config follows the preset
+    r = cx.post("/api/profile", json={"platform": "htb"}, headers=H).json()
+    assert r["ok"] and r["config"]["names"] == ["user.txt", "root.txt"]
+
+    # it surfaces on meta and overview for the SPA to render
+    assert cx.get("/api/meta", headers=H).json()["profile"]["platform"] == "htb"
+    assert cx.get("/api/overview", headers=H).json()["profile"]["platform"] == "htb"
+
+    # an unknown platform is rejected
+    assert cx.post("/api/profile", json={"platform": "nope"}, headers=H).status_code == 422
+
+    # custom override of names/formats
+    r = cx.post("/api/profile", json={"platform": "custom", "flag_names": ["x.txt"], "flag_formats": ["brace"]}, headers=H).json()
+    assert r["config"]["names"] == ["x.txt"] and r["config"]["formats"] == ["brace"]

@@ -419,10 +419,15 @@ root/proof flag) track per-target progress.
 
 For obol:
 
-- **Engagement profile.** A platform/exam type on the engagement (HTB, OffSec/OSCP,
-  TryHackMe, custom, …) that sets the flag names/formats to look for
-  (`local.txt`/`proof.txt` vs `user.txt`/`root.txt` vs `THM{…}`), an optional
-  scoring/points model, and an optional exam timer.
+- **Engagement profile — FIRST SLICE DONE.** A platform/exam type on the engagement
+  (HTB, OffSec/OSCP, TryHackMe, CTF, custom) now sets the flag names/formats to look
+  for (`local.txt`/`proof.txt` vs `user.txt`/`root.txt` vs `THM{…}`), driving the flag
+  hunt below. `obol/profile.py` holds the preset table (flag names + value formats +
+  local/root slot mapping) with operator overrides; the profile is engagement-level
+  config on `Workspace.profile` (stored in the store's `meta`), **not a fact** — it
+  narrows what the hunt reads, never relaxing a proof boundary. Terminal + web parity:
+  `obol profile [show|list|set]` and `GET/POST /api/profile` + a Scope-card picker.
+  Still open here: an optional scoring/points model and an optional exam timer.
 - **Target category.** A `machine_type` per target (standalone / AD DC / member /
   workstation / lab) that can also nudge exam-flow ranking (item 2).
 - **Flag capture stays proof-bound — FIRST SLICE DONE.** When obol has a foothold
@@ -432,11 +437,14 @@ For obol:
   is proof, not a checkbox. Landed: the `obol_flag_hunt_2026_09` pack
   (`flag-hunt-linux`/`flag-hunt-windows`, gated on a proven foothold + credential),
   the proof-bound parser (`obol/flags.py`), the `objective` finding category, and
-  per-target captured-flag display on the web engagement screen. Still open: a
-  configurable flag-name/format set driven by the engagement profile (below),
-  hunting over a Penelope reverse shell / guided-paste channel (today it uses the
-  SSH/WinRM proof channel), and the full per-target objective ladder (initial
-  access → privesc → local → root) as a progress meter.
+  per-target captured-flag display on the web engagement screen. The configurable
+  flag-name/format set driven by the engagement profile is now **DONE** (above): the
+  hunt's filenames come from the profile via the `{{flag_inames_linux}}`/
+  `{{flag_names_windows}}` command tokens, and `flags.extract_flag_value` only accepts
+  the profile's configured value formats. Still open: hunting over a Penelope reverse
+  shell / guided-paste channel (today it uses the SSH/WinRM proof channel), and the
+  full per-target objective ladder (initial access → privesc → local → root) as a
+  progress meter.
 
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).

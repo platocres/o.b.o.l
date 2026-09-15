@@ -214,9 +214,16 @@ class Store:
                          conn.execute("SELECT data FROM listeners ORDER BY updated_at, rowid")]
         finally:
             conn.close()
+        profile: dict = {}
+        if meta.get("profile"):
+            try:
+                profile = json.loads(meta["profile"])
+            except (ValueError, TypeError):
+                profile = {}
         return {
             "name": meta.get("name", ""),
             "created_at": float(meta.get("created_at") or 0.0),
+            "profile": profile,
             "target": meta.get("target", ""),
             "targets": targets,
             "scope": scope,
@@ -300,6 +307,7 @@ class Store:
             # meta -------------------------------------------------------------
             for k, v in (("name", payload.get("name", "")),
                          ("created_at", payload.get("created_at", 0.0)),
+                         ("profile", json.dumps(payload.get("profile") or {})),
                          ("target", payload.get("target", ""))):
                 conn.execute(
                     "INSERT INTO meta(k, v) VALUES(?, ?) "

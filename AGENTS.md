@@ -191,10 +191,16 @@ obol/
                    Findings/Evidence/Commands), Activity (engagement-level live run
                    feed + findings roll-up), attack path, report; vendored
                    chart.umd.min.js + morphdom-umd.min.js (no CDN, no build step)
+  profile.py     engagement profile (§7): platform/exam presets (HTB/OSCP/THM/CTF/
+                 custom) that decide which flag file NAMES + value FORMATS the flag
+                 hunt looks for, plus the objective slot mapping. Operator config on
+                 Workspace.profile (stored in the store's `meta`), NOT a fact — it
+                 narrows what the hunt reads, never relaxing a proof boundary; drives
+                 flags.py and the {{flag_inames_linux}}/{{flag_names_windows}} tokens
   seed.py        Forest demo fixture (post-nmap facts)
-  cli.py         subcommands: init / engagement / target / scope / scan / overview /
-                 next / explain / run / playbook(s) / sweep / login / sessions /
-                 session / facts / report / serve / web / debug, plus
+  cli.py         subcommands: init / engagement / target / profile / scope / scan /
+                 overview / next / explain / run / playbook(s) / sweep / login /
+                 sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used
                  to keep CLI scan behavior aligned with the web Quick Start flow

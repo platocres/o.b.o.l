@@ -74,6 +74,10 @@ class Workspace:
         self.store = Store(self.dir / STATE_DB)
         self.name: str = self.root.name
         self.created_at: float = 0.0
+        # engagement profile (ROADMAP §7): platform/exam type + flag config. Operator
+        # configuration (one per engagement), NOT a fact — it never relaxes a proof
+        # boundary, only decides which flag names/formats the hunt looks for.
+        self.profile: dict = {}
         self.target: str = ""            # the ACTIVE target host (per-target pivot)
         self.targets: list[dict] = []    # [{host, label, hostname, fqdn, domain, os, status, notes, added_at}]
         self.scope: list[str] = []
@@ -164,6 +168,7 @@ class Workspace:
         return {
             "name": self.name,
             "created_at": self.created_at,
+            "profile": self.profile,
             "target": self.target,
             "targets": self.targets,
             "scope": self.scope,
@@ -184,6 +189,7 @@ class Workspace:
         facts/runs it represents as already-persisted."""
         self.name = data.get("name", self.name)
         self.created_at = data.get("created_at", 0.0)
+        self.profile = dict(data.get("profile") or {})
         self.target = data.get("target", "")
         self.targets = [
             self._target_record(t)
@@ -231,6 +237,20 @@ class Workspace:
 
     def set_input(self, key: str, value: str) -> None:
         self.inputs[str(key)] = str(value)
+
+    # ---- engagement profile (ROADMAP §7) ------------------------------------
+    def set_profile(self, data: dict) -> dict:
+        """Set the engagement profile (platform/exam type + optional flag-name/
+        format overrides), canonicalized. Returns the stored profile."""
+        from . import profile as _profile
+        self.profile = _profile.normalize_profile(data)
+        return self.profile
+
+    def flag_config(self) -> dict:
+        """The effective flag config for this engagement (names/formats/slots),
+        resolving the profile through presets and defaults."""
+        from . import profile as _profile
+        return _profile.resolve_flag_config(self.profile)
 
     # ---- targets -------------------------------------------------------------
     def _target_record(self, data: dict) -> dict:

@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Optional
 
 from .. import (board, bloodhound, discovery, enumrun as enum_layer, exploits as exploit_layer,
-                library, listeners as listener_layer, provision as material_cache,
+                library, listeners as listener_layer, profile as obol_profile,
+                provision as material_cache,
                 sessions as session_layer, staging as staging_layer, tools as tool_inventory,
                 tunnels as tunnel_layer)
 from ..sessions import SessionError
@@ -1136,7 +1137,39 @@ def create_app(base, *, token: Optional[str] = None):
                 "domain": (dom[0].get("name") if dom else "") or "",
                 "targets": ws.targets, "active_target": ws.target,
                 "scope": list(ws.scope), "phases": PHASES,
-                "phase_labels": PHASE_LABEL}
+                "phase_labels": PHASE_LABEL, "profile": ws.flag_config()}
+
+    # ── engagement profile (ROADMAP §7) ──────────────────────────────────────
+    @app.get("/api/profile")
+    def api_get_profile():
+        """The engagement profile + the resolved flag config + the preset catalogue
+        so the picker can render options and the current selection together."""
+        ws = active()
+        return {"profile": dict(ws.profile or {}), "config": ws.flag_config(),
+                "presets": obol_profile.list_presets()}
+
+    @app.post("/api/profile")
+    def api_set_profile(payload: dict = Body(...)):
+        """Set the platform/exam type and/or override flag names/formats. Operator
+        configuration, not a fact — it decides which flag names/formats the hunt
+        looks for, never relaxing a proof boundary."""
+        payload = payload or {}
+        platform = str(payload.get("platform", "")).strip()
+        if platform and not obol_profile.normalize_platform(platform):
+            raise HTTPException(422, f"unknown platform {platform!r}")
+        ws = active()
+        data: dict = {"platform": platform or (ws.profile or {}).get("platform", obol_profile.DEFAULT_PLATFORM)}
+        if isinstance(payload.get("flag_names"), list):
+            data["flag_names"] = payload["flag_names"]
+        elif isinstance(payload.get("flag_names"), str) and payload["flag_names"].strip():
+            data["flag_names"] = [n.strip() for n in payload["flag_names"].split(",") if n.strip()]
+        if isinstance(payload.get("flag_formats"), list):
+            data["flag_formats"] = payload["flag_formats"]
+        elif isinstance(payload.get("flag_formats"), str) and payload["flag_formats"].strip():
+            data["flag_formats"] = [f.strip() for f in payload["flag_formats"].split(",") if f.strip()]
+        ws.set_profile(data)
+        ws.save()
+        return {"ok": True, "profile": dict(ws.profile), "config": ws.flag_config()}
 
     # ── engagement overview + graph + report ─────────────────────────────────
     @app.get("/api/overview")
@@ -1147,7 +1180,7 @@ def create_app(base, *, token: Optional[str] = None):
                      "produced": r["produced"], "at_display": r["at_display"],
                      "playbook": r.get("playbook")} for r in ctx["timeline"][-14:][::-1]]
         return {"meta": ctx["meta"], "tiles": ctx["tiles"], "targets": ctx["targets"],
-                "scope": list(ws.scope),
+                "scope": list(ws.scope), "profile": ws.flag_config(),
                 "category_counts": ctx["category_counts"], "severity_counts": ctx["severity_counts"],
                 "access_ladder": ctx["access_ladder"], "activity": activity,
                 "engagement_graph": ctx["engagement_graph"], "bloodhound": ctx["bloodhound"]}
