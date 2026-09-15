@@ -295,16 +295,25 @@ obol/
                  by obol cruise (its goal function — stop at the root objective) AND the
                  report (the objective/proof checklist). A projection over facts, not new
                  state. `obol objectives [host]`, GET /api/objectives
+  follow.py      followed sessions (§15c): obol follows you through a MANUAL login it does
+                 not perform. `obol follow -- <cmd>` runs your interactive tool in a logged
+                 PTY and parse_transcript() live-parses it into operator-session: facts (no
+                 copy-paste); tail_penelope_logs() ingests penelope's own session logs;
+                 capture_screenshot() grabs a REAL desktop screenshot at a proof moment
+                 (never a forgery), degrading when no display/tool. Reach = the operator's
+                 own session, never crosses a proof boundary
   ingest.py      external-action ingestion (pillar III): the way back into cruise after
                  the operator does something by hand. ingest_output() paste-and-parses
                  operator-supplied tool output through the SAME parser pipeline (proof-
                  bound, stamped operator: lineage, run flagged external); assert_fact()
                  records an operator-attested fact directly (stamped operator-attested:)
                  as the marked escape hatch. Invents no parser/fact kind. `obol ingest`,
-                 `obol assert`
+                 `obol assert`; add_credential() is the `obol cred add` front door — a
+                 hand-found password/NT hash becomes credential.available and unlocks
+                 login/tunnels/flags
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
                  overview / moves / do / cruise / autonomy / objectives / ingest / assert /
-                 next / explain / run / playbook(s) / sweep / login /
+                 cred / follow / install / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used

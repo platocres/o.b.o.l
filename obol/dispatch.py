@@ -30,7 +30,7 @@ from . import autonomy
 from . import moves as moves_layer
 
 # Move-id prefixes that name a primitive; anything else is a pack action id.
-_PRIMITIVE_KINDS = {"login", "enum", "exploit", "tunnel", "sweep"}
+_PRIMITIVE_KINDS = {"login", "enum", "exploit", "tunnel", "sweep", "listener"}
 
 
 class DispatchError(Exception):
@@ -109,6 +109,8 @@ def run_move(ws, move_id: str, *, host: str = "", approve: bool = False,
             return _run_tunnel_move(ws, move, key, host, params, surface=surface)
         if kind == "sweep":
             return _run_sweep_move(ws, move, key)
+        if kind == "listener":
+            return _run_listener_move(ws, move, params)
         if kind == "exploit":
             return _craft_exploit_move(ws, move, key, host, params)
     except DispatchError:
@@ -183,6 +185,20 @@ def _run_sweep_move(ws, move, tid):
                    summary=(f"swept {res.get('subnet', '')}: {len(created)} new host(s), "
                             f"tunnel {res.get('status', '')}"),
                    added=[f"host.up ({h})" for h in created], detail=res)
+
+
+def _run_listener_move(ws, move, params):
+    """Start a reverse-shell listener on obol's own box (local prep) and hand back the
+    listen command + the OS-matched payloads to trigger. Obol records the listener as live
+    state; catching the shell (and the access fact) happens when the operator fires the
+    payload and pastes the shell's id/whoami (listeners.record_catch)."""
+    from . import listeners
+    port = int(params.get("port") or 4444)
+    os_name = params.get("os") or (move.detail or {}).get("os") or "linux"
+    res = listeners.start_listener(ws, port, host=params.get("target", ""), os_name=os_name)
+    return _result(move, ok=bool(res.get("ok")), posture="handoff",
+                   summary=f"listener on :{port} — run the listen command, then fire a payload",
+                   command=res.get("listen_command", ""), detail=res)
 
 
 def _craft_exploit_move(ws, move, key, host, params):

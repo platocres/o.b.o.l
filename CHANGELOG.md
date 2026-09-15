@@ -7,6 +7,41 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- **Getting on the box (ROADMAP §15 b/c/d)** — the moves and mechanics that turn cruise
+  from "drives a box you already footholded" into "drives a box from a bare IP", each
+  tagged with the right *reach* so the autonomy policy governs it:
+  - **`obol cred add`** (`ingest.add_credential`, `POST /api/cred`, a web Add-credential
+    form): a password or NT hash you found by hand becomes a `credential.available` fact
+    (operator-attested) and immediately unlocks PtH/password login, SSH-transport tunnels,
+    and the flag hunt — obol uses your manual find automatically.
+  - **`listener` move**: on a code-exec path (a confirmed web RCE / exploit candidate) with
+    no session yet, the frontier offers "start a reverse-shell listener + prep the payload"
+    — a **local** move (obol's own box), so it's auto even on the exam; catching the shell
+    (the access fact) still happens when the operator fires the payload.
+  - **Initial engagement discovery sweep in `cruise --all`**: `cruise_engagement` now sweeps
+    authorized-but-unswept scope ranges *first* (gated by the autonomy policy — auto in lab
+    / with `--sweep`, a pending checkpoint on the exam), so cruise can start from a bare /24
+    instead of only cruising known hosts. Closes the analogue of the through-tunnel-sweep gap.
+  - **Followed sessions** (`obol/follow.py`, `obol follow`): obol follows you through a
+    *manual* login it does not perform. `obol follow -- <cmd>` runs your own interactive
+    tool (evil-winrm/ssh/…) in a logged PTY and parses the transcript into `operator-session:`
+    facts (no copy-paste); `obol follow --penelope` (+ `POST /api/follow/penelope`) tails
+    penelope's own session logs; and a **real desktop screenshot** fires at a proof moment
+    (`scrot`/`import`/…, genuine — never a forgery), degrading when no display/tool. The
+    reach is your own session, so it never crosses a proof boundary; copy-paste ingest is
+    now the fallback for un-wrappable channels (RDP).
+  - **One-pass tool install** (`tools.missing_tools`/`install_plan`/`run_install`,
+    `obol install [--dry-run] [--yes]`, `GET /api/install`): computes every catalogue tool
+    that's absent and installable, batches them into one apt line + pipx lines, and runs the
+    pass with **sudo prompting on the real terminal** — obol never sees or stores the sudo
+    password. A local *read* is auto; the install (a local system change) asks once.
+  Locked by `tests/test_getting_on_box.py` (cred unlocks + is usable + honest lineage, the
+  listener move offered/local/dispatched, engagement cruise sweeping a scope range then
+  cruising the discovered host, transcript parsing with operator-session lineage, penelope
+  tailing without double-ingest, screenshot degradation, and the install plan). Still open
+  in §15b: the fingerprint → probable-exploit matcher, `connect`/SMB-exec logins, and a
+  `stage`-as-move with loose-priv-dir auto-detection.
+
 - Added the **operator autonomy policy** (`obol/autonomy.py`) — how autonomous obol may be
   this engagement, and the true, auditable **OSCP-exam vs HTB/lab separation**. The policy
   resolves every move to `auto` / `ask` / `never` from three inputs — **reach** (local

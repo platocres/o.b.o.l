@@ -300,6 +300,7 @@ function onClick(e) {
     case "open-tunnel": openTunnel(el.dataset.host || state.target, el.dataset.kind, el.dataset.subnet || "", el.dataset.exposes === "1"); break;
     case "close-tunnel": closeTunnel(el.dataset.id); break;
     case "rm-tunnel": removeTunnel(el.dataset.id); break;
+    case "add-cred": addCred(el.dataset.host || state.target); break;
     case "cruise": runCruise(el.dataset.host || state.target); break;
     case "cruise-do": cruiseDo(el.dataset.host || state.target, el.dataset.id, el.dataset.ask); break;
     case "run-enum": runEnumTool(el.dataset.host || state.target, el.dataset.tool); break;
@@ -709,7 +710,12 @@ function tabOverview(b) {
 function sessionsCard(b) {
   const logins = b.logins || [];
   const sessions = b.sessions || [];
-  if (!logins.length && !sessions.length) return "";
+  // Always render at least the "add credential" affordance — adding a hand-found cred is
+  // exactly how you unlock the first login when none is offered yet.
+  if (!logins.length && !sessions.length) {
+    return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Access &amp; sessions</h2>${credButton(b)}</div>
+      <div class="muted">No logins yet — add a credential you found (password or NT hash) and obol will offer the login and use it for tunnels + the flag hunt.</div></div>`;
+  }
   const offers = logins.map((o) => {
     const pth = o.pth ? " · pass-the-hash" : "";
     const title = o.ready ? `Validate ${o.label} access${o.pth ? " with the NT hash (pass-the-hash)" : ""} and open a session` : esc(o.reason || "");
@@ -729,7 +735,7 @@ function sessionsCard(b) {
         <button class="btn xs" data-act="copy" data-copy="${esc(s.login_command)}" title="Copy the interactive login command">⧉</button></div>` : ""}
     </div>`;
   }).join("");
-  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Access &amp; sessions</h2><span class="muted">login is proven, then handed to your terminal</span></div>
+  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Access &amp; sessions</h2>${credButton(b)}</div>
     <div class="row" style="gap:6px;flex-wrap:wrap">${offers}</div>
     ${sessions.length ? `<div class="sess-list" style="margin-top:12px">${rows}</div>` : ""}
     <div class="muted" style="margin-top:10px;font-size:11px">obol validates access non-interactively, then hands you the ready-to-paste interactive command to run in your terminal.</div></div>`;
@@ -885,6 +891,24 @@ async function sweepTunnel(id) {
     render();
   } catch (e) { toast("Sweep failed", e.message, "err"); }
 }
+// ── add a credential the operator found by hand (unlocks login/tunnels/flags) ─
+async function addCred(host) {
+  const user = prompt("Username (e.g. Administrator):", "");
+  if (!user) return;
+  const secret = prompt("Password, or leave blank to enter an NT hash:", "");
+  let password = secret || "", nthash = "";
+  if (!secret) { nthash = prompt("NT hash (for pass-the-hash):", "") || ""; if (!nthash) return; }
+  try {
+    const r = await apiPost("/api/cred", { user, password, nthash, target: host || state.target || "" });
+    if (r.added) toast("Credential added", `${user} — obol will use it for login/tunnels/flags`, "ok");
+    else toast("Already recorded", user, "ok");
+    render();
+  } catch (e) { toast("Add failed", e.message, "err"); }
+}
+function credButton(b) {
+  return `<button class="btn xs" data-act="add-cred" data-host="${esc(b.meta.host)}" title="Record a credential you found by hand — obol will use it for login, tunnels, and the flag hunt">+ credential</button>`;
+}
+
 // ── cruise control (supervised auto-advance + the pause briefing) ────────────
 async function runCruise(host) {
   if (!host || state.cruiseBusy) return;
