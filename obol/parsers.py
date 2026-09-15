@@ -125,10 +125,37 @@ _WEB_INTERESTING_RE = re.compile(
     r"|\.git|\.svn|\.bak|\.old|\.zip|\.tar|\.sql|\.env|\.config",
     re.IGNORECASE,
 )
+_GIT_HEAD_RE = re.compile(r"\bref:\s+refs/heads/(?P<branch>[A-Za-z0-9_./-]+)", re.IGNORECASE)
+_GIT_DUMPER_SUCCESS_RE = re.compile(
+    r"\b(?:fetching|downloading|downloaded|repository|objects|refs/heads|HEAD)\b",
+    re.IGNORECASE,
+)
+_SOURCE_SECRET_RE = re.compile(
+    r"\b(?P<key>password|passwd|pwd|secret|api[_-]?key|token|connection(?:string)?|connstr)"
+    r"\b\s*[:=]\s*(?P<value>[^\s\"']{4,}|\"[^\"]{4,}\"|'[^']{4,}')",
+    re.IGNORECASE,
+)
 _NIKTO_NOISE_PREFIXES = (
     "target ip", "target hostname", "target port", "start time", "end time",
     "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
     "host(s) tested", "requests:", "0 host", "1 host",
+)
+_SQLMAP_VULN_RE = re.compile(
+    r"\b(?:parameter\s+['\"].+?['\"]\s+is vulnerable|is vulnerable to .+sql injection|"
+    r"appears to be .+sql injectable)\b",
+    re.IGNORECASE,
+)
+_SQLMAP_DBMS_RE = re.compile(r"\bback-end DBMS:\s*(?P<dbms>[^\r\n]+)", re.IGNORECASE)
+_SQLMAP_DATABASE_HEADER_RE = re.compile(r"\bavailable databases\s*\[(?P<count>\d+)\]", re.IGNORECASE)
+_SQLMAP_STAR_ROW_RE = re.compile(r"^\[\*\]\s+(?P<name>[A-Za-z0-9_$.-]{1,80})\s*$", re.MULTILINE)
+_SQLMAP_TABLE_RE = re.compile(
+    r"\bDatabase:\s*(?P<database>[A-Za-z0-9_$.-]+)\s*\n(?:\[[^\n]+\]\s*)?Table:\s*(?P<table>[A-Za-z0-9_$.-]+)",
+    re.IGNORECASE,
+)
+_SQLMAP_DUMP_RE = re.compile(r"\b(?:dumped|dumping)\b.+\b(?:entries|CSV file|table)\b", re.IGNORECASE)
+_SQLMAP_OS_SHELL_RE = re.compile(
+    r"\bos-shell\b|os-shell\s*>|web backdoor.*(?:uploaded|created|saved)|command shell session",
+    re.IGNORECASE,
 )
 _HTTP_STATUS_RE = re.compile(r"^HTTP/\S+\s+(?P<status>\d{3})(?:\s+(?P<reason>.*))?$", re.IGNORECASE | re.MULTILINE)
 _HTTP_HEADER_RE = re.compile(r"^(?P<key>Server|X-Powered-By|Location|Content-Type):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -585,6 +612,10 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
         _parse_web_vhosts(text, ws, source, facts)
     elif _is_web_content_command(command):
         _parse_web_content(text, ws, source, facts)
+    if "sqlmap" in lowered_command:
+        _parse_sqlmap(text, ws, source, facts)
+    if "git-dumper" in lowered_command or "/.git/" in lowered_command or _GIT_HEAD_RE.search(text):
+        _parse_git_source(text, ws, command, source, facts)
     if "nikto" in lowered_command:
         _parse_nikto(text, ws, source, facts)
     if "whatweb" in lowered_command or "curl" in lowered_command:
@@ -2053,6 +2084,161 @@ def _parse_web_vhosts(text: str, ws: Workspace, source: str, facts: list[Fact]) 
         return
     ordered = sorted(names, key=str.lower)
     _add(facts, Fact("web.vhost", f"host:{ws.target}", {"vhosts": ordered[:50], "count": len(ordered)}, ProofState.SUPPORTED, source))
+
+
+def _secret_snippets(text: str) -> list[dict]:
+    """Short source/dump snippets that look like secret-bearing lines.
+
+    These are candidate material only. They deliberately do not validate a login or
+    convert a found string into a working credential.
+    """
+    snippets: list[dict] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or len(line) > 260:
+            continue
+        match = _SOURCE_SECRET_RE.search(line)
+        if not match:
+            continue
+        key = match.group("key").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        snippets.append({"key": key, "line": line[:220]})
+    return snippets
+
+
+def _parse_git_source(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Exposed Git recovery signals.
+
+    A readable `.git/HEAD` or successful git-dumper run proves source disclosure.
+    Secret-looking lines in that recovered source are candidate material, not
+    validated credentials.
+    """
+    branch = ""
+    head = _GIT_HEAD_RE.search(text)
+    if head:
+        branch = head.group("branch")
+
+    lowered_command = command.lower()
+    source_found = bool(head) or (
+        "git-dumper" in lowered_command
+        and _GIT_DUMPER_SUCCESS_RE.search(text)
+        and not re.search(r"\b(?:error|failed|not found|403|404)\b", text, re.IGNORECASE)
+    )
+    if source_found:
+        value = {"kind": "git", "tool": "git-dumper" if "git-dumper" in lowered_command else "curl"}
+        if branch:
+            value["branch"] = branch
+        _add(facts, Fact("web.source", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+    secrets = _secret_snippets(text)
+    if secrets:
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                f"host:{ws.target}",
+                {"kind": "source_secret", "count": len(secrets), "secrets": secrets[:20]},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+
+
+def _parse_sqlmap(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
+    """SQLMap output, kept proof-bound.
+
+    SQLMap can prove a confirmed SQLi primitive, database metadata, candidate
+    credential material from dumped tables, or a web/app command channel. None of
+    those prove OS admin/root/SYSTEM or validate a credential for lateral movement.
+    """
+    if not text.strip():
+        return
+
+    vuln = _SQLMAP_VULN_RE.search(text)
+    if vuln:
+        _add(
+            facts,
+            Fact(
+                "web.sqli_confirmed",
+                f"host:{ws.target}",
+                {"tool": "sqlmap", "evidence": _line_for_match(text, vuln)},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+
+    dbms = ""
+    dbms_match = _SQLMAP_DBMS_RE.search(text)
+    if dbms_match:
+        dbms = dbms_match.group("dbms").strip()
+
+    database_names: list[str] = []
+    if _SQLMAP_DATABASE_HEADER_RE.search(text):
+        database_names = sorted(
+            {
+                match.group("name")
+                for match in _SQLMAP_STAR_ROW_RE.finditer(text)
+                if match.group("name").lower() not in {"available", "database", "databases"}
+            },
+            key=str.lower,
+        )
+    if database_names or dbms:
+        value: dict = {"tool": "sqlmap"}
+        if dbms:
+            value["dbms"] = dbms
+        if database_names:
+            value["databases"] = database_names[:50]
+            value["count"] = len(database_names)
+        _add(facts, Fact("db.databases", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+
+    table_refs = [
+        {"database": match.group("database"), "table": match.group("table")}
+        for match in _SQLMAP_TABLE_RE.finditer(text)
+    ]
+    if table_refs:
+        _add(
+            facts,
+            Fact("db.tables", f"host:{ws.target}", {"tool": "sqlmap", "tables": table_refs[:50]}, ProofState.SUPPORTED, source),
+        )
+
+    credential_columns = sorted(
+        {
+            key.lower()
+            for key in re.findall(r"\b(user(?:name)?|login|email|pass(?:word)?|passwd|pwd|hash|token|api[_-]?key)\b", text, re.IGNORECASE)
+        },
+        key=str.lower,
+    )
+    if credential_columns and (_SQLMAP_DUMP_RE.search(text) or "dump" in text.lower() or table_refs):
+        value = {"tool": "sqlmap", "credential_columns": credential_columns[:20]}
+        if table_refs:
+            value["tables"] = table_refs[:20]
+        _add(facts, Fact("db.creds", f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                f"host:{ws.target}",
+                {"kind": "database_dump_secret", "count": len(credential_columns), "sources": credential_columns[:20]},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+
+    shell = _SQLMAP_OS_SHELL_RE.search(text)
+    if shell:
+        _add(
+            facts,
+            Fact(
+                "foothold.webshell",
+                f"host:{ws.target}",
+                {"tool": "sqlmap", "method": "os-shell", "evidence": _line_for_match(text, shell)},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
 
 
 def _parse_nikto(text: str, ws: Workspace, source: str, facts: list[Fact]) -> None:
