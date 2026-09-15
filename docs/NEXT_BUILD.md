@@ -146,7 +146,7 @@ The fixture suite also caught and fixed an nmap SNMP parser gap for `|_` final
 script lines, which is exactly the kind of regression this corpus is meant to
 surface.
 
-## Current build: Host OS awareness + changelog discipline
+## Shipped: Host OS awareness + changelog discipline
 
 Enumeration now records OS evidence as facts instead of leaving OS as an unused
 target field. Parsers emit `host.os_hint` for clues and `host.os_family` only from
@@ -161,6 +161,21 @@ The repo now has a backfilled `CHANGELOG.md`, `AGENTS.md` directs agents to read
 and update it, and the test suite includes a changelog enforcement check for
 meaningful code/docs changes.
 
+## Current build: Post-foothold privesc packs v1
+
+Linux and Windows privilege-escalation lanes now load as sibling Orange-derived
+packs. A proven foothold unlocks the OS-matched local enumeration card; parsed
+local enum facts (`privesc.sudo_rights`, `privesc.suid_candidate`,
+`privesc.capability`, `privesc.windows_privilege`,
+`privesc.always_install_elevated`, weak service path facts, and related leads)
+unlock the specific abuse cards they justify. The packs stay proof-bound: lead
+facts do not become admin/root/SYSTEM, and privileged access is recorded only when
+command output proves `uid=0`/root or `nt authority\system`.
+
+Privesc facts are first-class findings. They appear in each host's Useful Facts and
+Findings tables, in the engagement Activity roll-up under **Privilege escalation**,
+in reports, and in the path graph's escalation phase.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
@@ -169,11 +184,11 @@ Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:
   shipped, and the first QA fixture corpus is in place. Continue with more real
   fixtures, exploitation-card success signals, privesc/pivot outputs, and
   action-specific parsers for the remaining Orange AD branches.
-- **Pivoting continues (ROADMAP §6 b–f).** §6(a) sessions shipped; next per the
-  interlock note is **item 3 privesc packs** (unlocked by the access fact), then
-  post-foothold host enum (`host.multihomed`) → one-click tunnels + route-aware
-  runner (auto-proxychains for SOCKS, transparent for ligolo) → auto-extend scope →
-  through-tunnel sweep (recursion + health proof) → topology map.
+- **Pivoting continues (ROADMAP §6 c–f).** §6(a) sessions and item 3 privesc packs
+  shipped. Next is post-foothold host/network enum (`host.multihomed`) → one-click
+  tunnels + route-aware runner (auto-proxychains for SOCKS, transparent for ligolo)
+  → auto-extend scope → through-tunnel sweep (recursion + health proof) → topology
+  map.
 - **Engagement profile & flag awareness (ROADMAP §7).** Platform/exam type + per-
   target `machine_type` + proof-bound flag capture. Interlocks with §6 and item 3
   (see the ROADMAP §6 interlock note). Mines Pentest Companion (`docs/SOURCES.md §5`).

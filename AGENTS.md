@@ -134,6 +134,8 @@ obol/
     orange_ad_2025_03.json   nmap prelude + 30 Orange AD actions
     orange_web_2025_03.json  23 Orange web-lane actions (recon parsers live;
                              exploitation cards explain-only)
+    orange_linux_privesc_2025_03.json   12 Linux privesc actions
+    orange_windows_privesc_2025_03.json 10 Windows privesc actions
   playbook.py    named, ordered sequences of pack actions as data; renders a
                  command plan and runs one step through the shared service.run_action
                  (same runner/parser/store), with per-step require_approval gating
@@ -188,6 +190,7 @@ obol/
 scripts/
   import_orange_ad.js   converter: old-obol lanes.js AD lane -> pack JSON
   import_orange_web.js  converter: old-obol lanes.js web lane -> pack JSON
+  import_orange_privesc.js converter: old-obol lanes.js privesc lanes -> pack JSON
 tests/
   test_pack.py      pack loads, proof boundaries, gating, seed unlocks chain
   test_parsers.py   parser proof boundaries; no walkthrough-name hardcoding
@@ -202,12 +205,15 @@ graph.collected, attack_paths, control_paths, trusts, computer_added),
 plaintext, ntlm_hash, certificate, admin), `kerberos.tickets`, `access.*`
 (admin, system, desktop, shell), `foothold.windows`, `foothold.linux`,
 `loot.ntds`, `*.reachable` (ldap/smb/kerberos/winrm/http…), `host.*`
-(up, hostname, fqdn, domain, os_hint, os_family — host identity and OS awareness
-from discovery/enum, host-scoped;
+(up, hostname, fqdn, domain, os_hint, os_family, kernel, arch — host identity,
+OS awareness, and post-foothold local enum, host-scoped;
 they enrich a target's label + domain grouping and the engagement map),
+`privesc.*` (proof-bound local privilege-escalation leads such as sudo rights,
+SUID candidates, dangerous capabilities, Windows privileges, weak service paths;
+lead facts unlock abuse paths but do not prove admin/root/SYSTEM),
 `winrm.authenticated` / `rdp.authenticated` (a validated interactive login — the
 proof behind a §6a session; the shell itself is `foothold.windows`/`foothold.linux`/
-`access.shell`), and `port:NNN`.
+`access.shell`), `persistence.*`, and `port:NNN`.
 (`access.shell` is an OS-agnostic interactive shell — e.g. a reverse shell
 caught by penelope; `foothold.linux` is its Linux counterpart to
 `foothold.windows`, forward-looking for the privesc packs.)
@@ -215,7 +221,7 @@ caught by penelope; `foothold.linux` is its Linux counterpart to
 ## What is BUILT vs STUBBED (read before you build)
 
 **Built & working:** the fact model; the planner (fact-gating, priority ranking,
-blocked-with-reason); the Orange AD pack (30 actions); the terminal board;
+blocked-with-reason); the Orange AD, web, and Linux/Windows privesc packs; the terminal board;
 `explain` (full Orange card — genuinely useful as a live command reference);
 the OSCP markdown report (`obol report`); the live web surface (`obol serve`) —
 overview with findings charts, the phase-column flow chart, run-from-site for
@@ -237,8 +243,8 @@ action's declared `produces`; that was only a scaffold. A port fact is not a win
 `389/tcp open` may unlock LDAP actions, but it does not prove anonymous bind,
 users, credentials, access, or privilege.
 
-**Still missing:** parser coverage across the rest of the Orange AD pack, sibling
-packs (privesc/pivoting/cracking/…), command-composer/preflight controls for the
+**Still missing:** parser coverage across the rest of the Orange AD/web/privesc
+packs, remaining sibling packs (pivoting/cracking/shells/database/…), command-composer/preflight controls for the
 point-and-click web runner, richer target/input management, and Charon-style
 tool-provider/degradation behavior.
 

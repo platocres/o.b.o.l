@@ -26,7 +26,12 @@ DEFAULT_PACK = "orange_ad_2025_03"
 # namespace so cross-domain gating works (e.g. an HTTP port unlocks web actions,
 # a web foothold could unlock a privesc pack). Order is load order only; the
 # planner ranks by each action's priority, not pack order.
-PACK_NAMES = ["orange_ad_2025_03", "orange_web_2025_03"]
+PACK_NAMES = [
+    "orange_ad_2025_03",
+    "orange_web_2025_03",
+    "orange_linux_privesc_2025_03",
+    "orange_windows_privesc_2025_03",
+]
 
 
 @dataclass
@@ -138,6 +143,24 @@ _FRIENDLY = {
     "persistence.domain": "domain persistence", "enum.deep": "deep enumeration",
     "vuln.candidates": "vulnerability candidates", "relay.success": "a successful relay",
     "config.review": "config review", "lateral.movement": "lateral movement",
+    "host.kernel": "host kernel/version", "host.arch": "host architecture",
+    "privesc.leads": "local privilege escalation leads",
+    "privesc.sudo_rights": "sudo rights lead",
+    "privesc.suid_candidate": "SUID/SGID candidate",
+    "privesc.capability": "dangerous Linux capability",
+    "privesc.cron_writable": "writable scheduled task or cron lead",
+    "privesc.process_lead": "process-monitoring privesc lead",
+    "privesc.passwd_writable": "writable /etc/passwd lead",
+    "privesc.nfs_no_root_squash": "NFS no_root_squash lead",
+    "privesc.lxd_group": "LXD group escape lead",
+    "privesc.docker_group": "Docker socket/group escape lead",
+    "privesc.windows_privilege": "dangerous Windows privilege",
+    "privesc.always_install_elevated": "AlwaysInstallElevated lead",
+    "privesc.unquoted_service_path": "unquoted service path lead",
+    "privesc.weak_service_permission": "weak service permission lead",
+    "privesc.stored_credentials": "stored Windows credential lead",
+    "privesc.patch_gap": "missing-patch privesc lead",
+    "persistence.linux": "Linux persistence", "persistence.windows": "Windows persistence",
     "http.reachable": "HTTP is reachable",
     "web.content_map": "a map of discovered web content", "web.vhost": "a discovered virtual host",
     "web.title": "a web page title", "web.server": "a web server header",

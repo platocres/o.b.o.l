@@ -62,7 +62,9 @@ def test_load_packs_merges_ad_and_web_with_unique_ids():
     merged = load_packs()
     ad = load_pack("orange_ad_2025_03")
     web = load_pack("orange_web_2025_03")
-    assert len(merged) == len(ad) + len(web)
+    linux = load_pack("orange_linux_privesc_2025_03")
+    windows = load_pack("orange_windows_privesc_2025_03")
+    assert len(merged) == len(ad) + len(web) + len(linux) + len(windows)
     ids = [a.id for a in merged]
     assert len(ids) == len(set(ids)), "merged packs must have unique action ids"
 

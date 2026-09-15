@@ -160,6 +160,35 @@ _OS_SIGNATURES: dict[str, tuple[re.Pattern, ...]] = {
         re.compile(r"cpe:/o:linux", re.IGNORECASE),
     ),
 }
+_PRIVESC_ACTION_IDS = {
+    "linux-enum", "sudo-abuse", "writable-passwd", "nfs-squash",
+    "lxc-lxd-escape", "docker-socket", "suid-gtfobins", "pspy-monitor",
+    "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
+    "windows-enum", "seimpersonate", "unquoted-service-path",
+    "weak-service-permissions", "alwaysinstallelevated", "dpapi-secrets",
+    "stored-credentials", "wesng-patch-gaps", "windows-persistence",
+    "lsass-dump-onbox",
+}
+_LINUX_PRIVESC_ACTION_IDS = {
+    "linux-enum", "sudo-abuse", "writable-passwd", "nfs-squash",
+    "lxc-lxd-escape", "docker-socket", "suid-gtfobins", "pspy-monitor",
+    "cron-abuse", "capabilities", "linux-loot-hunt", "linux-persistence",
+}
+_WINDOWS_PRIVESC_ACTION_IDS = _PRIVESC_ACTION_IDS - _LINUX_PRIVESC_ACTION_IDS
+_UNAME_RE = re.compile(
+    r"\bLinux\s+(?P<host>\S+)\s+(?P<kernel>[0-9][^\s]+).*?\b(?P<arch>x86_64|i[3-6]86|aarch64|armv\w+)\b",
+    re.IGNORECASE,
+)
+_SUID_PATH_RE = re.compile(r"(?P<path>/[A-Za-z0-9_./+-]+)")
+_CAPABILITY_RE = re.compile(r"^(?P<path>/\S+)\s*=\s*(?P<caps>[^#\r\n]+cap_[^#\r\n]+)$", re.IGNORECASE | re.MULTILINE)
+_PASSWD_MODE_RE = re.compile(r"^(?P<mode>-[rwxstST-]{9})\s+.*\s+(?P<path>/etc/passwd)\b", re.MULTILINE)
+_WIN_PRIV_RE = re.compile(r"^\s*(?P<name>Se[A-Za-z0-9]+Privilege)\s+.+?\s+(?P<state>Enabled|Disabled)\s*$", re.IGNORECASE | re.MULTILINE)
+_SYSTEMINFO_FIELD_RE = re.compile(r"^\s*(?P<key>OS Name|OS Version|System Type):\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_DANGEROUS_WIN_PRIVS = {
+    "seimpersonateprivilege", "seassignprimarytokenprivilege", "sedebugprivilege",
+    "sebackupprivilege", "serestoreprivilege", "setakeownershipprivilege",
+    "seloaddriverprivilege", "semanagevolumeprivilege", "setcbprivilege",
+}
 
 # Post-credential AD path signals.
 _NXC_AUTH_RE = re.compile(r"^\s*(?P<proto>SMB|LDAP|WINRM|RDP|SSH|FTP)\s+\S+\s+\d+\s+\S+\s+\[\+\]\s+(?P<auth>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -543,6 +572,9 @@ def parse_action_output(action: Action, ws: Workspace, command: str, stdout: str
 
     if "penelope" in lowered_command:
         _parse_penelope(text, ws, source, facts)
+
+    if action.id in _PRIVESC_ACTION_IDS:
+        _parse_privesc_output(action.id, text, ws, command, source, facts)
 
     if "certipy" in lowered_command or "pywhisker" in lowered_command:
         _parse_adcs(text, ws, command, source, facts)
@@ -1460,6 +1492,302 @@ def _parse_penelope(text: str, ws: Workspace, source: str, facts: list[Fact]) ->
             promote=True,
         )
         _add(facts, Fact("foothold.linux", f"host:{ws.target}", {"method": "penelope"}, ProofState.SUPPORTED, source))
+
+
+def _add_host_privesc_fact(
+    facts: list[Fact],
+    ws: Workspace,
+    source: str,
+    kind: str,
+    value: dict,
+    lead_kinds: set[str],
+) -> None:
+    _add(facts, Fact(kind, f"host:{ws.target}", value, ProofState.SUPPORTED, source))
+    if kind.startswith("privesc.") and kind != "privesc.leads":
+        lead_kinds.add(kind)
+
+
+def _add_privesc_leads(facts: list[Fact], ws: Workspace, source: str, lead_kinds: set[str]) -> None:
+    if not lead_kinds:
+        return
+    _add(
+        facts,
+        Fact(
+            "privesc.leads",
+            f"host:{ws.target}",
+            {"kinds": sorted(lead_kinds), "count": len(lead_kinds)},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )
+
+
+def _parse_linux_privesc_output(
+    text: str,
+    ws: Workspace,
+    command: str,
+    source: str,
+    facts: list[Fact],
+    lead_kinds: set[str],
+) -> None:
+    lowered = text.lower()
+    lowered_command = command.lower()
+    id_match = _LINUX_ID_RE.search(text)
+    if id_match:
+        user = id_match.group("user").strip()
+        _add_os_observation(
+            facts, ws, source,
+            family="linux",
+            evidence=id_match.group(0),
+            confidence="high",
+            tool="local-enum",
+            promote=True,
+        )
+        id_line = _line_for_match(text, id_match) or id_match.group(0)
+        groups = sorted({match.group(1).lower() for match in re.finditer(r"\d+\(([^)]+)\)", id_line)})
+        if {"lxd", "lxc"} & set(groups):
+            _add_host_privesc_fact(facts, ws, source, "privesc.lxd_group", {"groups": groups, "user": user}, lead_kinds)
+        if "docker" in groups:
+            _add_host_privesc_fact(facts, ws, source, "privesc.docker_group", {"groups": groups, "user": user}, lead_kinds)
+        if id_match.group("uid") == "0" or user.lower() == "root":
+            _add(facts, Fact("access.admin", f"host:{ws.target}", {"identity": user, "method": "local-enum"}, ProofState.SUPPORTED, source))
+    elif "whoami" in lowered_command and re.search(r"(?im)^\s*root\s*$", text):
+        _add(facts, Fact("access.admin", f"host:{ws.target}", {"identity": "root", "method": "whoami"}, ProofState.SUPPORTED, source))
+
+    uname = _UNAME_RE.search(text)
+    if uname:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "host.kernel",
+            {"kernel": uname.group("kernel"), "tool": "uname", "evidence": uname.group(0).strip()[:220]},
+            lead_kinds,
+        )
+        _add_host_privesc_fact(facts, ws, source, "host.arch", {"arch": uname.group("arch"), "tool": "uname"}, lead_kinds)
+
+    sudo_entries = []
+    if "may run the following commands" in lowered or "nopasswd:" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.lower().startswith(("matching defaults", "user ", "sudoers")):
+                continue
+            if "nopasswd:" in line.lower() or re.search(r"\([^)]+\)\s+\S+", line):
+                sudo_entries.append(line[:220])
+    if sudo_entries:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.sudo_rights",
+            {"entries": sorted(set(sudo_entries))[:20], "nopasswd": any("nopasswd" in e.lower() for e in sudo_entries)},
+            lead_kinds,
+        )
+
+    suid_paths: set[str] = set()
+    if "-perm -4000" in lowered_command or "suid" in lowered or "rws" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or "/proc/" in line:
+                continue
+            if line.startswith("/") and " " not in line:
+                suid_paths.add(line)
+                continue
+            if "rws" in line.lower():
+                match = _SUID_PATH_RE.search(line)
+                if match:
+                    suid_paths.add(match.group("path"))
+    if suid_paths:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.suid_candidate",
+            {"paths": sorted(suid_paths)[:40], "count": len(suid_paths)},
+            lead_kinds,
+        )
+
+    caps = []
+    for match in _CAPABILITY_RE.finditer(text):
+        caps.append({"path": match.group("path"), "capabilities": match.group("caps").strip()})
+    if caps:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.capability",
+            {"entries": caps[:40], "count": len(caps)},
+            lead_kinds,
+        )
+
+    passwd = _PASSWD_MODE_RE.search(text)
+    if passwd:
+        mode = passwd.group("mode")
+        group_writable = mode[5] == "w"
+        world_writable = mode[8] == "w"
+        if group_writable or world_writable:
+            _add_host_privesc_fact(
+                facts, ws, source,
+                "privesc.passwd_writable",
+                {"path": "/etc/passwd", "mode": mode, "world_writable": world_writable, "group_writable": group_writable},
+                lead_kinds,
+            )
+
+    if "no_root_squash" in lowered:
+        exports = [line.strip() for line in text.splitlines() if "no_root_squash" in line.lower()]
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.nfs_no_root_squash",
+            {"exports": exports[:20], "count": len(exports) or 1},
+            lead_kinds,
+        )
+
+    cron_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"cron|timer|systemd", line, re.IGNORECASE) and re.search(r"\b(writable|world-writable|rwx|777)\b", line, re.IGNORECASE)
+    ]
+    if cron_lines:
+        _add_host_privesc_fact(facts, ws, source, "privesc.cron_writable", {"evidence": cron_lines[:20]}, lead_kinds)
+
+    process_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"\bUID=0\b|\broot\b.*\bCMD\b|\bCMD:", line, re.IGNORECASE)
+    ]
+    if process_lines and ("pspy" in lowered_command or "uid=0" in lowered or "cmd:" in lowered):
+        _add_host_privesc_fact(facts, ws, source, "privesc.process_lead", {"commands": process_lines[:30]}, lead_kinds)
+
+    if re.search(r"password\s*[=:]\s*\S+|BEGIN OPENSSH|api[_-]?key|secret", text, re.IGNORECASE):
+        _add(
+            facts,
+            Fact("credential.candidate", f"host:{ws.target}", {"kind": "local_file_secret", "evidence": "local loot output"}, ProofState.SUPPORTED, source),
+        )
+
+
+def _parse_windows_privesc_output(
+    text: str,
+    ws: Workspace,
+    command: str,
+    source: str,
+    facts: list[Fact],
+    lead_kinds: set[str],
+) -> None:
+    lowered = text.lower()
+    if _SYSTEM_ID_RE.search(text):
+        _add_os_observation(
+            facts, ws, source,
+            family="windows",
+            evidence="Windows local command output",
+            confidence="high",
+            tool="local-enum",
+            promote=True,
+        )
+        _add(facts, Fact("access.system", f"host:{ws.target}", {"identity": "nt authority\\system", "method": "local-enum"}, ProofState.SUPPORTED, source))
+
+    sysinfo: dict[str, str] = {}
+    for match in _SYSTEMINFO_FIELD_RE.finditer(text):
+        sysinfo[match.group("key").lower()] = match.group("value").strip()
+    if sysinfo:
+        os_name = sysinfo.get("os name", "")
+        os_version = sysinfo.get("os version", "")
+        if os_name or os_version:
+            _add_host_privesc_fact(
+                facts, ws, source,
+                "host.kernel",
+                {"kernel": " ".join(part for part in (os_name, os_version) if part), "tool": "systeminfo"},
+                lead_kinds,
+            )
+            _add_os_observation(
+                facts, ws, source,
+                family="windows",
+                evidence=(os_name or os_version),
+                confidence="high",
+                tool="systeminfo",
+                promote=True,
+            )
+        if sysinfo.get("system type"):
+            _add_host_privesc_fact(facts, ws, source, "host.arch", {"arch": sysinfo["system type"], "tool": "systeminfo"}, lead_kinds)
+
+    privileges = []
+    for match in _WIN_PRIV_RE.finditer(text):
+        name = match.group("name")
+        state = match.group("state").lower()
+        if state == "enabled" and name.lower() in _DANGEROUS_WIN_PRIVS:
+            privileges.append(name)
+    if privileges:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.windows_privilege",
+            {"privileges": sorted(set(privileges)), "state": "Enabled"},
+            lead_kinds,
+        )
+
+    if "alwaysinstallelevated" in lowered and len(re.findall(r"0x1|\b0*1\b", lowered)) >= 2:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.always_install_elevated",
+            {"hklm": True, "hkcu": True},
+            lead_kinds,
+        )
+
+    unquoted = []
+    if ".exe" in lowered:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or ".exe" not in line.lower() or '"' in line:
+                continue
+            if re.search(r"[A-Za-z]:\\Program Files[^,\r\n]+\.exe", line, re.IGNORECASE):
+                unquoted.append(line[:220])
+    if unquoted:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.unquoted_service_path",
+            {"services": sorted(set(unquoted))[:20], "count": len(set(unquoted))},
+            lead_kinds,
+        )
+
+    weak_service = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if re.search(r"SERVICE_CHANGE_CONFIG|\(F\)|\(M\)|BUILTIN\\Users:.*\([FM]\)", line, re.IGNORECASE):
+            weak_service.append(line[:220])
+    if weak_service:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.weak_service_permission",
+            {"evidence": sorted(set(weak_service))[:30]},
+            lead_kinds,
+        )
+
+    stored = []
+    for marker, label in (
+        ("Target:", "cmdkey"),
+        ("DefaultPassword", "autologon"),
+        ("unattend.xml", "unattend"),
+        ("sysprep", "sysprep"),
+        ("confCons.xml", "mRemoteNG"),
+        (".rdp", "rdp_file"),
+    ):
+        if marker.lower() in lowered:
+            stored.append(label)
+    if stored:
+        _add_host_privesc_fact(
+            facts, ws, source,
+            "privesc.stored_credentials",
+            {"kinds": sorted(set(stored)), "count": len(set(stored))},
+            lead_kinds,
+        )
+        _add(facts, Fact("credential.candidate", f"host:{ws.target}", {"kind": "stored_windows_credentials"}, ProofState.SUPPORTED, source))
+
+    patch_lines = [
+        line.strip() for line in text.splitlines()
+        if re.search(r"\bMS\d{2}-\d{3}\b|CVE-\d{4}-\d+|missing patches?|exploit", line, re.IGNORECASE)
+    ]
+    if patch_lines and ("wesng" in command.lower() or "windows-exploit-suggester" in command.lower() or "missing" in lowered):
+        _add_host_privesc_fact(facts, ws, source, "privesc.patch_gap", {"evidence": patch_lines[:30]}, lead_kinds)
+        _add(facts, Fact("exploit.candidate", f"host:{ws.target}", {"tool": "windows-exploit-suggester", "findings": patch_lines[:30]}, ProofState.SUPPORTED, source))
+
+
+def _parse_privesc_output(action_id: str, text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    if not text.strip():
+        return
+    lead_kinds: set[str] = set()
+    if action_id in _LINUX_PRIVESC_ACTION_IDS:
+        _parse_linux_privesc_output(text, ws, command, source, facts, lead_kinds)
+    if action_id in _WINDOWS_PRIVESC_ACTION_IDS:
+        _parse_windows_privesc_output(text, ws, command, source, facts, lead_kinds)
+    _add_privesc_leads(facts, ws, source, lead_kinds)
 
 
 def _parse_adcs(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:

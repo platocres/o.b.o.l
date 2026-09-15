@@ -40,6 +40,9 @@ _ACCESS_LADDER: list[tuple[str, tuple[str, ...]]] = [
                           "credential.ntlm_hash")),
     ("Foothold", ("foothold.windows", "foothold.linux", "access.shell",
                   "winrm.authenticated", "foothold.webshell")),
+    ("Privesc leads", ("privesc.leads", "privesc.sudo_rights",
+                       "privesc.windows_privilege", "privesc.suid_candidate",
+                       "privesc.capability")),
     ("Privileged access", ("access.admin", "access.system")),
     ("Domain / loot", ("loot.ntds", "hash.krbtgt", "persistence.domain")),
 ]
@@ -79,9 +82,10 @@ _CATEGORY_ORDER = {
     "ad": 3,
     "credential": 4,
     "access": 5,
-    "loot": 6,
-    "config": 7,
-    "web": 8,
+    "privesc": 6,
+    "loot": 7,
+    "config": 8,
+    "web": 9,
     "other": 99,
 }
 
@@ -109,6 +113,8 @@ def _fact_category(kind: str) -> str:
         return "credential"
     if kind.startswith(("access.", "foothold.")):
         return "access"
+    if kind.startswith("privesc."):
+        return "privesc"
     if kind.startswith("loot."):
         return "loot"
     if kind.startswith(("config.", "vuln.", "exploit.")):

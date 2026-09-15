@@ -41,3 +41,27 @@ Regenerate with:
 ```bash
 node scripts/import_orange_web.js /path/to/obol/data/lanes.js > obol/packs/orange_web_2025_03.json
 ```
+
+## orange_linux_privesc_2025_03.json and orange_windows_privesc_2025_03.json
+
+The Linux and Windows privilege-escalation action packs are derived from the
+**Orange Cyberdefense `ocd-mindmaps` privilege escalation methodology, 2025.03**,
+via the prior obol project's normalized methodology data (the same source and
+pinned upstream commit as the AD and Web packs above). They are likewise GPL-3.0
+methodology data, kept as **distinct, attributed components** separate from obol's
+core; load them as data, do not fold their contents into differently-licensed core
+code.
+
+The converter remaps old lane facts onto obol's shared namespace (`access.root` →
+`access.admin`, `persist.*` → `persistence.*`) and intentionally gates exploit
+cards behind proof-bound `privesc.*` lead facts. A foothold unlocks local enum;
+local enum output unlocks specific abuse paths; admin/root/SYSTEM is still only
+recorded when command output proves it. See `scripts/import_orange_privesc.js` for
+the documented mapping.
+
+Regenerate with:
+
+```bash
+node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js linux-privesc > obol/packs/orange_linux_privesc_2025_03.json
+node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js windows-privesc > obol/packs/orange_windows_privesc_2025_03.json
+```

@@ -19,7 +19,7 @@ const PHASE_COLOR = { recon: "#38BDF8", enum: "#818CF8", creds: "#F59E0B",
   access: "#34D399", escalate: "#F472B6", loot: "#A855F7" };
 const SEV_COLOR = { critical: "#E11D48", high: "#F97316", medium: "#EAB308", low: "#3B82F6", info: "#6B7591" };
 const CAT_COLOR = { target: "#38BDF8", scan: "#818CF8", service: "#22D3EE", ad: "#F472B6",
-  credential: "#F59E0B", access: "#34D399", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
+  credential: "#F59E0B", access: "#34D399", privesc: "#FB7185", loot: "#A855F7", config: "#94A3B8", web: "#14B8A6", other: "#6B7591" };
 const ACCESS = {
   discovered: { c: "#6B7591", t: "Discovered" }, enumerated: { c: "#3B82F6", t: "Enumerated" },
   credentialed: { c: "#EAB308", t: "Credentialed" }, foothold: { c: "#14B8A6", t: "Foothold" },

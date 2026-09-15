@@ -166,15 +166,23 @@ Export the remaining prior-obol lanes into packs using the AD converter as the
 template (`docs/SOURCES.md` §2). Order by OSCP value: `web` (23) and
 `linux-privesc`/`windows-privesc` next, since OSCP is not AD-only. Each pack must
 reuse the shared fact-kind namespace so cross-domain gating works (e.g. a web
-foothold producing `linux.shell` unlocks the privesc pack).
+foothold producing `foothold.linux` unlocks the privesc pack).
 
 - **`web` (23) — DONE.** `obol/packs/orange_web_2025_03.json` via
   `scripts/import_orange_web.js`; the planner merges packs (`pack.load_packs`), so
   an HTTP port unlocks web recon after the nmap spine. Fact kinds are remapped onto
   the shared namespace and kept to their narrowest claim. Recon parsers
   (content discovery, vhosts, nikto) landed; the exploitation cards remain
-  explain-only until their success-signal parsers exist. Next lanes:
-  `linux-privesc` / `windows-privesc`.
+  explain-only until their success-signal parsers exist.
+- **`linux-privesc` (12) and `windows-privesc` (10) — DONE.**
+  `obol/packs/orange_linux_privesc_2025_03.json` and
+  `obol/packs/orange_windows_privesc_2025_03.json` via
+  `scripts/import_orange_privesc.js`. A proven foothold unlocks OS-matched local
+  enum; parsed `privesc.*` lead facts unlock the specific abuse cards they justify;
+  admin/root/SYSTEM is recorded only from proof output. Privesc findings surface on
+  host pages, engagement Activity, reports, and the escalation phase of the graph.
+  Next pack lanes: `pivoting`, `cracking`, `shells`, `database`, and the remaining
+  support lanes.
 
 ## 4. OSCP report generation
 
@@ -283,9 +291,10 @@ The build sequence (each a reviewable PR):
   reverse-shell **listeners** (an async start-and-watch flow, not a credentialed
   login), tmux/new-terminal auto-spawn (v1 is guided handoff), and the automatic
   periodic probe loop (the manual `probe` exists).
-- **(b) Unlocks the privesc pack.** The `access.*`/`foothold.*` fact from (a) gates
+- **(b) Unlocks the privesc pack — DONE.** The `access.*`/`foothold.*` fact from (a) gates
   the `linux-privesc`/`windows-privesc` sibling packs (item 3) for that host —
-  login and privesc are two halves of one milestone.
+  login and privesc are two halves of one milestone. The first privesc build also
+  added proof-bound `privesc.*` lead parsers and host/engagement visibility.
 - **(c) Post-foothold host enum.** Once on the box, enumerate it (NICs, routes, ARP)
   through a non-interactive exec channel where creds allow, else guided-paste. A
   second interface records `host.multihomed` + the reachable subnet as a lead,

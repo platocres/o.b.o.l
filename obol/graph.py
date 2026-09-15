@@ -47,6 +47,7 @@ _PHASE_RULES: list[tuple[str, str]] = [
     ("ad.graph.collected", "escalate"), ("ad.attack_paths", "escalate"),
     ("ad.control_paths", "escalate"), ("ad.trusts", "escalate"),
     ("ad.computer_added", "escalate"), ("adcs.", "escalate"),
+    ("privesc.", "escalate"),
     ("relay.success", "escalate"), ("lateral.movement", "escalate"),
     ("vuln.", "escalate"), ("exploit.candidate", "escalate"),
     ("web.lfi_confirmed", "escalate"), ("web.sqli_confirmed", "escalate"),

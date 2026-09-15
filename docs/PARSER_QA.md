@@ -33,6 +33,9 @@ Every parser must follow these rules:
   such as `uid=` / `id` proves command execution.
 - Do not turn service discovery into vulnerability claims. Open ports and service
   versions unlock next moves; they do not prove exploitation.
+- Do not turn local privilege-escalation leads into privilege. `privesc.*` facts
+  may unlock specific abuse paths, but admin/root/SYSTEM facts require explicit
+  proof output such as `uid=0` or `nt authority\system`.
 - Add negative fixtures for failure, timeout, and misleading-output cases.
 
 ## Fixture Corpus
@@ -86,6 +89,7 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 | `ssh_id_proves_linux_shell` | SSH command execution showing `uid=` | shell, Linux foothold, Linux OS family/hints | admin unless uid is root |
 | `snmp_timeout_no_facts` | SNMP timeout | no facts | all claims |
 | `ftp_named_login_not_anonymous` | FTP successful named login transcript | FTP reachability and banner | anonymous FTP or credential availability |
+| privesc parser tests | Linux/Windows post-foothold enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/root/SYSTEM unless proof output shows it |
 
 ## What This Proves
 

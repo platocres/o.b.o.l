@@ -7,6 +7,16 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added Orange-derived Linux and Windows privilege-escalation packs generated from
+  the prior obol methodology lanes, with OS/foothold gates and lead-specific abuse
+  paths.
+- Added post-foothold privesc parsers for proof-bound local enum facts, including
+  sudo rights, SUID/SGID candidates, Linux capabilities, writable `/etc/passwd`,
+  NFS `no_root_squash`, LXD/Docker group leads, dangerous Windows privileges,
+  AlwaysInstallElevated, unquoted service paths, weak service permissions, stored
+  credential leads, host kernel/version, and host architecture.
+- Added first-class privesc visibility in host Useful Facts, host Findings,
+  engagement Activity, reports, charts, and the escalation phase of the path graph.
 - Added evidence-backed host OS awareness with `host.os_hint` and `host.os_family`
   facts from nmap, NetExec, SNMP, WinRM/RDP/SSH proof output, Penelope shell
   output, and selected service banners.
@@ -20,6 +30,8 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Changed
 
+- Local privilege escalation leads now unlock their matching abuse cards without
+  claiming admin/root/SYSTEM unless command output explicitly proves it.
 - Parser fixture expectations now include OS facts where the existing transcripts
   already contain strong OS evidence.
 
