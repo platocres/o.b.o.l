@@ -347,6 +347,11 @@ def _render_targets(ws: Workspace, *, include_secrets: bool) -> list[str]:
         lines.append(f"### {t.get('label') or host} (`{host}`)")
         lines.append("")
         lines.append(f"- Access: {target_access_level(tf)} · phase: {target_phase(tf)}")
+        from .objectives import progress as _obj_progress
+        op = _obj_progress(ws, host)
+        rungs = " · ".join(("✓ " if r["reached"] else "◻ ") + r["label"] for r in op["rungs"])
+        lines.append(f"- Objectives ({op['reached']}/{op['total']}"
+                     + (" — COMPLETE" if op["complete"] else "") + f"): {rungs}")
         if t.get("os"):
             lines.append(f"- OS family: {t['os']}")
         ports = _target_open_ports([f for f in tf.facts if f.scope == f'host:{host}'])
@@ -491,6 +496,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
     report and `obol report` never disagree. Secrets are redacted unless asked.
     """
     from .ingest import fact_origin
+    from .objectives import progress as _obj_progress
     facts = ws.facts
     domain = facts.values("ad.domain_known")
     if facts.has("access.system"):
@@ -573,6 +579,7 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
             "notes": t.get("notes", ""),
             "access": target_access_level(tf),
             "phase": target_phase(tf),
+            "objectives": _obj_progress(ws, host),
             "open_ports": _target_open_ports(tfacts),
             "flags": flags,
             "pivots": pivot_summary(ws, host),
@@ -581,7 +588,6 @@ def build_report_context(ws: Workspace, *, include_secrets: bool = False,
                 "value": _redact_value(f.value, include_secrets=include_secrets),
                 "evidence": _source_for(f, include_secrets=include_secrets),
                 "origin": fact_origin(f),
-            "origin": fact_origin(f),
             } for f in sorted(tfacts, key=_fact_sort_key)],
             "evidence": [_evidence_view(e) for e in ws.evidence_for(host)],
         })

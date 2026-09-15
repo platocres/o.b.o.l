@@ -7,6 +7,22 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **per-target objective ladder** (`obol/objectives.py`, ROADMAP §7 promoted):
+  initial access → privilege escalation → local flag → root flag, each rung reached
+  **only by a proving fact** (a foothold, `access.admin`/`access.system`, or an
+  `objective.*` flag capture — profile-aware about local vs root via `flags.py`) and
+  carrying its evidence lineage. A projection over facts, not new state. It feeds the two
+  consumers it was promoted for: **`obol cruise`'s goal function** — cruise now stops with
+  `objective-complete` once the root objective is captured (an operator-attested root flag
+  counts too, closing the resumable-handoff loop) instead of wandering past the win — and
+  the **report** (a per-target Objectives line in the markdown, an `objectives` block in
+  the report context, and the ladder shown in the cruise pause briefing). Terminal `obol
+  objectives [host]` and web `GET /api/objectives`. Locked by `tests/test_objectives.py`
+  (rungs reached only by facts, root-flag completion, single-flag-plus-privilege, the
+  cruise objective-complete stop, operator-asserted completion, and the report carrying
+  it). Still open: the §14 per-rung OSCP *proof requirement* (flag shown with host
+  identity in one capture, screenshot attach/validate) riding on top of this ladder.
+
 - Operator-sourced facts are now **visibly distinguished** everywhere they surface,
   closing the pillar III honesty loop end to end. A shared classifier
   (`ingest.fact_origin`) reads a fact's lineage from its `source` prefix —

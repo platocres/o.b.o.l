@@ -77,8 +77,13 @@ def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
         result.message = "no active target to cruise — add one or pass a host"
         return result
 
+    from . import objectives
     attempted: set[str] = set()
     for _ in range(max_steps):
+        if objectives.is_complete(ws, host):
+            result.stop_reason = "objective-complete"
+            result.message = "root objective captured — the engagement goal is met for this target"
+            break
         frontier = moves_layer.frontier_moves(ws, host)
         candidate = next((m for m in frontier if m.id not in attempted), None)
         if candidate is None:
@@ -158,7 +163,9 @@ def build_briefing(ws, result: CruiseResult) -> dict:
             if len(options) >= 5:
                 break
 
+    from . import objectives
     return {"target": host, "position": position,
+            "objectives": objectives.progress(ws, host) if host else {},
             "recap": {"ran": result.ran_ok, "learned": learned, "blocked": blocked, "install": install},
             "checkpoint": checkpoint, "options": options,
             "stop_reason": result.stop_reason, "message": result.message}

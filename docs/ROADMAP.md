@@ -562,13 +562,17 @@ For obol:
   shell / guided-paste channel (today it uses the SSH/WinRM proof channel), and the
   full per-target objective ladder (initial access → privesc → local → root) as a
   progress meter.
-- **The objective ladder is load-bearing (promoted).** The per-target ladder (initial
-  access → privesc → local → root, each with the proof requirement §14 attaches) is now
-  read by two consumers, so build it as the shared spine those two read — not as a
-  progress bar alone: it is **cruise control's goal function** (drive until root + proof;
-  spine pillar II's objective-complete checkpoint) and the **report's proof checklist**
-  (§14's pre-submission validator). Each rung carries its milestone fact and, in a
-  proof-gated profile, whether its OSCP-compliant proof exists.
+- **The objective ladder is load-bearing (promoted) — LANDED.** `obol/objectives.py` —
+  the per-target ladder (initial access → privesc → local → root), each rung reached only
+  by a proving fact (foothold / `access.*` / `objective.*`, profile-aware via `flags.py`)
+  and carrying its evidence lineage. Read by the two consumers it was promoted for:
+  **cruise control's goal function** (`cruise` now stops `objective-complete` at the root
+  objective instead of wandering past the win) and the **report** (a per-target Objectives
+  line in the markdown + `objectives` in the report context, and the cruise briefing shows
+  the ladder). `obol objectives [host]` and `GET /api/objectives`. A projection over facts,
+  not new state. **Still open:** the OSCP *proof requirement* per rung — a captured flag
+  shown with host identity in one capture, and screenshot attach/validate — which is §14
+  riding on top of this ladder.
 
 Keep obol's line: single-operator, local, terminal-first; reject Pentest Companion's
 teams/auth/SaaS direction (`docs/SOURCES.md §5`).

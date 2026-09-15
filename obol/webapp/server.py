@@ -1569,6 +1569,14 @@ def create_app(base, *, token: Optional[str] = None):
             h = host or ws.target or ""
             return cruise_layer.cruise(ws, h, max_steps=max_steps, surface="web").to_dict()
 
+    @app.get("/api/objectives")
+    def api_objectives(host: str = Query("")):
+        """The per-target objective ladder (§7) — initial access → privesc → local → root."""
+        from .. import objectives
+        ws = active()
+        h = host or ws.target or ""
+        return objectives.progress(ws, h) if h else {"host": "", "rungs": [], "total": 0}
+
     @app.post("/api/ingest")
     def api_ingest(payload: dict = Body(...)):
         """Paste-and-parse (pillar III): parse operator-supplied tool output into facts
