@@ -1567,6 +1567,41 @@ def create_app(base, *, token: Optional[str] = None):
             h = host or ws.target or ""
             return cruise_layer.cruise(ws, h, max_steps=max_steps, surface="web").to_dict()
 
+    @app.post("/api/ingest")
+    def api_ingest(payload: dict = Body(...)):
+        """Paste-and-parse (pillar III): parse operator-supplied tool output into facts
+        with operator lineage — the way back into cruise after doing something by hand."""
+        from .. import ingest as ingest_layer
+        text = (payload or {}).get("text", "")
+        if not (text or "").strip():
+            raise HTTPException(422, "no output text to ingest")
+        with _RUN_LOCK:
+            ws = active()
+            return ingest_layer.ingest_output(
+                ws, text, action_id=(payload or {}).get("action", ""),
+                target=(payload or {}).get("target", ""),
+                note=(payload or {}).get("note", ""), surface="web")
+
+    @app.post("/api/assert")
+    def api_assert(payload: dict = Body(...)):
+        """Operator-attested fact (pillar III escape hatch): record a fact directly,
+        stamped operator-attested so its lineage stays honest."""
+        from .. import ingest as ingest_layer
+        kind = (payload or {}).get("kind", "")
+        if not kind:
+            raise HTTPException(422, "a fact kind is required")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return ingest_layer.assert_fact(
+                    ws, kind, value=(payload or {}).get("value", {}) or {},
+                    scope=(payload or {}).get("scope", ""),
+                    target=(payload or {}).get("target", ""),
+                    note=(payload or {}).get("note", ""),
+                    state=(payload or {}).get("state", "supported"), surface="web")
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
+
     # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
     @app.get("/api/exploits")
     def api_exploits(host: str = Query(...)):

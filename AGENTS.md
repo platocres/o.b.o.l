@@ -264,15 +264,27 @@ obol/
                  (a privesc exploit — craft, never fire). Data-driven (an explicit pack
                  `autonomy` overrides the phase/quickstart derivation), conservative by
                  default; dispatch.run_move enforces it as the approval gate
-  cruise.py      obol cruise — supervised cruise control (pillar II): the loop over
-                 moves.frontier_moves + dispatch.run_move + autonomy. Runs the
-                 highest-ranked un-attempted AUTO move, re-ranks, repeats, and STOPS at
-                 the first approve/manual move (a checkpoint it hands back, never fires) or
+  cruise.py      obol cruise — supervised cruise control (pillar II) + the pause
+                 briefing. The loop over moves.frontier_moves + dispatch.run_move +
+                 autonomy: runs the highest-ranked un-attempted AUTO move, re-ranks,
+                 repeats, and STOPS at the first approve/manual move (never fires it) or
                  when nothing safe remains. Each move runs at most once (always
-                 terminates); a failed move is recorded and skipped, not fatal. Not a new
-                 engine — only orders calls to the primitives. `obol cruise [host]`
+                 terminates); a failed move is recorded and skipped, not fatal. On every
+                 stop it builds a rich BRIEFING (build_briefing): where-you-are, a recap
+                 (learned facts + tools to install), and the full checkpoint — a PURE
+                 command preview, the facts that triggered it, the ask (approve/manual/
+                 input), the risk, the resume path, and the other moves waiting. Not a new
+                 engine. `obol cruise [host]`
+  ingest.py      external-action ingestion (pillar III): the way back into cruise after
+                 the operator does something by hand. ingest_output() paste-and-parses
+                 operator-supplied tool output through the SAME parser pipeline (proof-
+                 bound, stamped operator: lineage, run flagged external); assert_fact()
+                 records an operator-attested fact directly (stamped operator-attested:)
+                 as the marked escape hatch. Invents no parser/fact kind. `obol ingest`,
+                 `obol assert`
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / moves / do / cruise / next / explain / run / playbook(s) / sweep / login /
+                 overview / moves / do / cruise / ingest / assert / next / explain / run /
+                 playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used

@@ -326,12 +326,92 @@ def cmd_cruise(args) -> None:
     res = cruise_layer.cruise(ws, host, max_steps=args.max_steps, on_step=on_step)
     if not res.ran:
         print("  (no auto moves to run)")
-    print()
+    _print_briefing(res)
+
+
+def _print_briefing(res) -> None:
+    b = res.briefing or {}
+    pos = b.get("position", {})
+    recap = b.get("recap", {})
+    cp = b.get("checkpoint")
     lead = {"checkpoint": "stopped at a checkpoint", "done": "cruise complete",
             "blocked": "stopped", "max-steps": "paused", "no-target": "stopped"}.get(
         res.stop_reason, "stopped")
-    print(f"{lead}: {res.message}")
-    print(f"ran {res.ran_ok} move(s).\n")
+    print(f"\n== cruise briefing ==")
+    if pos:
+        acc = ", ".join(pos.get("access") or []) or "no foothold yet"
+        print(f"  where: phase {pos.get('phase','?')} · frontier {pos.get('frontier','?')} · access: {acc}")
+    if recap.get("learned"):
+        print(f"  learned: {', '.join(recap['learned'])}")
+    if recap.get("install"):
+        print(f"  blocked on missing tools: {', '.join(recap['install'])} "
+              f"(install, then `obol cruise` for more)")
+    print(f"\n{lead}: {res.message}")
+    if cp:
+        print(f"\n  checkpoint [{cp.get('ask','')}]: {cp.get('label','')}")
+        if cp.get("why"):
+            print(f"    why:  {cp['why']}")
+        if cp.get("command"):
+            print(f"    cmd:  {cp['command']}")
+        if cp.get("risk"):
+            print(f"    risk: {cp['risk']}")
+        for line in cp.get("resume", []):
+            print(f"    {line}")
+    opts = [o for o in b.get("options", []) if not cp or o["id"] != cp.get("id")]
+    if opts:
+        print(f"\n  other moves waiting:")
+        for o in opts:
+            gate = "" if o["autonomy"] == "auto" else f" · {o['autonomy']}"
+            miss = "" if o["ready"] else f" — {o['reason']}"
+            print(f"    - {o['label']} [{o['kind']}{gate}]{miss}")
+    print(f"\n  ran {res.ran_ok} move(s).\n")
+
+
+def cmd_ingest(args) -> None:
+    from . import ingest
+    ws = _load_or_exit()
+    text = ""
+    if args.file:
+        try:
+            text = Path(args.file).read_text()
+        except OSError as exc:
+            print(f"cannot read {args.file!r}: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        text = sys.stdin.read()
+    if not text.strip():
+        print("no output to ingest (pass --file or pipe output on stdin).", file=sys.stderr)
+        raise SystemExit(1)
+    res = ingest.ingest_output(ws, text, action_id=args.action, target=args.target, note=args.note)
+    if res["added"]:
+        print(f"ingested — recorded {len(res['added'])} operator-sourced fact(s): "
+              f"{', '.join(res['added'])}")
+    else:
+        print(f"ingested {res['parsed']} parse hit(s), no new facts "
+              "(nothing the output shape proves, or already known).")
+    print("run `obol cruise` to continue.")
+
+
+def cmd_assert(args) -> None:
+    from . import ingest
+    ws = _load_or_exit()
+    value = {}
+    for pair in args.set or []:
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            value[k.strip()] = v.strip()
+    try:
+        res = ingest.assert_fact(ws, args.kind, value=value, scope=args.scope,
+                                 target=args.target, note=args.note, state=args.state)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
+    where = res["scope"] or "(engagement)"
+    if res["added"]:
+        print(f"asserted (operator-attested): {res['kind']} on {where} [{res['state']}].")
+    else:
+        print(f"already recorded: {res['kind']} on {where}.")
+    print("run `obol cruise` to continue.")
 
 
 def cmd_explain(args) -> None:
@@ -1444,6 +1524,24 @@ try:
     pc.add_argument("host", nargs="?", default="", help="target host (default: active target)")
     pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per run")
     pc.set_defaults(func=cmd_cruise)
+
+    pi = sub.add_parser("ingest", help="parse output from a command you ran yourself into "
+                                       "facts (paste on stdin or --file) — the way back into cruise")
+    pi.add_argument("--action", default="", help="scope action-specific parsers (e.g. linux-enum)")
+    pi.add_argument("--target", default="", help="host the output is about (default: active target)")
+    pi.add_argument("--note", default="", help="what you ran (recorded as the run's lineage)")
+    pi.add_argument("--file", default="", help="read the output from a file instead of stdin")
+    pi.set_defaults(func=cmd_ingest)
+
+    pa = sub.add_parser("assert", help="record an operator-attested fact directly (the escape "
+                                       "hatch when there is no parseable output)")
+    pa.add_argument("kind", help="fact kind, e.g. access.shell, foothold.linux, credential.available")
+    pa.add_argument("--target", default="", help="host the fact is about (default: active target)")
+    pa.add_argument("--scope", default="", help="explicit scope (e.g. domain:htb.local); default host:<target>")
+    pa.add_argument("--set", action="append", metavar="k=v", help="value field(s) for the fact")
+    pa.add_argument("--note", default="", help="how you proved it (recorded as lineage)")
+    pa.add_argument("--state", default="supported", choices=["supported", "refuted", "inconclusive"])
+    pa.set_defaults(func=cmd_assert)
 
     pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)

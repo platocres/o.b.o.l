@@ -7,6 +7,36 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **cruise pause briefing** and **external-action ingestion** — the checkpoint
+  UX and cruise-control **pillar III (resumable handoff)**, folded into one build so the
+  pause and the way back in land together.
+  - **Pause briefing** (`cruise.build_briefing`): every `obol cruise` stop now returns a
+    rich briefing so the operator can decide what to do without reassembling context —
+    **where you are** (phase / frontier / access), a **recap** (facts learned this run,
+    and the specific tools to install to unblock more), and the **full checkpoint**: a
+    *pure* command preview (it renders, never runs — reusing `build_command` /
+    `sessions.build_login_command` / `tunnels.build_setup_command` / `exploits.plan_exploit`),
+    the facts that **triggered** it, the **ask** (`approve` / `manual` / `input`), the
+    **risk** (cleanup / scope note), the **resume** path, and the **other moves waiting**.
+    Rendered in the terminal and returned by `POST /api/cruise`.
+  - **Paste-and-parse** (`ingest.ingest_output`, `obol ingest`, `POST /api/ingest`): parse
+    output from a command the operator ran themselves through obol's **same** parser
+    pipeline (`parse_action_output` + local-enum + flags), so it earns the same proof-bound
+    facts — stamped `operator:` lineage and recorded as an `external` ledger run, keeping
+    the OSCP report complete across manual detours. Proof-bound: ambiguous prose proves
+    nothing.
+  - **Operator-attested assertion** (`ingest.assert_fact`, `obol assert`, `POST /api/assert`):
+    the marked escape hatch when there is no parseable output — records a fact directly,
+    stamped `operator-attested:` so its lineage stays honest and it is never mistaken for
+    something obol proved. Honors an explicit scope and `ProofState`.
+  This closes the cruise loop: obol drives the safe work, stops with a full briefing at
+  each checkpoint, and the operator gets past what obol can't drive and re-enters from
+  facts — "the operator did something outside obol" becomes "new facts arrived," and
+  `obol cruise` continues. Locked by `tests/test_ingest.py` (parse-with-operator-lineage,
+  proof-bound no-invention, the external ledger run, and marked/scoped/stated assertions)
+  and briefing cases in `tests/test_cruise.py` (a pure login-command preview that never
+  logs in, and the install-tools recap).
+
 - Added **`obol cruise`** (`obol/cruise.py`) — supervised cruise control, **ROADMAP
   cruise-control pillar II**, the loop the whole spine was built for. `cruise(ws, host)`
   drives a target move by move: it runs the highest-ranked un-attempted **`auto`** move
