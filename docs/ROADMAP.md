@@ -74,10 +74,17 @@ pillars:
   remains (`done`), or at a step cap. Each move runs at most once (always terminates); a
   failed move (a missing tool) is recorded and skipped, not fatal — the operator fixes it
   or does it by hand and re-runs cruise (the resumable-handoff rhythm). `obol cruise
-  [host] [--max-steps N]` and `POST /api/cruise`. **Still open:** a per-step live web view
-  (it runs synchronously today, like a background job would — §9), objective-complete
-  detection (§7 ladder) as an explicit stop, and the approve-a-checkpoint-and-continue
-  flow (today: handle the checkpoint with `obol do`, then `obol cruise` again).
+  [host] [--max-steps N]` and `POST /api/cruise`.
+  The **pause briefing** then landed (`cruise.build_briefing`): every stop returns
+  where-you-are (phase/frontier/access), a recap (facts learned this run + the tools to
+  install to unblock more), and the full **checkpoint** — a *pure* command preview (it
+  renders, never runs), the facts that triggered it, the ask (`approve`/`manual`/`input`),
+  the risk (cleanup/scope), the resume path, and the other moves waiting — so the operator
+  can decide what to do without reassembling context by hand.
+  **Still open:** a per-step live web view (it runs synchronously today, like a background
+  job would — §9), objective-complete detection (§7 ladder) as an explicit stop, and an
+  approve-a-checkpoint-and-continue flow (today: handle the checkpoint, then `obol cruise`
+  again).
 - **(III) Resumable handoff + external-action ingestion (the anti-brittleness pillar).**
   The seam Charon lacked. When cruise stops stuck, the operator acts outside obol and
   re-enters from facts:
@@ -93,6 +100,13 @@ pillars:
     `ProofState`; honest lineage. The last resort, not the encouraged path.
   - Because facts are the one interface and the planner runs off facts, external work is
     just "new facts arrived": the frontier re-ranks and cruise resumes.
+  - **Landed:** `obol/ingest.py` — `ingest_output` (paste-and-parse through the same
+    parser pipeline, stamped `operator:` lineage, run flagged `external`) and `assert_fact`
+    (operator-attested, stamped `operator-attested:`). `obol ingest` / `obol assert` and
+    `POST /api/ingest` / `POST /api/assert`. The cruise pause briefing points the operator
+    straight at these for a manual/blocked checkpoint. **Still open:** visibly distinguish
+    operator-sourced facts in the report/UI (the lineage is recorded; the report rendering
+    of it is the follow-up), and a foothold-channel ingest helper.
 
 Non-negotiables (on top of the global ones): every cruise move is one real, inspectable,
 scope-gated, proof-bound command that writes the one store; cruise never fires a
