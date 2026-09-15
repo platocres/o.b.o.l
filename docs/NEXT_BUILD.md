@@ -146,6 +146,21 @@ The fixture suite also caught and fixed an nmap SNMP parser gap for `|_` final
 script lines, which is exactly the kind of regression this corpus is meant to
 surface.
 
+## Current build: Host OS awareness + changelog discipline
+
+Enumeration now records OS evidence as facts instead of leaving OS as an unused
+target field. Parsers emit `host.os_hint` for clues and `host.os_family` only from
+strong, non-conflicting evidence, such as nmap/NetExec OS strings, SNMP
+descriptions, WinRM/RDP/SSH proof output, or Penelope shell metadata. Unknown OS
+stays permissive; once a target is proven Linux or Windows, wrong-platform actions
+are filtered out of next moves and tool palettes. The OS family is shown in terminal
+overview, web target cards, target overview, engagement map subtitles, Useful
+facts, and reports.
+
+The repo now has a backfilled `CHANGELOG.md`, `AGENTS.md` directs agents to read
+and update it, and the test suite includes a changelog enforcement check for
+meaningful code/docs changes.
+
 ## Queued next (designed, not yet built)
 
 Captured in `docs/ROADMAP.md` so agents don't have to rediscover them:

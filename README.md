@@ -154,12 +154,19 @@ so cross-domain gating works.
 Parser coverage now reaches the common early-service metadata operators need for
 next-move selection: nmap/NetExec/curl/whatweb/SNMP/FTP/SSH output can land narrow
 facts for SSH, FTP, RDP, DNS, SNMP, HTTP metadata, service authentication, banners,
-host keys, anonymous FTP, and web technology fingerprints. The terminal also has
-`obol findings`, an engagement-wide roll-up matching the web Activity findings view:
-category-grouped, host/domain-tagged findings with evidence source lines.
+host keys, anonymous FTP, web technology fingerprints, and evidence-backed host OS
+hints/families (`host.os_hint`, `host.os_family`). Unknown OS stays permissive, but
+once a target is proven Linux or Windows, wrong-platform actions are hidden from
+next moves and tool palettes. The terminal also has `obol findings`, an
+engagement-wide roll-up matching the web Activity findings view: category-grouped,
+host/domain-tagged findings with evidence source lines.
 Parser behavior is now fixture-backed by `tests/fixtures/parser/` and documented in
 [`docs/PARSER_QA.md`](docs/PARSER_QA.md), including the rule-writing contract,
 coverage matrix, and anti-overclaim test expectations.
+
+Project history lives in [`CHANGELOG.md`](CHANGELOG.md). Agents are directed from
+[`AGENTS.md`](AGENTS.md) to read it before building and update it for every
+meaningful release; the test suite includes a changelog enforcement check.
 
 **Playbooks** bundle a flow into one deliberate move: a playbook is a named,
 ordered list of pack actions stored as data. `obol playbook ad-recon` (or

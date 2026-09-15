@@ -56,6 +56,8 @@ class Action:
         return bool(pk) and pk.issubset(facts.kinds())
 
     def eligible(self, facts: FactSet) -> bool:
+        if not os_compatible(facts, self.os):
+            return False
         if not all(facts.has(k) for k in self.requires_all):
             return False
         if self.requires_any and not any(facts.has(k) for k in self.requires_any):
@@ -63,6 +65,9 @@ class Action:
         return True
 
     def unmet(self, facts: FactSet) -> str:
+        if not os_compatible(facts, self.os):
+            family = host_os_family(facts) or "another OS"
+            return f"blocked because target looks like {family}"
         for k in self.requires_all:
             if not facts.has(k):
                 return f"blocked until {friendly(k)} exists"
@@ -95,6 +100,8 @@ class Action:
 _FRIENDLY = {
     "target.configured": "a configured target",
     "host.up": "a live host",
+    "host.os_family": "target OS family",
+    "host.os_hint": "target OS hint",
     "ports.open": "open ports",
     "scan.nmap.quick": "a quick nmap open-port scan",
     "scan.nmap.version": "an nmap service/version scan",
@@ -154,6 +161,48 @@ def friendly(kind: str) -> str:
     if kind.startswith("service."):
         return f"{kind.split('.', 1)[1]} service evidence"
     return kind
+
+
+def _normalize_os_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"windows", "win"}:
+        return "windows"
+    if text in {"linux", "unix", "gnu/linux"}:
+        return "linux"
+    return ""
+
+
+def host_os_family(facts: FactSet) -> str:
+    """Return the single proven target OS family, or '' when unknown/conflicting."""
+    families = {
+        family
+        for value in facts.values("host.os_family")
+        for family in [_normalize_os_name(value.get("family", ""))]
+        if family
+    }
+    if not families:
+        if facts.has("foothold.windows") or facts.has("winrm.authenticated") or facts.has("rdp.authenticated"):
+            families.add("windows")
+        if facts.has("foothold.linux"):
+            families.add("linux")
+    return next(iter(families)) if len(families) == 1 else ""
+
+
+def os_compatible(facts: FactSet, action_os: list[str] | tuple[str, ...] | None) -> bool:
+    """Whether an action's OS tags fit this target.
+
+    Unknown target OS stays permissive so early recon still works. Once a host has
+    one proven OS family, wrong-platform actions are hidden from next moves and
+    tool palettes.
+    """
+    allowed = {_normalize_os_name(item) for item in (action_os or [])}
+    allowed.discard("")
+    if not allowed:
+        return True
+    family = host_os_family(facts)
+    if not family:
+        return True
+    return family in allowed
 
 
 # --------------------------------------------------------------------------- #

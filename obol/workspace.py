@@ -343,6 +343,8 @@ class Workspace:
                     host, domain=value.get("domain") or value.get("name") or "")
             elif fact.kind == "host.up":
                 changed |= self.enrich_target_identity(host, os=value.get("os") or "")
+            elif fact.kind == "host.os_family":
+                changed |= self.enrich_target_identity(host, os=value.get("family") or value.get("os") or "")
             elif fact.kind == "ad.dc_candidate":
                 changed |= self.enrich_target_identity(
                     host,

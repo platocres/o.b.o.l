@@ -89,6 +89,7 @@ def fill_command(action: Action, ws: Workspace, command_index: int = 0, target: 
 # --------------------------------------------------------------------------- #
 _NOTABLE = [
     ("host.up", "host    up"),
+    ("host.os_family", "host    OS family"),
     ("scan.nmap.quick", "scan    quick nmap complete"),
     ("scan.nmap.version", "scan    version/script nmap complete"),
     ("ad.domain_known", "domain  known"),
@@ -146,6 +147,9 @@ def _proven_lines(facts: FactSet) -> list[str]:
             if kind == "host.up":
                 os = (facts.values(kind)[0] or {}).get("os", "")
                 extra = f" · {os}" if os else ""
+            if kind == "host.os_family":
+                family = (facts.values(kind)[0] or {}).get("family", "")
+                extra = f": {family}" if family else ""
             if kind == "ad.domain_known":
                 nm = (facts.values(kind)[0] or {}).get("name", "")
                 extra = f": {nm}" if nm else ""
@@ -203,6 +207,7 @@ def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
         t.add_column("target", style="bold")
         t.add_column("identity")
         t.add_column("domain")
+        t.add_column("os")
         t.add_column("state")
         t.add_column("ports", style="cyan")
         t.add_column("next")
@@ -217,6 +222,7 @@ def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
                 host,
                 identity,
                 rec.get("domain") or "-",
+                rec.get("os") or "-",
                 state,
                 _services_line(facts),
                 moves,
@@ -242,7 +248,7 @@ def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
         identity = rec.get("fqdn") or rec.get("hostname") or rec.get("label") or "-"
         mark = "*" if host == ws.target else " "
         print(f" {mark} {host:16} {identity}")
-        print(f"    domain: {rec.get('domain') or '-'}   state: {target_access_level(facts)} / {target_phase(facts)}")
+        print(f"    domain: {rec.get('domain') or '-'}   os: {rec.get('os') or '-'}   state: {target_access_level(facts)} / {target_phase(facts)}")
         print(f"    ports:  {_services_line(facts)}")
         print(f"    next:   {moves}")
     print("\nscan scope: obol scan   |   active target: obol target use <host>   |   next: obol next\n")

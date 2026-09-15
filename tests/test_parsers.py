@@ -78,7 +78,12 @@ Service detection performed. Please report any incorrect results.
         "test",
     )
     kinds = {fact.kind for fact in facts}
-    assert {"scan.nmap.version", "kerberos.reachable", "ldap.reachable", "smb.reachable", "ad.dc_candidate"} <= kinds
+    assert {
+        "scan.nmap.version", "kerberos.reachable", "ldap.reachable",
+        "smb.reachable", "ad.dc_candidate", "host.os_hint", "host.os_family",
+    } <= kinds
+    os_family = next(fact for fact in facts if fact.kind == "host.os_family")
+    assert os_family.value["family"] == "windows"
     assert "credential.available" not in kinds
     assert "access.admin" not in kinds
     assert "foothold.windows" not in kinds
@@ -163,8 +168,10 @@ PORT     STATE SERVICE       VERSION
     assert {
         "ftp.reachable", "ftp.anonymous_login", "ssh.reachable", "ssh.hostkey",
         "dns.reachable", "snmp.reachable", "snmp.info", "rdp.reachable",
-        "http.redirect", "web.tech",
+        "http.redirect", "web.tech", "host.os_hint", "host.os_family",
     } <= kinds
+    os_family = next(fact for fact in facts if fact.kind == "host.os_family")
+    assert os_family.value["family"] == "linux"
     snmp = next(fact for fact in facts if fact.kind == "snmp.info")
     assert snmp.value["name"] == "edge-router"
     assert any(fact.kind == "host.hostname" and fact.value["name"] == "edge-router" for fact in facts)
@@ -203,6 +210,7 @@ def test_http_ssh_ftp_and_snmp_metadata_parsers_do_not_claim_access():
     assert {"ssh.reachable", "ssh.banner"} <= kinds
     assert {"ftp.reachable", "ftp.banner", "ftp.anonymous_login"} <= kinds
     assert {"snmp.reachable", "snmp.community", "snmp.info", "host.hostname"} <= kinds
+    assert "host.os_family" in kinds
     assert "credential.available" not in kinds
     assert "access.shell" not in kinds
     assert "foothold.linux" not in kinds
@@ -216,7 +224,11 @@ LDAP        10.10.10.10     389    DC01         [*] Windows Server 2019 Build 17
 """
     facts = parse_action_output(action, ws, "nxc ldap 10.10.10.10 -u '' -p ''", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname", "host.domain", "ldap.reachable"} <= kinds
+    assert {
+        "ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname",
+        "host.domain", "ldap.reachable", "host.os_hint", "host.os_family",
+    } <= kinds
+    assert next(fact for fact in facts if fact.kind == "host.os_family").value["family"] == "windows"
     assert "credential.available" not in kinds
     assert "access.admin" not in kinds
     assert "foothold.windows" not in kinds
@@ -260,7 +272,12 @@ SMB         10.10.10.10     445    DC01         [*] Windows Server 2019 Build 17
 """
     facts = parse_action_output(action, ws, "nxc smb 10.10.10.10", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname", "host.domain", "smb.reachable", "smb.signing", "smb.smbv1"} <= kinds
+    assert {
+        "ad.dc_candidate", "ad.domain_known", "ad.base_dn", "host.hostname",
+        "host.domain", "smb.reachable", "smb.signing", "smb.smbv1",
+        "host.os_hint", "host.os_family",
+    } <= kinds
+    assert next(fact for fact in facts if fact.kind == "host.os_family").value["family"] == "windows"
     values = {fact.kind: fact.value for fact in facts}
     assert values["smb.signing"]["enabled"] is True
     assert values["smb.smbv1"]["enabled"] is False
@@ -675,7 +692,8 @@ Info: Establishing connection to remote endpoint
         "test",
     )
     kinds = {fact.kind for fact in facts}
-    assert {"foothold.windows", "access.desktop"} <= kinds
+    assert {"foothold.windows", "access.desktop", "host.os_family"} <= kinds
+    assert next(fact for fact in facts if fact.kind == "host.os_family").value["family"] == "windows"
 
 
 def test_penelope_windows_shell_proves_desktop_and_foothold():
@@ -688,7 +706,8 @@ def test_penelope_windows_shell_proves_desktop_and_foothold():
 """
     facts = parse_action_output(action, ws, "penelope.py 4444", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"access.shell", "foothold.windows", "access.desktop"} <= kinds
+    assert {"access.shell", "foothold.windows", "access.desktop", "host.os_family"} <= kinds
+    assert next(fact for fact in facts if fact.kind == "host.os_family").value["family"] == "windows"
     shell = next(fact for fact in facts if fact.kind == "access.shell")
     assert shell.value["handler"] == "penelope"
     assert shell.value["os"] == "windows"
@@ -704,7 +723,8 @@ def test_penelope_linux_shell_is_linux_foothold_not_windows():
     out = "[+] Got reverse shell from web01~10.10.10.20-Linux-x86_64 - Assigned SessionID 2\n"
     facts = parse_action_output(action, ws, "penelope 4444", out, "", "test")
     kinds = {fact.kind for fact in facts}
-    assert {"access.shell", "foothold.linux"} <= kinds
+    assert {"access.shell", "foothold.linux", "host.os_family"} <= kinds
+    assert next(fact for fact in facts if fact.kind == "host.os_family").value["family"] == "linux"
     assert "foothold.windows" not in kinds
     assert "access.desktop" not in kinds
     assert "access.system" not in kinds
