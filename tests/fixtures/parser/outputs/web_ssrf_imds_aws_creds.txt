@@ -1,0 +1,9 @@
+ami-id
+instance-id
+iam/security-credentials/web-role
+{
+  "Code" : "Success",
+  "AccessKeyId" : "ASIAEXAMPLE123456789",
+  "SecretAccessKey" : "wJalrXUtnFEMIexampleKEYxyz1234567890abcd",
+  "Token" : "IQoJb3JpZ2luX2VjEExampleSessionTokenValueThatIsQuiteLong=="
+}

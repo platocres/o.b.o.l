@@ -1,0 +1,2 @@
+<html><body><h1>Product 1</h1><p>In stock. Price: $19.99</p>
+<div class="reviews">Great product, no sql problems here.</div></body></html>

@@ -136,13 +136,21 @@ Next work should widen this carefully:
   shares/sessions, WinRM/RDP/SSH/FTP service authentication, HTTP metadata
   (curl/whatweb), FTP/SSH banners, SNMP walk/check output, and common nmap service
   script findings for SSH host keys, FTP anonymous login, SNMP info, HTTP redirects,
-  and technology fingerprints. The first AD-abuse success-signal slice now covers
-  ACL/control-path writes, addcomputer/RBCD/getST, LAPS candidates, and gMSA hash
-  material without promoting those outputs to admin/SYSTEM access. Continue with
-  exploit-card success signals, Rubeus/TGT capture output, trust/SCCM support
-  branches, tunnel/proxy failure transcripts, privesc/pivot outputs, and more
-  real-tool fixtures. Every parser must map output to the narrowest fact and
-  include anti-overfit tests.
+  and technology fingerprints. Two success-signal slices have landed on top of
+  that recon coverage. The **AD-abuse** slice covers ACL/control-path writes,
+  addcomputer/RBCD/getST, LAPS candidates, and gMSA hash material without promoting
+  those outputs to admin/SYSTEM access. The **web-exploitation** slice confirms the
+  manual (curl-driven) Orange web cards from their output shape:
+  `web.lfi_confirmed` (+ `loot.files`/`web.source`) from a real file/source read,
+  `web.cmdi_confirmed` from captured command output (command injection, SSTI RCE,
+  web shells, an executing uploaded shell), `web.sqli_confirmed` from a manual DBMS
+  error (no sqlmap), and `web.ssrf_confirmed` (+ candidate cloud-key material) from
+  internal metadata content — none promoted to a foothold, shell, or validated
+  credential. Continue with success signals for the remaining web cards
+  (deserialization, JWT, NoSQLi, Tomcat/Jenkins/WordPress, IDOR, XSS),
+  Rubeus/TGT capture output, trust/SCCM support branches, tunnel/proxy failure
+  transcripts, privesc/pivot outputs, and more real-tool fixtures. Every parser
+  must map output to the narrowest fact and include anti-overfit tests.
 - **Better port-to-playbook gating.** The Orange AD pack now has a small exam-flow
   priority override for nmap → DC identify → anonymous LDAP → user enum. Extend
   that idea across web/privesc sibling packs without hardcoding box wins.
@@ -539,6 +547,53 @@ Non-negotiables: only authorized, proven-reachable sources (hard scope gate);
 harvested material is a candidate fact, never proven access; extraction/OCR is
 optional and degrades, never a hard dependency; one runner, one store; and no raw
 secret dumping on the lean surfaces.
+
+## 11. Manual exploitation toolkit (OSCP-compliant — no automated exploiters)
+
+The OSCP exam **bans automated exploitation tools** — sqlmap is disallowed for
+injection, and the exam expects the operator to exploit web (and other) findings
+**by hand**. obol therefore cannot lean on `sqlmap-automation` (or any other
+one-click popper) as its real answer to a web finding; it needs a first-class
+**manual exploitation** surface. This is also what the prior **obol web** carried
+best: a robust complement of technique cards with concrete, copy-and-adapt
+payloads/scripts per vulnerability class. obol local should have the executable,
+proof-bound version of that.
+
+Scope (each a reviewable PR, every non-negotiable intact):
+
+- **Manual-exploitation technique library as DATA.** A curated, attributed set of
+  ready-to-adapt payloads/one-liners/short scripts per class — manual SQLi
+  (error/UNION/boolean/time-based enumeration helpers, per-DBMS syntax), LFI
+  (traversal, `php://filter` source, wrappers, log/`/proc` poisoning), file-upload
+  bypasses (extension/content-type/magic-byte tricks), OS command injection, SSTI
+  (engine-detection polyglots → RCE), SSRF/XXE, insecure deserialization, JWT, and
+  NoSQLi — living as pack/payload JSON (like `obol/payloads/reverse_shells.json`),
+  never box-specific recipes. Each carries operator guidance and the success signal
+  to look for. Mirrors obol web's script complement, kept generic.
+- **A "Manual exploitation" tools/section on both surfaces.** A per-target place
+  (a tab or a Tools sub-section, per the progressive-disclosure guardrail) that
+  offers the technique cards for the services/findings in scope, fills templates
+  from workspace facts (`{{target}}`, discovered params, creds), and runs the
+  chosen command through the **one scope-enforced runner** — the operator drives
+  one deliberate command at a time, obol does not auto-fire a chain.
+- **Proof-bound success signals (started).** The manual web-exploitation
+  success-signal parsers (item 1) are the confirmation layer: a hand-driven curl
+  becomes `web.lfi_confirmed` / `web.cmdi_confirmed` / `web.sqli_confirmed` /
+  `web.ssrf_confirmed` only from real output, and a confirmed injection unlocks the
+  next manual step. Extend coverage to the remaining classes as their cards gain
+  parsers.
+- **De-emphasize the automated path for exam mode.** Keep `sqlmap-automation`
+  (useful for labs/bug-bounty), but the exam-flow ranking (item 2) should prefer
+  the manual SQLi card, and an eventual engagement profile (§7) set to OSCP could
+  hide or warn on disallowed automated exploiters.
+
+Interlocks: item 1 (the success-signal parsers), item 2 (exam-flow ranking prefers
+manual moves), item 3 (the web/other packs the techniques attach to), the tools
+inventory (`tools.py`) for the binaries each technique needs, and §7 (the OSCP
+engagement profile gates which tools are allowed). Non-negotiables: techniques are
+data, not planner branching; one runner, one store, one scope gate; guided
+one-command-at-a-time manual exploitation, never an automated one-click chain;
+success is a proof-bound fact from real output, never a card that only renders.
 
 ## UX guardrails (product decision — keep these)
 

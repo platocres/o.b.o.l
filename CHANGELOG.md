@@ -7,6 +7,25 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **Manual Web-Exploitation Success-Signal Parsers** (ROADMAP item 1): the
+  curl-driven Orange web cards (LFI, command injection, manual SQLi, SSRF) that
+  were explain-only now record proof-bound facts from the *output shape* a
+  hand-driven exploit produces — the OSCP-relevant path, since the exam forbids
+  automated exploiters like sqlmap. `web.lfi_confirmed` + `loot.files` (and
+  `web.source` for a `php://filter` source read) fire only on real file content
+  (`/etc/passwd` shape, a Windows ini, or base64 that decodes to PHP source), never
+  a reflected payload or a page that merely mentions a path; `web.cmdi_confirmed`
+  fires only on captured command output (`uid=…`/`nt authority\system`) for command
+  injection, SSTI RCE, web shells, and an executing uploaded shell
+  (`web.upload_confirmed`); `web.sqli_confirmed` fires on a real DBMS error
+  signature (MySQL/MariaDB/Oracle/PostgreSQL/MSSQL/SQLite) from a manual quote/UNION,
+  complementing the existing SQLMap path; and `web.ssrf_confirmed` fires on internal
+  cloud-metadata content, recording leaked cloud keys as `credential.candidate`
+  material. Proof boundaries held and test-locked: web command execution is **not**
+  a caught interactive shell or admin/SYSTEM (even `uid=0`), a disclosed
+  `/etc/passwd` yields no credential, a SQL error is not a dump, and leaked keys are
+  candidate material until validated. The fixture corpus adds positive and
+  anti-overclaim cases for each, plus a `tests/test_web_exploit_parsers.py` suite.
 - Added **AD Abuse Success-Signal Parser Coverage v1**: outputs from `bloodyAD`,
   Impacket addcomputer/RBCD/getST, NetExec LAPS, and gMSA hash dumping now produce
   proof-bound facts for object-control paths, added computer accounts, Kerberos
