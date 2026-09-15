@@ -89,6 +89,14 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 | `ssh_id_proves_linux_shell` | SSH command execution showing `uid=` | shell, Linux foothold, Linux OS family/hints | admin unless uid is root |
 | `snmp_timeout_no_facts` | SNMP timeout | no facts | all claims |
 | `ftp_named_login_not_anonymous` | FTP successful named login transcript | FTP reachability and banner | anonymous FTP or credential availability |
+| `nxc_sam_dump_material_not_access` | NetExec local SAM dump | NTLM hash material and credential candidates | NTDS loot, krbtgt, plaintext, validated credentials, access |
+| `secretsdump_ntds_domain_loot` | secretsdump domain dump | NTLM hash material, krbtgt, NTDS loot | plaintext, validated credentials, admin/SYSTEM |
+| `bloodhound_collection_zip_context_only` | BloodHound/SharpHound collection | graph collection archive | attack path, credentials, access |
+| `bloodhound_analysis_attack_path_only` | BloodHound path analysis text | AD attack-path evidence | collection archive, credentials, access |
+| `sqlmap_database_and_webshell_context` | SQLMap SQLi/database/os-shell output | confirmed SQLi, database metadata, database credential material, webshell context | validated credentials, Windows/Linux foothold, admin/SYSTEM |
+| `git_dumper_source_candidate_secret` | git-dumper plus source grep | exposed Git source and source-secret candidates | validated credentials, web auth, access |
+| `linux_privesc_fixture_leads_only` | Linux local enum output | `privesc.*` leads, host kernel/arch | root/admin/SYSTEM |
+| `windows_privesc_fixture_leads_only` | Windows local enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/SYSTEM |
 | privesc parser tests | Linux/Windows post-foothold enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/root/SYSTEM unless proof output shows it |
 
 ## What This Proves
