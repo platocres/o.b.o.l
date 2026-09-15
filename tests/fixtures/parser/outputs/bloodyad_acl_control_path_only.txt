@@ -1,0 +1,3 @@
+[+] svc-audit successfully added to group Help Desk Operators
+distinguishedName: CN=Help Desk Operators,CN=Users,DC=corp,DC=local
+ActiveDirectoryRights: GenericAll

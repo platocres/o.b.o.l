@@ -95,6 +95,10 @@ python3 -m pytest tests/test_parser_fixtures.py -q
 | `bloodhound_analysis_attack_path_only` | BloodHound path analysis text | AD attack-path evidence | collection archive, credentials, access |
 | `sqlmap_database_and_webshell_context` | SQLMap SQLi/database/os-shell output | confirmed SQLi, database metadata, database credential material, webshell context | validated credentials, Windows/Linux foothold, admin/SYSTEM |
 | `git_dumper_source_candidate_secret` | git-dumper plus source grep | exposed Git source and source-secret candidates | validated credentials, web auth, access |
+| `bloodyad_acl_control_path_only` | bloodyAD ACL mutation/detail output | AD object-control path evidence | validated credentials, foothold, admin/SYSTEM |
+| `addcomputer_machine_candidate_only` | Impacket addcomputer output | added computer account and candidate machine-account material | validated credentials, foothold, admin |
+| `rbcd_getst_ticket_material_only` | Impacket RBCD write plus getST output | RBCD control path and Kerberos ticket material | validated credentials, foothold, admin/SYSTEM |
+| `laps_gmsa_material_not_access` | NetExec LAPS plus gMSA hash output | LAPS password candidates and gMSA NTLM hash material | validated credentials, plaintext credential promotion, foothold, admin/SYSTEM |
 | `linux_privesc_fixture_leads_only` | Linux local enum output | `privesc.*` leads, host kernel/arch | root/admin/SYSTEM |
 | `windows_privesc_fixture_leads_only` | Windows local enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/SYSTEM |
 | privesc parser tests | Linux/Windows post-foothold enum output | `privesc.*` leads, host kernel/arch, stored-credential candidates | admin/root/SYSTEM unless proof output shows it |

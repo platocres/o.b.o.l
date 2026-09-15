@@ -1,0 +1,2 @@
+[*] Successfully added machine account OBOL$ with password MachinePass123!
+[*] MachineAccountQuota allowed the creation

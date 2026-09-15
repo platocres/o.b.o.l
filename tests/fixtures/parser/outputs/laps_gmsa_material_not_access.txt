@@ -1,0 +1,4 @@
+LDAP        10.10.10.10 389 DC01 [*] Running LAPS module
+Computer: WEB01$ User: Administrator Password: LocalAdmin2026!
+Computer: FILE01$ User: Adm-LAPS Password: FileOnly2026!
+corp.local\svc_web$: NTLM: 11223344556677889900aabbccddeeff

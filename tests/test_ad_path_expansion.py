@@ -216,6 +216,137 @@ def test_bloodhound_analysis_output_can_prove_attack_path_only():
     assert "access.admin" not in kinds
 
 
+def test_bloodyad_success_records_control_path_not_access():
+    ws = _workspace()
+    action = _action("bloodyad-acl")
+    out = """
+[+] svc-audit successfully added to group Help Desk Operators
+distinguishedName: CN=Help Desk Operators,CN=Users,DC=corp,DC=local
+ActiveDirectoryRights: GenericAll
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "bloodyAD -d corp.local --host 10.10.10.10 -u svc-audit -p 'Spring2026!' add groupMember \"Help Desk Operators\" svc-audit",
+        out,
+        "",
+        "test",
+    )
+    control = next(fact for fact in facts if fact.kind == "ad.control_paths")
+    assert "GenericAll" in control.value["rights"]
+    assert control.value["operation"] == "group_member_write"
+    kinds = {fact.kind for fact in facts}
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_addcomputer_success_records_machine_candidate_not_login():
+    ws = _workspace()
+    action = _action("delegation-abuse")
+    out = "[*] Successfully added machine account OBOL$ with password MachinePass123!\n"
+    facts = parse_action_output(
+        action,
+        ws,
+        "impacket-addcomputer corp.local/svc-audit:Spring2026! -dc-ip 10.10.10.10 -computer-name OBOL$ -computer-pass MachinePass123!",
+        out,
+        "",
+        "test",
+    )
+    added = next(fact for fact in facts if fact.kind == "ad.computer_added")
+    assert added.value["computer"] == "OBOL$"
+    candidate = next(fact for fact in facts if fact.kind == "credential.candidate")
+    assert candidate.value["kind"] == "machine_account"
+    assert candidate.value["user"] == "OBOL$"
+    kinds = {fact.kind for fact in facts}
+    assert "credential.available" not in kinds
+    assert "foothold.windows" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_rbcd_and_getst_record_control_path_and_ticket_not_admin():
+    ws = _workspace()
+    action = _action("getst-impersonation")
+    out = """
+[*] Attribute msDS-AllowedToActOnBehalfOfOtherIdentity modified successfully
+[*] Impersonating administrator
+[*] Saving ticket in administrator.ccache
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "impacket-rbcd -delegate-from OBOL$ -delegate-to WEB01$ -action write corp.local/svc-audit:Spring2026! && impacket-getST -spn cifs/WEB01.corp.local -impersonate administrator corp.local/OBOL$:MachinePass123!",
+        out,
+        "",
+        "test",
+    )
+    kinds = {fact.kind for fact in facts}
+    assert {"ad.control_paths", "kerberos.tickets"} <= kinds
+    ticket = next(fact for fact in facts if fact.kind == "kerberos.tickets")
+    assert ticket.value["principal"] == "administrator"
+    assert ticket.value["files"] == ["administrator.ccache"]
+    assert "access.admin" not in kinds
+    assert "foothold.windows" not in kinds
+
+
+def test_ticket_filename_in_command_alone_does_not_prove_ticket():
+    ws = _workspace()
+    action = _action("kerberos-tickets")
+    facts = parse_action_output(
+        action,
+        ws,
+        "export KRB5CCNAME=administrator.ccache && klist",
+        "klist: No credentials cache found (filename: administrator.ccache)\n",
+        "",
+        "test",
+    )
+    assert "kerberos.tickets" not in {fact.kind for fact in facts}
+
+
+def test_laps_output_is_candidate_not_blanket_admin():
+    ws = _workspace()
+    action = _action("laps-read")
+    out = """
+LDAP        10.10.10.10 389 DC01 [*] Running LAPS module
+Computer: WEB01$ User: Administrator Password: LocalAdmin2026!
+Computer: FILE01$ User: Adm-LAPS Password: FileOnly2026!
+"""
+    facts = parse_action_output(
+        action,
+        ws,
+        "nxc ldap 10.10.10.10 -u svc-audit -p 'Spring2026!' -M laps",
+        out,
+        "",
+        "test",
+    )
+    candidates = [fact for fact in facts if fact.kind == "credential.candidate"]
+    assert {item.value["computer"] for item in candidates} == {"WEB01$", "FILE01$"}
+    assert any(item.value["password"] == "LocalAdmin2026!" for item in candidates)
+    kinds = {fact.kind for fact in facts}
+    assert "credential.plaintext" not in kinds
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
+def test_gmsa_output_records_ntlm_hash_not_validated_access():
+    ws = _workspace()
+    action = _action("gmsa-read")
+    out = "corp.local\\svc_web$: NTLM: 11223344556677889900aabbccddeeff\n"
+    facts = parse_action_output(
+        action,
+        ws,
+        "gMSADumper.py -u svc-audit -p 'Spring2026!' -d corp.local",
+        out,
+        "",
+        "test",
+    )
+    ntlm = next(fact for fact in facts if fact.kind == "credential.ntlm_hash")
+    assert ntlm.value["user"] == "svc_web$"
+    assert ntlm.value["nthash"] == "11223344556677889900aabbccddeeff"
+    kinds = {fact.kind for fact in facts}
+    assert "credential.available" not in kinds
+    assert "access.admin" not in kinds
+
+
 def test_new_fact_labels_are_friendly():
     assert friendly("smb.authenticated") == "authenticated SMB access"
     assert friendly("ldap.authenticated") == "authenticated LDAP access"
