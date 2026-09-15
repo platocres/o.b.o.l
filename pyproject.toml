@@ -31,5 +31,5 @@ obol = "obol.cli:main"
 packages = ["obol", "obol.webapp"]
 
 [tool.setuptools.package-data]
-obol = ["packs/*.json", "packs/*.md", "playbooks/*.json", "playbooks/*.md"]
+obol = ["packs/*.json", "packs/*.md", "playbooks/*.json", "playbooks/*.md", "payloads/*.json"]
 "obol.webapp" = ["static/*.html", "static/*.css", "static/*.js", "static/vendor/*.js"]

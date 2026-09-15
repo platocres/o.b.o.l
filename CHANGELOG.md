@@ -7,6 +7,87 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Started the payload staging & tool-provisioning layer (§8), with a design contract
+  in `docs/PAYLOAD_STAGING.md` (posture: enum material auto-runs behind one-click
+  approval, exploit material is applicability-gated then stages + crafts a filled-in
+  privesc command with an add-user or reverse-shell-to-obol outcome, all proof-bound
+  and approval-gated). First slice: the **Kali-side material cache/provisioner**
+  (`obol/provision.py`). A curated registry of stageable materials (linPEAS/winPEAS,
+  linux-exploit-suggester, pspy, GodPotato/PrintSpoofer, RunasCs, SharpHound/Rubeus,
+  chisel/ligolo-ng, nc64/socat) each with an OS, provisioning kind (cache-source/
+  cache-binary/manual), download URL, and optional pinned sha256. A global cache under
+  `$OBOL_HOME/cache/` with an index; a one-click `download()` that computes and records
+  each file's sha256 (trust-on-first-use) and rejects+deletes a pinned-digest mismatch;
+  `ensure()` (the "check Kali first, fetch if missing" preface every later stage/tunnel
+  action calls); an operator override to register a local file for materials with no
+  stable public asset; and a `scan()` inventory grouped by category. obol references
+  the tools' public download URLs and never vendors the binaries (attribution in the
+  module's NOTICE and `obol/packs/NOTICE.md`).
+- Added `obol cache` with `list` / `get` / `use` / `rm` / `path` subcommands (terminal
+  parity for the material cache), and web endpoints `GET /api/cache`, `POST
+  /api/cache/get`, `POST /api/cache/use`, `POST /api/cache/rm`.
+- Added the **transfer layer** (§8, second slice): `obol/staging.py` pushes a cached
+  material onto a proven foothold through the one scope-enforced runner, with
+  **redundancy** — a registry of transfer channels (`scp`/`wget`/`curl`/base64 over
+  SSH for Linux; SMB `--put-file`, `certutil`/PowerShell pull, base64 over WinRM, and
+  a guided `evil-winrm upload` for Windows) tried in a **fallback cascade** until one
+  lands, with a sha256 read-back to mark the copy verified. Pull channels use a
+  throwaway HTTP file server over a detected callback IP (`OBOL_LHOST`/tun0). A staged
+  file is **live state, not a fact**: a new `Workspace.staged` list + SQLite `staged`
+  table (upsert-by-id with `staged_added/updated/removed` events on the SSE feed),
+  with a mutable status (staged/verified/failed). `obol stage <material> [host]`
+  (with `--channel`, `--remote-dir`, `--dry-run`), `obol staged`, `obol unstage`, and
+  web endpoints `GET /api/stage/channels`, `POST /api/run/stage`, `GET /api/staged`,
+  `DELETE /api/staged`. This is the minimum §8 spine that unblocks the §6(d)/(e)
+  auto-tunnel cascade's "stage the chisel/ligolo binary" step.
+- Added **enum run-and-rank** (§8, third slice): `obol/enumrun.py` stages a read-only
+  enumeration tool (linPEAS/winPEAS/LinEnum/linux-exploit-suggester) onto a foothold
+  and runs it over the proven exec channel behind one action. Two proof-bound outputs:
+  the existing `privesc.*` **lead** parsers fire on the tool's output (the run uses the
+  `linux-enum`/`windows-enum` action id, so sudo rights, SUID, capabilities, and
+  dangerous Windows privileges are extracted through the one parser pipeline), and a
+  ranked `enum.findings` fact records the lines the tool itself flagged (known-exploit
+  names, probability markers, credential hints) — **candidate leads, never proof**.
+  A tool-agnostic highlight ranker (`extract_highlights`) strips ANSI, scores each line
+  by its strongest signal, dedupes, and returns the top findings. PowerUp and other
+  interactive tools are staged + guided, not auto-run. `obol enum <tool> [host]` and
+  web `GET /api/enum/tools`, `POST /api/run/enum`.
+- Added the **listener layer** (§8 fourth slice, closing the §6a reverse-shell gap):
+  `obol/listeners.py` catches a reverse shell back to obol. A listener is **live
+  state** (new `Workspace.listeners` + SQLite `listeners` table, status listening/
+  caught/closed). `start_listener` records one and hands back the exact listen command
+  (penelope default; nc/rlwrap or an msf handler as fallbacks) plus a matching
+  reverse-shell payload set for the target OS; `record_catch` flips it to caught and,
+  **only when given the shell's `id`/`whoami` output**, records the access fact from
+  that proof and registers a live `revshell` session — never invents access from the
+  listener's existence. Reverse-shell one-liners live as data
+  (`obol/payloads/reverse_shells.json`), reused by the exploit tier. `obol listener
+  start|catch|close|rm|list` and web `GET /api/listeners`, `POST
+  /api/listener/{start,catch,close}`, `DELETE /api/listener`.
+- Added the **exploit tier** (§8 fifth slice — the core of the layer): `obol/exploits.py`
+  offers privilege-escalation exploits **gated on the parsed `privesc.*` lead facts**
+  (SeImpersonate ⇒ GodPotato/PrintSpoofer; AlwaysInstallElevated ⇒ MSI; NOPASSWD sudo ⇒
+  GTFOBins; a kernel gate ⇒ PwnKit). Applicability is declarative data (a predicate per
+  registry entry), never planner branching. For an applicable exploit obol **stages the
+  binary** (transfer layer) and **crafts the exact command** for a chosen **outcome** —
+  add an admin **user**, a **SYSTEM shell** proof, or a **reverse shell** back to an
+  obol listener — with a **cleanup note** for anything it changes. Execution is
+  **approval-gated** (`--run` / `approve=true`); without approval obol only crafts for
+  review. Proof-bound capture: SYSTEM/root is recorded **only from command output**, and
+  an account it creates becomes a real `credential.available` (usable by `obol login`),
+  never a fabricated win. `obol exploits [host]`, `obol exploit <key> --outcome
+  add-user|system-shell|revshell [--user/--password/--listener] [--run]`, and web
+  `GET /api/exploits`, `POST /api/exploit/plan`, `POST /api/run/exploit`.
+- Added the **Access / Pivot tab** (§8 sixth slice) to the live web surface — the
+  point-and-click home for staging, per the progressive-disclosure guardrail (a
+  dedicated per-target tab, not the Overview). One aggregate endpoint
+  (`GET /api/access`) returns the host's foothold OS, sessions, tunnels, staged
+  material, listeners, eligible enum tools, applicable exploits, and cache summary; the
+  tab renders foothold + listeners, one-click **Enumerate** (stage + run linpeas/winpeas
+  → leads), **Escalate** (applicable exploits with craft-and-confirm, approval-gated
+  execution through the runner), a staged-material list, and listener start/close. With
+  this the whole §8 layer has full terminal + web parity, and tunnelling (§6d/e/f) can
+  resume on a complete staging layer.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

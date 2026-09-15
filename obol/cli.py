@@ -12,7 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, quickstart, service, sessions, tunnels
+from . import (__version__, board, discovery, enumrun, exploits, library, listeners,
+               provision, quickstart, service, sessions, staging, tunnels)
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -905,6 +906,263 @@ def cmd_tunnel(args) -> None:
         cmd_tunnels(args)
 
 
+def cmd_cache(args) -> None:
+    """The Kali-side material cache: what obol can stage onto a foothold, and a
+    one-click download for anything missing. Machine-scoped — no engagement needed."""
+    cmd = getattr(args, "cache_cmd", "list")
+    if cmd == "get":
+        print(f"$ fetching {args.key} into {provision.cache_dir()} …")
+        try:
+            res = provision.download(args.key)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        if not res.get("ok"):
+            print(f"error: {res.get('error')}", file=sys.stderr)
+            raise SystemExit(1)
+        vtag = "verified" if res.get("verified") else "unverified (no pinned digest)"
+        print(f"{board.SYM_OK} cached {args.key}: {res['path']}")
+        print(f"   sha256 {res['sha256']}  ({res['bytes']} bytes, {vtag})")
+        return
+    if cmd == "use":
+        try:
+            res = provision.use_local(args.key, args.path)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        except FileNotFoundError:
+            print(f"no such file: {args.path}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"{board.SYM_OK} registered local {args.key}: {res['path']}")
+        return
+    if cmd == "rm":
+        try:
+            provision.remove(args.key)
+        except KeyError:
+            print(f"unknown material {args.key!r} (see `obol cache`).", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"removed {args.key} from the cache")
+        return
+    if cmd == "path":
+        path = provision.resolve_path(args.key)
+        if not path:
+            print(f"{args.key}: not present locally (try `obol cache get {args.key}`)", file=sys.stderr)
+            raise SystemExit(1)
+        print(path)
+        return
+    # default: list the inventory
+    s = provision.scan()
+    print(f"MATERIAL CACHE  ({s['present']}/{s['total']} present)   {s['cache_dir']}")
+    mark = {"cached": board.SYM_OK, "installed": board.SYM_OK, "missing": "·"}
+    for g in s["groups"]:
+        print(f"\n  {g['category']}")
+        for m in g["materials"]:
+            sym = mark.get(m["status"], "·")
+            hint = ""
+            if m["status"] == "missing":
+                hint = (f"  → obol cache get {m['key']}" if m.get("downloadable")
+                        else f"  → obol cache use {m['key']} <path>")
+            elif m["status"] == "installed":
+                hint = "  (on PATH)"
+            print(f"    {sym} {m['label']:<26} {m['os']:<7} {m['status']:<9}{hint}")
+    print("\none-click download fetches into the cache and records a sha256; "
+          "pinned-digest mismatches are rejected.")
+
+
+def cmd_stage(args) -> None:
+    """Push a cached material onto a foothold, cascading through transfer channels."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    channels = [args.channel] if args.channel else None
+    if args.dry_run:
+        try:
+            p = staging.plan(ws, host, args.material, channels=channels, remote_dir=args.remote_dir)
+        except staging.StagingError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"transfer plan for {p['material']} → {p['host']}  (local: {p['local_path']})")
+        for i, step in enumerate(p["steps"], 1):
+            print(f"\n  {i}. {step['label']} ({step['channel']})")
+            print(f"     $ {step['command']}")
+            if step["verify"]:
+                print(f"     verify: {step['verify']}")
+        return
+    print(f"$ staging {args.material} onto {host} …")
+    try:
+        res = staging.stage(ws, host, args.material, channels=channels, remote_dir=args.remote_dir)
+    except (staging.StagingError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    for a in res["attempts"]:
+        sym = board.SYM_OK if a.get("ok") else "×"
+        extra = " (verified)" if a.get("verified") else ("" if a.get("ok") else f" — {a.get('error', 'failed')}")
+        print(f"  {sym} {a['channel']}{extra}")
+    if res["ok"]:
+        st = res["staged"]
+        print(f"\n{board.SYM_OK} staged via {res['channel']}: {st['remote_path']} "
+              f"({'verified' if st['verified'] else 'unverified'})")
+    else:
+        print(f"\n× {res.get('reason', 'transfer failed')}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def cmd_staged(args) -> None:
+    """List material obol has staged onto footholds (live on-target state)."""
+    ws = _load_or_exit()
+    cmd = getattr(args, "staged_cmd", "list")
+    if cmd == "rm":
+        if not ws.remove_staged(args.id):
+            print(f"no staged record {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"removed {args.id}")
+        return
+    if not ws.staged:
+        print("nothing staged yet. push a tool with `obol stage <material> [host]`.")
+        return
+    print(f"{'ID':<20} {'HOST':<16} {'MATERIAL':<16} {'CHANNEL':<14} {'STATUS':<9} REMOTE")
+    for sf in ws.staged:
+        print(f"{sf['id']:<20} {sf['host']:<16} {sf['material']:<16} {sf['channel']:<14} "
+              f"{sf['status']:<9} {sf['remote_path']}")
+
+
+def cmd_enum(args) -> None:
+    """Stage and run a read-only enum tool (linpeas/winpeas) on a foothold, then rank
+    the promising findings."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"$ staging + running {args.tool} on {host} …")
+    try:
+        res = enumrun.run_enum(ws, host, args.tool)
+    except (enumrun.EnumError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if res.get("guided"):
+        print(f"{board.SYM_OK} staged {args.tool} at {res['remote_path']}. Run it interactively:")
+        print(f"   $ {res['run_command']}")
+        return
+    print(f"{board.SYM_OK} ran {args.tool} ({res['remote_path']}, via {res['channel']})")
+    if res["privesc_leads"]:
+        print(f"\nprivesc leads: {', '.join(res['privesc_leads'])}")
+    if res["highlights"]:
+        print(f"\ntop findings ({len(res['highlights'])}):")
+        for h in res["highlights"][:15]:
+            print(f"  [{h['signal']}] {h['line'][:110]}")
+    if not res["privesc_leads"] and not res["highlights"]:
+        print("no ranked findings — review the raw run output under .obol/runs/.")
+
+
+def cmd_listener(args) -> None:
+    """Manage reverse-shell listeners (live catch-a-shell state)."""
+    ws = _load_or_exit()
+    cmd = getattr(args, "listener_cmd", "list")
+    if cmd == "start":
+        try:
+            res = listeners.start_listener(ws, args.port, kind=args.kind, lhost=args.lhost,
+                                           host=args.target, os_name=args.os)
+        except listeners.ListenerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        ln = res["listener"]
+        print(f"{board.SYM_OK} listener {ln['id']} ({ln['kind']}) recorded — run it in a terminal:")
+        print(f"   $ {res['listen_command']}")
+        print(f"\nfire one of these on the {args.os} target (lhost {ln['lhost']}, lport {ln['port']}):")
+        for p in res["payloads"]:
+            print(f"   [{p['name']}] {p['command']}")
+        print(f"\nwhen it lands: obol listener catch {ln['id']} --host <target> --proof \"$(id)\"")
+        return
+    if cmd == "catch":
+        try:
+            res = listeners.record_catch(ws, args.id, host=args.host, proof_output=args.proof)
+        except listeners.ListenerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        if res["proof_fact"]:
+            print(f"{board.SYM_OK} caught + proved {res['proof_fact']} — session recorded.")
+        else:
+            print(f"{board.SYM_OK} marked caught (no proof output given — no fact recorded).")
+        return
+    if cmd in ("close", "rm"):
+        ok = listeners.close_listener(ws, args.id) if cmd == "close" else listeners.remove_listener(ws, args.id)
+        if not ok:
+            print(f"no listener {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"{'closed' if cmd == 'close' else 'removed'} {args.id}")
+        return
+    # default: list
+    if not ws.listeners:
+        print("no listeners yet. start one with `obol listener start <port>`.")
+        return
+    print(f"{'ID':<20} {'KIND':<10} {'PORT':<6} {'STATUS':<10} LHOST")
+    for ln in ws.listeners:
+        print(f"{ln['id']:<20} {ln['kind']:<10} {ln['port']:<6} {ln['status']:<10} {ln.get('lhost', '')}")
+
+
+def cmd_exploits(args) -> None:
+    """List privilege-escalation exploits applicable to a foothold (by proven leads)."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    rows = exploits.eligible_exploits(ws, host)
+    if not rows:
+        print(f"no applicable exploits for {host} yet — run `obol enum` to surface privesc leads.")
+        return
+    print(f"APPLICABLE EXPLOITS for {host}")
+    for e in rows:
+        tag = " (guided)" if e["guided"] else ""
+        print(f"\n  {e['key']}{tag} — {e['label']}")
+        print(f"    lead: {e['lead']}   outcomes: {', '.join(e['outcomes'])}")
+        if e["note"]:
+            print(f"    note: {e['note']}")
+    print("\ncraft one: obol exploit <key> --outcome add-user|system-shell|revshell [--run]")
+
+
+def cmd_exploit(args) -> None:
+    """Craft (and, with --run, execute) an applicable privesc exploit."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        if not args.run:
+            res = exploits.plan_exploit(ws, host, args.key, args.outcome,
+                                        newuser=args.user, newpass=args.password)
+        else:
+            res = exploits.run_exploit(ws, host, args.key, args.outcome, approve=True,
+                                       newuser=args.user, newpass=args.password,
+                                       listener_id=args.listener)
+    except (exploits.ExploitError, staging.StagingError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if res["guided"]:
+        print(f"{res['label']} is guided:\n  {res['note']}")
+        return
+    print(f"exploit {res['exploit']} → {res['outcome']}")
+    if res.get("newuser"):
+        print(f"  new admin account: {res['newuser']} / {res['newpass']}")
+    print(f"\n  $ {res['command']}")
+    if res.get("cleanup"):
+        print(f"  cleanup: {res['cleanup']}")
+    if not args.run:
+        print("\nreview above, then re-run with --run to execute (approval-gated).")
+        return
+    if res.get("proof_fact"):
+        print(f"\n{board.SYM_OK} proved {res['proof_fact']} (from command output).")
+    elif res.get("credential_recorded"):
+        print(f"\n{board.SYM_OK} created admin credential — use it: obol login {host}")
+    else:
+        print(f"\nran (rc={res.get('returncode')}). Verify the outcome before trusting it.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1047,6 +1305,74 @@ try:
         tp.add_argument("id", help="tunnel id (see `obol tunnels`)")
         tp.set_defaults(func=cmd_tunnel, tunnel_cmd=name)
     ptunnel.set_defaults(func=cmd_tunnel, tunnel_cmd="list")
+
+    pcache = sub.add_parser("cache", help="list/download stageable materials on this Kali box (linpeas, potatoes, chisel/ligolo)")
+    cache_sub = pcache.add_subparsers(dest="cache_cmd")
+    cache_sub.add_parser("list", help="list the material cache").set_defaults(func=cmd_cache, cache_cmd="list")
+    c_get = cache_sub.add_parser("get", help="download a material into the cache (verifies sha256)")
+    c_get.add_argument("key", help="material key (see `obol cache`)")
+    c_get.set_defaults(func=cmd_cache, cache_cmd="get")
+    c_use = cache_sub.add_parser("use", help="register an operator-supplied local file as a material")
+    c_use.add_argument("key", help="material key (see `obol cache`)")
+    c_use.add_argument("path", help="path to the local file")
+    c_use.set_defaults(func=cmd_cache, cache_cmd="use")
+    c_rm = cache_sub.add_parser("rm", help="drop a material from the cache")
+    c_rm.add_argument("key", help="material key (see `obol cache`)")
+    c_rm.set_defaults(func=cmd_cache, cache_cmd="rm")
+    c_path = cache_sub.add_parser("path", help="print the local path of a cached material")
+    c_path.add_argument("key", help="material key (see `obol cache`)")
+    c_path.set_defaults(func=cmd_cache, cache_cmd="path")
+    pcache.set_defaults(func=cmd_cache, cache_cmd="list")
+
+    pstage = sub.add_parser("stage", help="push a cached material onto a foothold (cascades through transfer channels)")
+    pstage.add_argument("material", help="material key (see `obol cache`)")
+    pstage.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pstage.add_argument("--channel", default="", choices=[c.key for c in staging.CHANNELS],
+                        help="force one transfer channel instead of the cascade")
+    pstage.add_argument("--remote-dir", default="", dest="remote_dir", help="destination directory on the target")
+    pstage.add_argument("--dry-run", action="store_true", help="show the channel cascade and commands without transferring")
+    pstage.set_defaults(func=cmd_stage)
+    pexploits = sub.add_parser("exploits", help="list privesc exploits applicable to a foothold (by proven leads)")
+    pexploits.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pexploits.set_defaults(func=cmd_exploits)
+    pexploit = sub.add_parser("exploit", help="craft (and with --run, execute) a privesc exploit")
+    pexploit.add_argument("key", choices=[e.key for e in exploits.EXPLOITS], help="exploit key (see `obol exploits`)")
+    pexploit.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pexploit.add_argument("--outcome", default="add-user",
+                          choices=["add-user", "system-shell", "revshell"], help="what the exploit should do")
+    pexploit.add_argument("--user", default="", help="new account name (add-user; default: obol)")
+    pexploit.add_argument("--password", default="", help="new account password (add-user; default: random)")
+    pexploit.add_argument("--listener", default="", help="listener id for the revshell outcome (see `obol listener`)")
+    pexploit.add_argument("--run", action="store_true", help="execute (approval-gated); without it, only craft for review")
+    pexploit.set_defaults(func=cmd_exploit)
+    penum = sub.add_parser("enum", help="stage + run a read-only enum tool (linpeas/winpeas) and rank findings")
+    penum.add_argument("tool", choices=list(enumrun.ENUM_TOOLS.keys()), help="enum tool")
+    penum.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    penum.set_defaults(func=cmd_enum)
+    plistener = sub.add_parser("listener", help="manage reverse-shell listeners (catch a shell back to obol)")
+    listener_sub = plistener.add_subparsers(dest="listener_cmd")
+    listener_sub.add_parser("list", help="list listeners").set_defaults(func=cmd_listener, listener_cmd="list")
+    l_start = listener_sub.add_parser("start", help="record a listener and get the listen command + payloads")
+    l_start.add_argument("port", type=int, help="listen port")
+    l_start.add_argument("--kind", default="penelope", choices=[k.key for k in listeners.LISTENER_KINDS])
+    l_start.add_argument("--lhost", default="", help="callback IP (default: auto-detect tun0/OBOL_LHOST)")
+    l_start.add_argument("--os", default="linux", choices=["linux", "windows"], help="target OS for the payload set")
+    l_start.add_argument("--target", default="", help="associate with a target host")
+    l_start.set_defaults(func=cmd_listener, listener_cmd="start")
+    l_catch = listener_sub.add_parser("catch", help="mark a listener as having caught a shell (record proof)")
+    l_catch.add_argument("id", help="listener id (see `obol listener`)")
+    l_catch.add_argument("--host", required=True, help="the target the shell came from")
+    l_catch.add_argument("--proof", default="", help="the shell's id/whoami output (records the access fact)")
+    l_catch.set_defaults(func=cmd_listener, listener_cmd="catch")
+    for name, helptext in (("close", "mark a listener closed"), ("rm", "remove a listener record")):
+        lp = listener_sub.add_parser(name, help=helptext)
+        lp.add_argument("id", help="listener id (see `obol listener`)")
+        lp.set_defaults(func=cmd_listener, listener_cmd=name)
+    plistener.set_defaults(func=cmd_listener, listener_cmd="list")
+    sub.add_parser("staged", help="list material staged onto footholds").set_defaults(func=cmd_staged, staged_cmd="list")
+    pstaged = sub.add_parser("unstage", help="remove a staged-material record (does not delete the file on the target)")
+    pstaged.add_argument("id", help="staged record id (see `obol staged`)")
+    pstaged.set_defaults(func=cmd_staged, staged_cmd="rm")
 
     pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")

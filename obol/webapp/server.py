@@ -36,8 +36,10 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .. import (board, bloodhound, discovery, library, sessions as session_layer,
-                tools as tool_inventory, tunnels as tunnel_layer)
+from .. import (board, bloodhound, discovery, enumrun as enum_layer, exploits as exploit_layer,
+                library, listeners as listener_layer, provision as material_cache,
+                sessions as session_layer, staging as staging_layer, tools as tool_inventory,
+                tunnels as tunnel_layer)
 from ..sessions import SessionError
 from ..tunnels import TunnelError
 from ..graph import (
@@ -1375,6 +1377,222 @@ def create_app(base, *, token: Optional[str] = None):
         if key not in {t.key for t in tool_inventory.REGISTRY}:
             raise HTTPException(404, f"unknown tool {key!r}")
         return tool_inventory.install(key)
+
+    # ── material cache (stageable tools/exploits on this Kali box, §8) ─────────
+    @app.get("/api/cache")
+    def api_cache():
+        return material_cache.scan()
+
+    @app.post("/api/cache/get")
+    def api_cache_get(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        try:
+            res = material_cache.download(key)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
+        if not res.get("ok"):
+            raise HTTPException(502, res.get("error", "download failed"))
+        return res
+
+    @app.post("/api/cache/use")
+    def api_cache_use(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        path = (payload or {}).get("path", "").strip()
+        try:
+            return material_cache.use_local(key, path)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
+        except FileNotFoundError:
+            raise HTTPException(400, f"no file at {path!r}")
+
+    @app.post("/api/cache/rm")
+    def api_cache_rm(payload: dict = Body(...)):
+        key = (payload or {}).get("key", "")
+        try:
+            return material_cache.remove(key)
+        except KeyError:
+            raise HTTPException(404, f"unknown material {key!r}")
+
+    # ── staging: push cached material onto a foothold (§8) ─────────────────────
+    @app.get("/api/stage/channels")
+    def api_stage_channels(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "channels": staging_layer.eligible_channels(ws, host)}
+
+    @app.post("/api/run/stage")
+    def api_run_stage(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        material = (payload or {}).get("material", "")
+        channel = (payload or {}).get("channel", "")
+        remote_dir = (payload or {}).get("remote_dir", "")
+        if not host or not material:
+            raise HTTPException(422, "host and material are required")
+        channels = [channel] if channel else None
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = staging_layer.stage(ws, host, material, channels=channels,
+                                          remote_dir=remote_dir or None, surface="web")
+            except staging_layer.StagingError as exc:
+                raise HTTPException(400, str(exc))
+            except ActionError as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    @app.get("/api/staged")
+    def api_staged(host: str = Query("")):
+        ws = active()
+        return {"staged": ws.staged_for(host) if host else ws.staged}
+
+    # ── enum run-and-rank (stage + run linpeas/winpeas, rank findings) ─────────
+    @app.get("/api/enum/tools")
+    def api_enum_tools(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "tools": enum_layer.eligible_enum(ws, host)}
+
+    @app.post("/api/run/enum")
+    def api_run_enum(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        tool = (payload or {}).get("tool", "")
+        if not host or not tool:
+            raise HTTPException(422, "host and tool are required")
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = enum_layer.run_enum(ws, host, tool, surface="web")
+            except enum_layer.EnumError as exc:
+                raise HTTPException(400, str(exc))
+            except ActionError as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    # ── access / pivot tab: one aggregate call for the per-target console ──────
+    @app.get("/api/access")
+    def api_access(host: str = Query(...)):
+        ws = active()
+        cache = material_cache.scan()
+        return {
+            "host": host,
+            "foothold_os": staging_layer._foothold_os(ws, host),
+            "sessions": ws.sessions_for(host),
+            "tunnels": ws.tunnels_for(host),
+            "staged": ws.staged_for(host),
+            "listeners": ws.listeners,
+            "enum_tools": enum_layer.eligible_enum(ws, host),
+            "exploits": exploit_layer.eligible_exploits(ws, host),
+            "channels": staging_layer.eligible_channels(ws, host),
+            "cache_summary": {"present": cache["present"], "total": cache["total"]},
+        }
+
+    # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
+    @app.get("/api/exploits")
+    def api_exploits(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "exploits": exploit_layer.eligible_exploits(ws, host)}
+
+    @app.post("/api/exploit/plan")
+    def api_exploit_plan(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        key = (payload or {}).get("key", "")
+        outcome = (payload or {}).get("outcome", "add-user")
+        ws = active()
+        try:
+            return exploit_layer.plan_exploit(ws, host, key, outcome,
+                                              newuser=(payload or {}).get("user", ""),
+                                              newpass=(payload or {}).get("password", ""))
+        except exploit_layer.ExploitError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/run/exploit")
+    def api_run_exploit(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        key = (payload or {}).get("key", "")
+        outcome = (payload or {}).get("outcome", "add-user")
+        if not host or not key:
+            raise HTTPException(422, "host and key are required")
+        # execution is approval-gated: the web must pass approve=true explicitly
+        approve = bool((payload or {}).get("approve", False))
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = exploit_layer.run_exploit(
+                    ws, host, key, outcome, approve=approve,
+                    newuser=(payload or {}).get("user", ""),
+                    newpass=(payload or {}).get("password", ""),
+                    listener_id=(payload or {}).get("listener_id", ""), surface="web")
+            except exploit_layer.ExploitError as exc:
+                raise HTTPException(400, str(exc))
+            except (staging_layer.StagingError, ActionError) as exc:
+                raise HTTPException(400, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    # ── listeners (catch a reverse shell back to obol) ────────────────────────
+    @app.get("/api/listeners")
+    def api_listeners():
+        ws = active()
+        return {"listeners": ws.listeners, "kinds": [k.key for k in listener_layer.LISTENER_KINDS]}
+
+    @app.post("/api/listener/start")
+    def api_listener_start(payload: dict = Body(...)):
+        port = int((payload or {}).get("port", 0) or 0)
+        kind = (payload or {}).get("kind", "penelope")
+        os_name = (payload or {}).get("os", "linux")
+        host = (payload or {}).get("host", "")
+        lhost = (payload or {}).get("lhost", "")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return listener_layer.start_listener(ws, port, kind=kind, lhost=lhost,
+                                                     host=host, os_name=os_name)
+            except listener_layer.ListenerError as exc:
+                raise HTTPException(400, str(exc))
+
+    @app.post("/api/listener/catch")
+    def api_listener_catch(payload: dict = Body(...)):
+        lid = (payload or {}).get("id", "")
+        host = (payload or {}).get("host", "")
+        proof = (payload or {}).get("proof", "")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return listener_layer.record_catch(ws, lid, host=host, proof_output=proof)
+            except listener_layer.ListenerError as exc:
+                raise HTTPException(400, str(exc))
+
+    @app.post("/api/listener/close")
+    def api_listener_close(payload: dict = Body(...)):
+        lid = (payload or {}).get("id", "")
+        with _RUN_LOCK:
+            ws = active()
+            if not listener_layer.close_listener(ws, lid):
+                raise HTTPException(404, f"no listener {lid!r}")
+        return {"ok": True}
+
+    @app.delete("/api/listener")
+    def api_listener_remove(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            if not listener_layer.remove_listener(ws, id):
+                raise HTTPException(404, f"no listener {id!r}")
+        return {"ok": True, "id": id}
+
+    @app.delete("/api/staged")
+    def api_staged_rm(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            if not ws.remove_staged(id):
+                raise HTTPException(404, f"no staged record {id!r}")
+            ws.save()
+        return {"ok": True, "id": id}
 
     # ── run-from-site ────────────────────────────────────────────────────────
     @app.post("/api/run/action")

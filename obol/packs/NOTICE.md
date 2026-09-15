@@ -66,6 +66,19 @@ node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js linux-privesc 
 node scripts/import_orange_privesc.js /path/to/obol/data/lanes.js windows-privesc > obol/packs/orange_windows_privesc_2025_03.json
 ```
 
+## Staged materials (obol/provision.py)
+
+The §8 material cache (`obol/provision.py`) is **not Orange-derived** and vendors no
+third-party code. It records the **public download URLs** and licenses of external
+tools an operator may choose to fetch onto their own Kali box (privesc enum scripts,
+potato exploits, tunnel binaries, common OSCP-lab tooling). Each item remains the
+property of its upstream project under that project's own license — e.g. PEASS-ng
+(linPEAS/winPEAS, GPL-3.0), ligolo-ng (GPL-3.0), chisel (MIT), GodPotato /
+PrintSpoofer / RunasCs / pspy (MIT-family / Unlicense), linux-exploit-suggester
+(GPL-2.0), GhostPack Rubeus/Seatbelt (BSD-3-Clause). obol's code here is the
+cache/registry machinery only; downloading and staging these tools is an operator
+action against authorized targets.
+
 ## obol_local_pivot_2026_09.json
 
 The local pivot action pack is **not Orange-derived**. It is project-authored pack

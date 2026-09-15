@@ -293,6 +293,11 @@ function onClick(e) {
     case "open-tunnel": openTunnel(el.dataset.host || state.target, el.dataset.kind, el.dataset.subnet || "", el.dataset.exposes === "1"); break;
     case "close-tunnel": closeTunnel(el.dataset.id); break;
     case "rm-tunnel": removeTunnel(el.dataset.id); break;
+    case "run-enum": runEnumTool(el.dataset.host || state.target, el.dataset.tool); break;
+    case "plan-exploit": planExploit(el.dataset.host || state.target, el.dataset.key, el.dataset.outcome, el.dataset.listener || ""); break;
+    case "listener-start": startListenerPrompt(el.dataset.host || state.target, el.dataset.os || "linux"); break;
+    case "listener-close": closeListener(el.dataset.id); break;
+    case "cache-get": cacheGet(el.dataset.key); break;
   }
 }
 function onChange(e) {
@@ -588,7 +593,7 @@ async function delTarget(host) {
 }
 
 // ── target detail (tabs) ────────────────────────────────────────────────────
-const TABS = [["overview", "Overview"], ["tools", "Tools"], ["playbooks", "Playbooks"],
+const TABS = [["overview", "Overview"], ["access", "Access / Pivot"], ["tools", "Tools"], ["playbooks", "Playbooks"],
   ["checklist", "Checklist"], ["findings", "Findings"], ["evidence", "Evidence"], ["commands", "Commands"]];
 
 async function buildTarget() {
@@ -628,6 +633,7 @@ function chainBar(chain) {
 }
 
 async function renderTab(b) {
+  if (state.tab === "access") return await tabAccess(b);
   if (state.tab === "tools") return tabTools(b);
   if (state.tab === "playbooks") return await tabPlaybooks(b);
   if (state.tab === "checklist") return tabChecklist(b);
@@ -767,6 +773,96 @@ async function closeTunnel(id) {
 async function removeTunnel(id) {
   try { const r = await apiDelete(`/api/tunnel?id=${encodeURIComponent(id)}`); toast("Tunnel removed", r.scope_retracted ? "scope retracted: " + r.scope_retracted : "", "ok"); render(); }
   catch (e) { toast("Could not remove tunnel", e.message, "err"); }
+}
+
+// ── Access / Pivot tab (§8 staging: cache → stage → enum → exploit → shell) ──
+async function tabAccess(b) {
+  const host = b.meta.host;
+  let d;
+  try { d = await api(`/api/access?host=${encodeURIComponent(host)}`); }
+  catch (e) { return `<div class="empty">Access data unavailable: ${esc(e.message)}</div>`; }
+  const fos = d.foothold_os || "";
+  if (!fos && !d.sessions.length) {
+    return `<div class="card"><div class="panel-h"><h2>Access &amp; Pivot</h2></div>
+      <div class="muted">No proven foothold on this host yet. Establish one from the
+      <a href="#" data-act="tab" data-tab="overview">Overview</a> (Access &amp; sessions),
+      then stage tools, run enumeration, and escalate from here.</div>
+      <div class="muted" style="margin-top:8px">Kali material cache: ${d.cache_summary.present}/${d.cache_summary.total} present.</div></div>`;
+  }
+  const sess = d.sessions.length
+    ? d.sessions.map((s) => `<div class="row mono" style="gap:8px"><span class="pill">${esc(s.kind)}</span> ${esc(s.user || "")} <span class="pill" style="border-color:var(--green)66;color:var(--green)">${esc(s.status)}</span></div>`).join("")
+    : `<div class="muted">No live session.</div>`;
+  const enumBtns = (d.enum_tools || []).length
+    ? d.enum_tools.map((t) => `<button class="btn sm" data-act="run-enum" data-host="${esc(host)}" data-tool="${esc(t.key)}" ${t.ready ? "" : "disabled"} title="${t.ready ? "stage + run" : "needs a credential"}">Run ${esc(t.material)}${t.cached ? "" : " ⤓"}</button>`).join(" ")
+    : `<span class="muted">No enum tools for a ${esc(fos || "?")} foothold.</span>`;
+  const exp = (d.exploits || []).length
+    ? d.exploits.map((e) => `<div class="move"><div class="move-h"><span class="t">${esc(e.label)}</span>
+        <span class="spacer" style="flex:1"></span><span class="muted mono" style="font-size:11px">${esc(e.lead)}</span></div>
+        ${e.guided ? `<div class="desc">${esc(e.note)}</div>` : `<div class="row" style="gap:6px;flex-wrap:wrap">${e.outcomes.map((o) => `<button class="btn xs" data-act="plan-exploit" data-host="${esc(host)}" data-key="${esc(e.key)}" data-outcome="${esc(o)}" data-listener="${esc((d.listeners.find((l) => l.status === "listening") || {}).id || "")}">craft ${esc(o)}</button>`).join("")}</div>`}</div>`).join("")
+    : `<div class="muted">No applicable exploits yet — run enumeration to surface privesc leads.</div>`;
+  const staged = (d.staged || []).length
+    ? d.staged.map((s) => `<div class="row mono" style="gap:8px;font-size:12px">${esc(s.material)} → ${esc(s.remote_path)} <span class="pill">${esc(s.status)}</span></div>`).join("")
+    : `<div class="muted">Nothing staged on this host.</div>`;
+  const lst = (d.listeners || []).length
+    ? d.listeners.map((l) => `<div class="row mono" style="gap:8px;font-size:12px">${esc(l.kind)}:${l.port} <span class="pill">${esc(l.status)}</span>
+        <span class="spacer" style="flex:1"></span><button class="btn xs" data-act="listener-close" data-id="${esc(l.id)}">close</button></div>`).join("")
+    : `<div class="muted">No listeners.</div>`;
+  return `
+    <div class="grid-2">
+      <div class="card"><div class="panel-h"><h2>Foothold</h2><span class="muted mono">${esc(fos || "none")}</span></div>${sess}
+        <div class="muted" style="margin-top:8px;font-size:12px">Kali material cache: ${d.cache_summary.present}/${d.cache_summary.total} present.</div></div>
+      <div class="card"><div class="panel-h"><h2>Listeners</h2><button class="btn sm" data-act="listener-start" data-host="${esc(host)}" data-os="${esc(fos || "linux")}">＋ Start</button></div>${lst}</div>
+    </div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Enumerate</h2></div>
+      <div class="muted" style="margin-bottom:8px">Stage &amp; run a read-only enum tool; findings become proof-bound leads.</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap">${enumBtns}</div></div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Escalate</h2></div>
+      <div class="muted" style="margin-bottom:8px">Applicable exploits (gated on proven leads). Crafting shows the exact command; running is approval-gated.</div>
+      ${exp}</div>
+    <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Staged material</h2></div>${staged}</div>`;
+}
+async function runEnumTool(host, tool) {
+  if (!host || !tool) return;
+  toast("Running " + tool, "staging + running on " + host + " …", "ok");
+  try {
+    const r = await apiPost("/api/run/enum", { host, tool });
+    if (r.guided) { toast(tool + " staged", r.run_command || r.note || "run it interactively", "ok"); return; }
+    const leads = (r.privesc_leads || []).join(", ");
+    toast("Enum complete", leads || `${(r.highlights || []).length} ranked findings`, "ok");
+    render();
+  } catch (e) { toast("Enum failed", e.message, "err"); }
+}
+async function planExploit(host, key, outcome, listener) {
+  if (!host || !key) return;
+  try {
+    const r = await apiPost("/api/exploit/plan", { host, key, outcome });
+    if (r.guided) { toast(key + " (guided)", r.note, "ok"); return; }
+    const extra = r.newuser ? `\n\nNew admin account: ${r.newuser} / ${r.newpass}` : "";
+    const clean = r.cleanup ? `\nCleanup: ${r.cleanup}` : "";
+    if (!confirm(`${r.label} → ${outcome}\n\n${r.command}${extra}${clean}\n\nRun it now? (approval-gated, runs through the scope-enforced runner)`)) return;
+    const rr = await apiPost("/api/run/exploit", { host, key, outcome, approve: true, listener_id: listener || "" });
+    const msg = rr.proof_fact ? ("proved " + rr.proof_fact) : (rr.newuser ? ("created admin " + rr.newuser) : ("ran, rc=" + (rr.returncode ?? "?")));
+    toast("Exploit " + key, msg, "ok");
+    render();
+  } catch (e) { toast("Exploit failed", e.message, "err"); }
+}
+async function startListenerPrompt(host, os) {
+  const port = prompt("Listen port for the reverse shell", "4444");
+  if (!port) return;
+  try {
+    const r = await apiPost("/api/listener/start", { port: +port, host, os: os || "linux" });
+    toast("Listener " + r.listener.id, "run in a terminal: " + r.listen_command, "ok");
+    render();
+  } catch (e) { toast("Could not start listener", e.message, "err"); }
+}
+async function closeListener(id) {
+  try { await apiPost("/api/listener/close", { id }); render(); }
+  catch (e) { toast("Could not close listener", e.message, "err"); }
+}
+async function cacheGet(key) {
+  toast("Downloading " + key, "fetching into the Kali cache …", "ok");
+  try { const r = await apiPost("/api/cache/get", { key }); toast("Cached " + key, r.verified ? "verified" : "unverified", "ok"); render(); }
+  catch (e) { toast("Download failed", e.message, "err"); }
 }
 async function runLogin(host, kind, method) {
   if (!host || !kind) return;
