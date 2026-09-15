@@ -175,6 +175,15 @@ obol/
   tools.py       tool inventory: curated registry of the packs' tools + detection
                  (which/default Kali paths/auto-locate), overrides in tools.json,
                  install hints; the runner resolves found/added tools through it
+  vulnmatch.py   fingerprint -> probable-exploit matcher (§15b): matches a host's
+                 service/version/OS/web fingerprint against packs/known_exploits_*.json
+                 (EternalBlue, vsftpd 2.3.4, Shellshock, Samba usermap, ProFTPD, Drupalgeddon,
+                 DirtyCow/DirtyPipe, PrintNightmare, …) → ranked candidate leads recorded as
+                 exploit.candidate facts (proof-bound: a version match is a LEAD, never
+                 confirmed-vulnerable). Flows through the same points as any exploit: a move
+                 (exploit:vuln:<key>, manual — the exam floor), dispatch craft, the provision
+                 cache. `obol vulns`, GET /api/vulns. Records candidates after each service
+                 scan (service.run_action hook). Vendors no exploit code
   pack.py        Action model + planner (next_actions / blocked_actions /
                  apply_action) + load_pack(); friendly() names fact kinds
   packs/         methodology packs as DATA (+ NOTICE.md attribution)
@@ -183,6 +192,9 @@ obol/
                              exploitation cards explain-only)
     orange_linux_privesc_2025_03.json   12 Linux privesc actions
     orange_windows_privesc_2025_03.json 10 Windows privesc actions
+    known_exploits_2026_09.json         fingerprint -> known remote/kernel exploit registry
+                                        (DATA for vulnmatch.py; not an action pack — cites
+                                        CVE/EDB, vendors no code)
   playbook.py    named, ordered sequences of pack actions as data; renders a
                  command plan and runs one step through the shared service.run_action
                  (same runner/parser/store), with per-step require_approval gating
@@ -313,7 +325,7 @@ obol/
                  login/tunnels/flags
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
                  overview / moves / do / cruise / autonomy / objectives / ingest / assert /
-                 cred / follow / install / next / explain / run / playbook(s) / sweep / login /
+                 cred / vulns / follow / install / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used

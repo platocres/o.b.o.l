@@ -1574,6 +1574,18 @@ def create_app(base, *, token: Optional[str] = None):
             return cruise_layer.cruise(ws, h, max_steps=max_steps,
                                        auto_kinds=auto_kinds, surface="web").to_dict()
 
+    @app.get("/api/vulns")
+    def api_vulns(host: str = Query("")):
+        """Fingerprint-matched probable exploits for a host (§15b) — candidate leads, and
+        records them as exploit.candidate facts."""
+        from .. import vulnmatch
+        ws = active()
+        h = host or ws.target or ""
+        cands = vulnmatch.match_exploits(ws, h) if h else []
+        if h:
+            vulnmatch.record_candidates(ws, h)
+        return {"host": h, "candidates": cands}
+
     @app.get("/api/install")
     def api_install():
         """The one-pass install plan for missing tools (show only — running install needs

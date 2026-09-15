@@ -7,6 +7,28 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **fingerprint → probable-exploit matcher** (`obol/vulnmatch.py` +
+  `packs/known_exploits_2026_09.json`, ROADMAP §15b): obol matches a host's
+  service/version/OS/web fingerprint against a curated registry of ~20 exploits common in
+  OSCP/HTB/THM/Vulnhub-style environments — **beyond the previous privesc-only lineup** —
+  and returns ranked candidate leads. New coverage includes **EternalBlue (MS17-010),
+  SMBGhost, BlueKeep, Zerologon, PrintNightmare, vsftpd 2.3.4, ProFTPD mod_copy, Samba
+  usermap, Shellshock, Heartbleed, Drupalgeddon2, Struts2, Log4Shell, Webmin, phpMyAdmin,
+  Tomcat/Jenkins (cross-referencing the web pack), DirtyCow, DirtyPipe, and Sudo Baron
+  Samedit**, with DirtyCow/DirtyPipe also added to the provision cache. Match rules are
+  **data** (declarative service/version/port/OS/web-fingerprint rules per entry). Proof-
+  bound throughout: a version match is a **candidate lead** (`exploit.candidate`, citing
+  the fingerprint), never a confirmed-vulnerable fact — confirmation is the operator
+  running it. It flows through the **same points any exploit does**: a frontier move
+  (`exploit:vuln:<key>`, `manual` — the exam floor never auto-fires it), a dispatch craft
+  (stages the material if any + fills the PoC/searchsploit command), the provision cache,
+  and it re-fingerprints automatically after each service scan (a `service.run_action`
+  hook records new candidates). Terminal `obol vulns [host]` and web `GET /api/vulns`. obol
+  vendors no exploit code — entries cite CVE/EDB and point at a material or searchsploit
+  term. Locked by `tests/test_vulnmatch.py` (version/OS/web/kernel matching, a patched
+  version not matching, the candidate-lead-not-confirmed proof boundary, the manual move +
+  craft path, and registry↔cache sync).
+
 - **Getting on the box (ROADMAP §15 b/c/d)** — the moves and mechanics that turn cruise
   from "drives a box you already footholded" into "drives a box from a bare IP", each
   tagged with the right *reach* so the autonomy policy governs it:

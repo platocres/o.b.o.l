@@ -202,8 +202,21 @@ def _run_listener_move(ws, move, params):
 
 
 def _craft_exploit_move(ws, move, key, host, params):
-    """Craft (never fire) a privesc exploit for review — the manual/approval posture.
-    Execution stays on `obol exploit --run` with its full outcome/credential surface."""
+    """Craft (never fire) an exploit for review — the manual/approval posture. A
+    ``vuln:<key>`` id is a fingerprint-matched remote/kernel exploit (vulnmatch); anything
+    else is a privesc-lead exploit (exploits.py). Execution stays on the operator's hands."""
+    if key.startswith("vuln:"):
+        from . import vulnmatch
+        vkey = key.split(":", 1)[1]
+        vulnmatch.record_candidates(ws, host)  # engaging it records the candidate lead
+        plan = vulnmatch.craft(ws, host, vkey)
+        cmd = plan.get("command") or plan.get("searchsploit", "")
+        risk = "; ".join(x for x in (plan.get("note", ""),
+                                     "candidate from a fingerprint — CONFIRM before relying on it") if x)
+        return _result(move, ok=True, posture="craft",
+                       summary=f"crafted {plan['name']} ({plan.get('cve') or vkey}) — "
+                               "review + confirm, then run by hand",
+                       command=cmd, detail={**plan, "risk": risk})
     from . import exploits
     exploit = exploits.get_exploit(key)
     outcome = params.get("outcome") or (list(exploit.outcomes)[0] if exploit and exploit.outcomes else "")

@@ -507,6 +507,30 @@ def cmd_install(args) -> None:
     print("\ninstall pass complete." if ok else "\ninstall pass finished with errors — see output above.")
 
 
+def cmd_vulns(args) -> None:
+    from . import vulnmatch
+    ws = _load_or_exit()
+    host = args.host or ws.target
+    if not host:
+        print("no active target. add one or pass a host.", file=sys.stderr)
+        raise SystemExit(1)
+    cands = vulnmatch.match_exploits(ws, host)
+    recorded = vulnmatch.record_candidates(ws, host)
+    if not cands:
+        print(f"\nno probable exploits fingerprinted on {host} yet — run a service scan "
+              "(`obol scan` / nmap -sV) to gather versions.\n")
+        return
+    print(f"\nprobable exploits · {host}  (candidate leads — CONFIRM before relying on any)\n")
+    for c in cands:
+        cve = f" [{c['cve']}]" if c["cve"] else ""
+        ss = f"  ·  searchsploit {c['searchsploit']}" if c["searchsploit"] else ""
+        print(f"  ({c['probability']:6}) {c['name']}{cve}  →  {c['target'] or c['kind']}{ss}")
+        if c.get("note"):
+            print(f"           {_trim(c['note'], 100)}")
+    print(f"\n  {len(recorded)} new candidate lead(s) recorded. "
+          f"craft one: obol do exploit:vuln:<key>  (obol crafts + stages; you run it)\n")
+
+
 def cmd_cred(args) -> None:
     from . import ingest
     ws = _load_or_exit()
@@ -1702,6 +1726,11 @@ try:
                                            "(initial access → privesc → local → root flag)")
     po.add_argument("host", nargs="?", default="", help="target host (default: active target)")
     po.set_defaults(func=cmd_objectives)
+
+    pv = sub.add_parser("vulns", help="fingerprint the target's services/versions to probable "
+                                      "exploits (candidate leads — never confirmed)")
+    pv.add_argument("host", nargs="?", default="", help="target host (default: active target)")
+    pv.set_defaults(func=cmd_vulns)
 
     pf = sub.add_parser("follow", help="follow your OWN interactive session — obol watches "
                                        "and parses it into facts (no copy-paste, no auto-login)")
