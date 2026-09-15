@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, board, discovery, library, provision, quickstart, service, sessions, tunnels
+from . import __version__, board, discovery, library, provision, quickstart, service, sessions, staging, tunnels
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -968,6 +968,66 @@ def cmd_cache(args) -> None:
           "pinned-digest mismatches are rejected.")
 
 
+def cmd_stage(args) -> None:
+    """Push a cached material onto a foothold, cascading through transfer channels."""
+    ws = _load_or_exit()
+    host = args.target or ws.target
+    if not host:
+        print("no target — pass a host or set an active target.", file=sys.stderr)
+        raise SystemExit(1)
+    channels = [args.channel] if args.channel else None
+    if args.dry_run:
+        try:
+            p = staging.plan(ws, host, args.material, channels=channels, remote_dir=args.remote_dir)
+        except staging.StagingError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"transfer plan for {p['material']} → {p['host']}  (local: {p['local_path']})")
+        for i, step in enumerate(p["steps"], 1):
+            print(f"\n  {i}. {step['label']} ({step['channel']})")
+            print(f"     $ {step['command']}")
+            if step["verify"]:
+                print(f"     verify: {step['verify']}")
+        return
+    print(f"$ staging {args.material} onto {host} …")
+    try:
+        res = staging.stage(ws, host, args.material, channels=channels, remote_dir=args.remote_dir)
+    except (staging.StagingError, service.ActionError, RunnerError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    for a in res["attempts"]:
+        sym = board.SYM_OK if a.get("ok") else "×"
+        extra = " (verified)" if a.get("verified") else ("" if a.get("ok") else f" — {a.get('error', 'failed')}")
+        print(f"  {sym} {a['channel']}{extra}")
+    if res["ok"]:
+        st = res["staged"]
+        print(f"\n{board.SYM_OK} staged via {res['channel']}: {st['remote_path']} "
+              f"({'verified' if st['verified'] else 'unverified'})")
+    else:
+        print(f"\n× {res.get('reason', 'transfer failed')}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def cmd_staged(args) -> None:
+    """List material obol has staged onto footholds (live on-target state)."""
+    ws = _load_or_exit()
+    cmd = getattr(args, "staged_cmd", "list")
+    if cmd == "rm":
+        if not ws.remove_staged(args.id):
+            print(f"no staged record {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        ws.save()
+        print(f"removed {args.id}")
+        return
+    if not ws.staged:
+        print("nothing staged yet. push a tool with `obol stage <material> [host]`.")
+        return
+    print(f"{'ID':<20} {'HOST':<16} {'MATERIAL':<16} {'CHANNEL':<14} {'STATUS':<9} REMOTE")
+    for sf in ws.staged:
+        print(f"{sf['id']:<20} {sf['host']:<16} {sf['material']:<16} {sf['channel']:<14} "
+              f"{sf['status']:<9} {sf['remote_path']}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1128,6 +1188,19 @@ try:
     c_path.add_argument("key", help="material key (see `obol cache`)")
     c_path.set_defaults(func=cmd_cache, cache_cmd="path")
     pcache.set_defaults(func=cmd_cache, cache_cmd="list")
+
+    pstage = sub.add_parser("stage", help="push a cached material onto a foothold (cascades through transfer channels)")
+    pstage.add_argument("material", help="material key (see `obol cache`)")
+    pstage.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
+    pstage.add_argument("--channel", default="", choices=[c.key for c in staging.CHANNELS],
+                        help="force one transfer channel instead of the cascade")
+    pstage.add_argument("--remote-dir", default="", dest="remote_dir", help="destination directory on the target")
+    pstage.add_argument("--dry-run", action="store_true", help="show the channel cascade and commands without transferring")
+    pstage.set_defaults(func=cmd_stage)
+    sub.add_parser("staged", help="list material staged onto footholds").set_defaults(func=cmd_staged, staged_cmd="list")
+    pstaged = sub.add_parser("unstage", help="remove a staged-material record (does not delete the file on the target)")
+    pstaged.add_argument("id", help="staged record id (see `obol staged`)")
+    pstaged.set_defaults(func=cmd_staged, staged_cmd="rm")
 
     pscope = sub.add_parser("scope", help="list, add, paste-filter, or remove authorized scope entries")
     scope_sub = pscope.add_subparsers(dest="scope_cmd")

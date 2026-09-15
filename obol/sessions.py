@@ -203,6 +203,17 @@ def _login_context(method: str, cred: dict) -> dict:
     return ctx
 
 
+def password_credential(ws: Workspace, host: str) -> dict | None:
+    """A validated plaintext-password credential for a host (public helper for the
+    staging layer, which fills push commands with a foothold's own credential)."""
+    return _password_cred(ws.facts_for_target(normalize_target(host)))
+
+
+def hash_credential(ws: Workspace, host: str) -> dict | None:
+    """A usable pass-the-hash credential (user + NT hash) for a host."""
+    return _hash_cred(ws.facts_for_target(normalize_target(host)))
+
+
 def eligible_sessions(ws: Workspace, host: str) -> list[dict]:
     """Which logins to offer for a host, and whether each is ready to run.
 

@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Optional
 
 from .. import (board, bloodhound, discovery, library, provision as material_cache,
-                sessions as session_layer, tools as tool_inventory, tunnels as tunnel_layer)
+                sessions as session_layer, staging as staging_layer, tools as tool_inventory,
+                tunnels as tunnel_layer)
 from ..sessions import SessionError
 from ..tunnels import TunnelError
 from ..graph import (
@@ -1410,6 +1411,49 @@ def create_app(base, *, token: Optional[str] = None):
             return material_cache.remove(key)
         except KeyError:
             raise HTTPException(404, f"unknown material {key!r}")
+
+    # ── staging: push cached material onto a foothold (§8) ─────────────────────
+    @app.get("/api/stage/channels")
+    def api_stage_channels(host: str = Query(...)):
+        ws = active()
+        return {"host": host, "channels": staging_layer.eligible_channels(ws, host)}
+
+    @app.post("/api/run/stage")
+    def api_run_stage(payload: dict = Body(...)):
+        host = (payload or {}).get("host", "")
+        material = (payload or {}).get("material", "")
+        channel = (payload or {}).get("channel", "")
+        remote_dir = (payload or {}).get("remote_dir", "")
+        if not host or not material:
+            raise HTTPException(422, "host and material are required")
+        channels = [channel] if channel else None
+        with _RUN_LOCK:
+            ws = active()
+            target_or_404(ws, host)
+            try:
+                res = staging_layer.stage(ws, host, material, channels=channels,
+                                          remote_dir=remote_dir or None, surface="web")
+            except staging_layer.StagingError as exc:
+                raise HTTPException(400, str(exc))
+            except ActionError as exc:
+                raise HTTPException(404, str(exc))
+            except RunnerError as exc:
+                raise HTTPException(400, str(exc))
+        return res
+
+    @app.get("/api/staged")
+    def api_staged(host: str = Query("")):
+        ws = active()
+        return {"staged": ws.staged_for(host) if host else ws.staged}
+
+    @app.delete("/api/staged")
+    def api_staged_rm(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            if not ws.remove_staged(id):
+                raise HTTPException(404, f"no staged record {id!r}")
+            ws.save()
+        return {"ok": True, "id": id}
 
     # ── run-from-site ────────────────────────────────────────────────────────
     @app.post("/api/run/action")

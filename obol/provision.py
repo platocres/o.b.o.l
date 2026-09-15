@@ -179,6 +179,10 @@ REGISTRY: list[Material] = [
 _BY_KEY = {m.key: m for m in REGISTRY}
 
 
+def get_material(key: str) -> Material | None:
+    return _BY_KEY.get(key)
+
+
 # ── cache location + index ─────────────────────────────────────────────────────
 def cache_dir() -> Path:
     return library.base_dir() / "cache"

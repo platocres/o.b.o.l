@@ -26,6 +26,20 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 - Added `obol cache` with `list` / `get` / `use` / `rm` / `path` subcommands (terminal
   parity for the material cache), and web endpoints `GET /api/cache`, `POST
   /api/cache/get`, `POST /api/cache/use`, `POST /api/cache/rm`.
+- Added the **transfer layer** (§8, second slice): `obol/staging.py` pushes a cached
+  material onto a proven foothold through the one scope-enforced runner, with
+  **redundancy** — a registry of transfer channels (`scp`/`wget`/`curl`/base64 over
+  SSH for Linux; SMB `--put-file`, `certutil`/PowerShell pull, base64 over WinRM, and
+  a guided `evil-winrm upload` for Windows) tried in a **fallback cascade** until one
+  lands, with a sha256 read-back to mark the copy verified. Pull channels use a
+  throwaway HTTP file server over a detected callback IP (`OBOL_LHOST`/tun0). A staged
+  file is **live state, not a fact**: a new `Workspace.staged` list + SQLite `staged`
+  table (upsert-by-id with `staged_added/updated/removed` events on the SSE feed),
+  with a mutable status (staged/verified/failed). `obol stage <material> [host]`
+  (with `--channel`, `--remote-dir`, `--dry-run`), `obol staged`, `obol unstage`, and
+  web endpoints `GET /api/stage/channels`, `POST /api/run/stage`, `GET /api/staged`,
+  `DELETE /api/staged`. This is the minimum §8 spine that unblocks the §6(d)/(e)
+  auto-tunnel cascade's "stage the chisel/ligolo binary" step.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

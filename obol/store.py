@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS tunnels (
     updated_at REAL,
     data       TEXT
 );
+CREATE TABLE IF NOT EXISTS staged (
+    id         TEXT PRIMARY KEY,
+    updated_at REAL,
+    data       TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts     REAL,
@@ -198,6 +203,8 @@ class Store:
                         conn.execute("SELECT data FROM sessions ORDER BY updated_at, rowid")]
             tunnels = [json.loads(r["data"]) for r in
                        conn.execute("SELECT data FROM tunnels ORDER BY updated_at, rowid")]
+            staged = [json.loads(r["data"]) for r in
+                      conn.execute("SELECT data FROM staged ORDER BY updated_at, rowid")]
         finally:
             conn.close()
         return {
@@ -214,6 +221,7 @@ class Store:
             "bloodhound": bloodhound,
             "sessions": sessions,
             "tunnels": tunnels,
+            "staged": staged,
         }
 
     def data_version(self, conn: sqlite3.Connection | None = None) -> int:
@@ -258,7 +266,8 @@ class Store:
     def reconcile(self, payload: dict, *, persisted_fact_hashes: set[str],
                   persisted_run_ids: set[str], deleted_targets: set[str],
                   deleted_evidence: set[str], deleted_sessions: set[str] = frozenset(),
-                  deleted_tunnels: set[str] = frozenset()) -> list[dict]:
+                  deleted_tunnels: set[str] = frozenset(),
+                  deleted_staged: set[str] = frozenset()) -> list[dict]:
         """Persist the in-memory engagement state in a single transaction, writing
         only what changed and never clobbering another process's concurrent rows.
 
@@ -449,6 +458,30 @@ class Store:
                     "target": t.get("host", ""),
                     "detail": {"id": tid, "kind": t.get("kind", ""),
                                "transport": t.get("transport", ""), "status": t.get("status", "")},
+                })
+
+            # staged files (live material-on-target state: upsert by id) -----------
+            for fid in deleted_staged:
+                conn.execute("DELETE FROM staged WHERE id=?", (fid,))
+                events.append({"type": "staged_removed", "target": "", "detail": {"id": fid}})
+            for sf in payload.get("staged", []):
+                fid = sf.get("id")
+                if not fid:
+                    continue
+                new_data = json.dumps(sf, default=str)
+                row = conn.execute("SELECT data FROM staged WHERE id=?", (fid,)).fetchone()
+                if row is not None and row["data"] == new_data:
+                    continue  # unchanged — no write, no event
+                conn.execute(
+                    "INSERT INTO staged(id, updated_at, data) VALUES(?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data",
+                    (fid, sf.get("updated_at", time.time()), new_data),
+                )
+                events.append({
+                    "type": "staged_added" if row is None else "staged_updated",
+                    "target": sf.get("host", ""),
+                    "detail": {"id": fid, "material": sf.get("material", ""),
+                               "status": sf.get("status", "")},
                 })
 
             # change feed ------------------------------------------------------
