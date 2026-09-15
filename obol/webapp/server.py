@@ -1574,6 +1574,25 @@ def create_app(base, *, token: Optional[str] = None):
             return cruise_layer.cruise(ws, h, max_steps=max_steps,
                                        auto_kinds=auto_kinds, surface="web").to_dict()
 
+    @app.get("/api/autonomy")
+    def api_autonomy():
+        """The effective autonomy policy — the exam/lab consent separation, made visible."""
+        from .. import autonomy
+        return autonomy.effective_policy(active())
+
+    @app.post("/api/autonomy")
+    def api_set_autonomy(payload: dict = Body(...)):
+        from .. import autonomy
+        kind = (payload or {}).get("kind", "")
+        decision = (payload or {}).get("decision", "")
+        if not kind or decision not in (*autonomy.DECISIONS, "clear"):
+            raise HTTPException(422, "kind and decision (auto/ask/never/clear) are required")
+        with _RUN_LOCK:
+            ws = active()
+            ws.set_autonomy(kind, decision)
+            ws.save()
+            return autonomy.effective_policy(ws)
+
     @app.get("/api/objectives")
     def api_objectives(host: str = Query("")):
         """The per-target objective ladder (§7) — initial access → privesc → local → root."""

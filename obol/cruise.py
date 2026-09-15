@@ -95,8 +95,17 @@ def cruise(ws, host: str = "", *, max_steps: int = DEFAULT_MAX_STEPS,
             result.stop_reason = "done"
             result.message = "nothing left to auto-run — cruise has done the safe work"
             break
+        # Resolve the effective engagement policy for this move (authoritative, same call
+        # dispatch makes). `never` is forbidden — skip it. auto_kinds elevates a specific
+        # ask-kind to run unattended this cruise (e.g. sweep), but never a craft-only exploit.
+        decision = autonomy.decide(ws, kind=candidate.kind, base_tier=candidate.autonomy,
+                                   tool=(candidate.detail or {}).get("tool", ""))
+        candidate.decision = decision
+        if decision == "never":
+            attempted.add(candidate.id)
+            continue
         elevated = candidate.autonomy != "manual" and candidate.kind in auto_kinds
-        if autonomy.needs_approval(candidate.autonomy) and not elevated:
+        if decision != "auto" and not elevated:
             result.stop_reason = "checkpoint"
             result.stop_move = candidate.to_dict()
             result.message = _checkpoint_message(candidate)

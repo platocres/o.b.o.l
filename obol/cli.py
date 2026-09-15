@@ -403,6 +403,29 @@ def _print_briefing(res) -> None:
     print(f"\n  ran {res.ran_ok} move(s).\n")
 
 
+def cmd_autonomy(args) -> None:
+    from . import autonomy
+    ws = _load_or_exit()
+    if getattr(args, "action", "show") == "set":
+        if not args.kind or not args.decision:
+            print("usage: obol autonomy set <kind> <auto|ask|never|clear>", file=sys.stderr)
+            raise SystemExit(1)
+        ws.set_autonomy(args.kind, args.decision)
+        ws.save()
+        print(f"autonomy override: {args.kind} = {args.decision}")
+        return
+    pol = autonomy.effective_policy(ws)
+    print(f"\nautonomy · mode: {pol['mode']}  (profile decides; exam = uncrossable floor)")
+    print("  local prep (cache / listener / craft) always runs; target-touching follows this:\n")
+    for r in pol["kinds"]:
+        print(f"    {r['kind']:10} {r['reach']:7} → {r['decision']}")
+    if pol["overrides"]:
+        print(f"\n  operator overrides: {pol['overrides']}")
+    if pol["disallowed_tools"]:
+        print(f"  disallowed automated exploiters (exam): {', '.join(pol['disallowed_tools'])}")
+    print("\n  set with: obol autonomy set <kind> <auto|ask|never|clear>\n")
+
+
 def cmd_objectives(args) -> None:
     from . import objectives
     ws = _load_or_exit()
@@ -1588,6 +1611,15 @@ try:
                          "(carries cruise into the pivoted segment; opening a tunnel still asks)")
     pc.add_argument("--max-steps", type=int, default=25, help="safety cap on moves per target")
     pc.set_defaults(func=cmd_cruise)
+
+    pau = sub.add_parser("autonomy", help="show (or set) how autonomous obol may be this "
+                                          "engagement — the exam/lab consent policy")
+    pau.add_argument("action", nargs="?", default="show", choices=["show", "set"])
+    pau.add_argument("kind", nargs="?", default="",
+                     help="move kind for `set` (login/stage/tunnel/sweep/enum/exploit/…)")
+    pau.add_argument("decision", nargs="?", default="",
+                     help="auto | ask | never | clear (for `set`)")
+    pau.set_defaults(func=cmd_autonomy)
 
     po = sub.add_parser("objectives", help="show the per-target objective ladder "
                                            "(initial access → privesc → local → root flag)")
