@@ -12,16 +12,15 @@
       "title": "Enumerate Linux interfaces",
       "tool": "sshpass",
       "priority": 76,
-      "requires_any": [
-        "foothold.linux",
-        "access.shell",
-        "ssh.authenticated"
-      ],
-      "produces": [
-        "scan.local.interfaces"
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
       ],
       "os": [
         "linux"
+      ],
+      "produces": [
+        "scan.local.interfaces"
       ],
       "hypothesis": "A Linux foothold can expose additional interfaces or subnets that may become pivot candidates.",
       "commands": [
@@ -37,16 +36,15 @@
       "title": "Enumerate Linux routes",
       "tool": "sshpass",
       "priority": 75,
-      "requires_any": [
-        "foothold.linux",
-        "access.shell",
-        "ssh.authenticated"
-      ],
-      "produces": [
-        "scan.local.routes"
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
       ],
       "os": [
         "linux"
+      ],
+      "produces": [
+        "scan.local.routes"
       ],
       "hypothesis": "Routes from a foothold identify adjacent networks worth validating before building a tunnel.",
       "commands": [
@@ -62,16 +60,15 @@
       "title": "Enumerate Linux ARP neighbors",
       "tool": "sshpass",
       "priority": 70,
-      "requires_any": [
-        "foothold.linux",
-        "access.shell",
-        "ssh.authenticated"
-      ],
-      "produces": [
-        "scan.local.neighbors"
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
       ],
       "os": [
         "linux"
+      ],
+      "produces": [
+        "scan.local.neighbors"
       ],
       "hypothesis": "Neighbor cache entries are weak but useful hints for hosts near the foothold.",
       "commands": [
@@ -87,16 +84,15 @@
       "title": "Enumerate Linux DNS servers",
       "tool": "sshpass",
       "priority": 68,
-      "requires_any": [
-        "foothold.linux",
-        "access.shell",
-        "ssh.authenticated"
-      ],
-      "produces": [
-        "scan.local.dns"
+      "requires_all": [
+        "credential.available",
+        "foothold.linux"
       ],
       "os": [
         "linux"
+      ],
+      "produces": [
+        "scan.local.dns"
       ],
       "hypothesis": "Resolver configuration can identify internal DNS infrastructure for follow-up enumeration.",
       "commands": [
@@ -112,19 +108,17 @@
       "title": "Enumerate Windows interfaces",
       "tool": "nxc",
       "priority": 76,
-      "requires_any": [
-        "foothold.windows",
-        "winrm.authenticated",
-        "rdp.authenticated",
-        "access.shell"
-      ],
-      "produces": [
-        "scan.local.interfaces"
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
       ],
       "os": [
         "windows"
       ],
-      "hypothesis": "A Windows foothold can expose additional NICs, DNS servers, or subnets that may become pivot candidates.",
+      "produces": [
+        "scan.local.interfaces"
+      ],
+      "hypothesis": "A Windows WinRM foothold can expose additional NICs, DNS servers, or subnets that may become pivot candidates.",
       "commands": [
         {
           "tool": "nxc",
@@ -138,16 +132,15 @@
       "title": "Enumerate Windows routes",
       "tool": "nxc",
       "priority": 75,
-      "requires_any": [
-        "foothold.windows",
-        "winrm.authenticated",
-        "access.shell"
-      ],
-      "produces": [
-        "scan.local.routes"
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
       ],
       "os": [
         "windows"
+      ],
+      "produces": [
+        "scan.local.routes"
       ],
       "hypothesis": "The Windows route table can reveal internal subnets before any tunnel exists.",
       "commands": [
@@ -163,16 +156,15 @@
       "title": "Enumerate Windows ARP neighbors",
       "tool": "nxc",
       "priority": 70,
-      "requires_any": [
-        "foothold.windows",
-        "winrm.authenticated",
-        "access.shell"
-      ],
-      "produces": [
-        "scan.local.neighbors"
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
       ],
       "os": [
         "windows"
+      ],
+      "produces": [
+        "scan.local.neighbors"
       ],
       "hypothesis": "ARP cache entries can identify nearby internal hosts to validate through a later tunnel.",
       "commands": [
@@ -188,16 +180,15 @@
       "title": "Enumerate Windows listening sockets",
       "tool": "nxc",
       "priority": 66,
-      "requires_any": [
-        "foothold.windows",
-        "winrm.authenticated",
-        "access.shell"
-      ],
-      "produces": [
-        "scan.local.listeners"
+      "requires_all": [
+        "credential.available",
+        "winrm.authenticated"
       ],
       "os": [
         "windows"
+      ],
+      "produces": [
+        "scan.local.listeners"
       ],
       "hypothesis": "Listening sockets give local service context and can help pick tunnel/port-forward targets later.",
       "commands": [
