@@ -145,11 +145,12 @@ and anonymous LDAP enumeration. Most Orange actions still need dedicated parsers
 before they can be considered fully executable; until then, `obol explain` is the
 command reference and `obol run` will save raw evidence without inventing facts.
 
-Beyond AD, a **web pack** (Orange 2025.03 web lane, 23 actions) loads as a sibling
-pack: an HTTP port from the nmap spine unlocks content discovery, nikto, and
-virtual-host recon, with parsers that record discovered surface as candidate
-context — never a confirmed vuln or foothold. Packs share one fact-kind namespace,
-so cross-domain gating works.
+Beyond AD, sibling **web** and **privesc** packs load from the same methodology
+spine. An HTTP port unlocks content discovery, nikto, and virtual-host recon;
+proven Linux/Windows footholds unlock OS-matched local enumeration; and parsed
+`privesc.*` leads unlock the specific abuse cards they justify. Packs share one
+fact-kind namespace, so cross-domain gating works without turning leads into
+access.
 
 Parser coverage now reaches the common early-service metadata operators need for
 next-move selection: nmap/NetExec/curl/whatweb/SNMP/FTP/SSH output can land narrow
@@ -157,7 +158,11 @@ facts for SSH, FTP, RDP, DNS, SNMP, HTTP metadata, service authentication, banne
 host keys, anonymous FTP, web technology fingerprints, and evidence-backed host OS
 hints/families (`host.os_hint`, `host.os_family`). Unknown OS stays permissive, but
 once a target is proven Linux or Windows, wrong-platform actions are hidden from
-next moves and tool palettes. The terminal also has `obol findings`, an
+next moves and tool palettes. Post-foothold parser coverage records local privesc
+leads such as sudo rights, dangerous Linux capabilities, SUID candidates,
+AlwaysInstallElevated, dangerous Windows privileges, and weak service paths without
+claiming admin/root/SYSTEM unless command output proves it. The terminal also has
+`obol findings`, an
 engagement-wide roll-up matching the web Activity findings view: category-grouped,
 host/domain-tagged findings with evidence source lines.
 Parser behavior is now fixture-backed by `tests/fixtures/parser/` and documented in

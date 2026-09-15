@@ -401,6 +401,30 @@ def test_engagement_activity_rolls_up_findings_by_category_and_host(cx):
     assert counts["10.10.10.161"] >= 2 and counts["10.10.10.5"] >= 1
 
 
+def test_privesc_facts_show_on_host_and_engagement_pages(cx):
+    from obol import library
+
+    ws = library.resolve_active()
+    ws.facts.add(Fact("foothold.linux", "host:10.10.10.161", {"service": "ssh"}, source="ssh id"))
+    ws.facts.add(Fact("privesc.sudo_rights", "host:10.10.10.161",
+                      {"entries": ["(root) NOPASSWD: /usr/bin/find"]}, source="sudo -l"))
+    ws.facts.add(Fact("privesc.leads", "host:10.10.10.161",
+                      {"kinds": ["privesc.sudo_rights"], "count": 1}, source="sudo -l"))
+    ws.save()
+
+    target = cx.get("/api/target", params={"target": "10.10.10.161"}, headers=H).json()
+    assert any(section["id"] == "privesc" for section in target["facts_summary"])
+    privesc = next(section for section in target["facts_summary"] if section["id"] == "privesc")
+    assert {fact["kind"] for fact in privesc["facts"]} >= {"privesc.sudo_rights", "privesc.leads"}
+    assert any(f["kind"] == "privesc.sudo_rights" and f["category"] == "privesc" for f in target["findings"])
+    assert any(action["id"] == "sudo-abuse" for action in target["next"])
+
+    activity = cx.get("/api/engagement/activity", headers=H).json()
+    by_cat = {category["id"]: category for category in activity["findings"]}
+    assert "privesc" in by_cat
+    assert any(f["kind"] == "privesc.sudo_rights" for f in by_cat["privesc"]["findings"])
+
+
 def test_login_flow_opens_session_and_bundle_surfaces_it(cx, monkeypatch):
     """§6a over the web: a login validates access through the shared runner, records
     a live session, and the target bundle surfaces sessions + eligible logins. The

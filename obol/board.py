@@ -104,6 +104,8 @@ _NOTABLE = [
     ("access.admin", "access  administrative access"),
     ("access.system", "access  SYSTEM"),
     ("foothold.windows", "access  Windows foothold"),
+    ("foothold.linux", "access  Linux foothold"),
+    ("privesc.leads", "privesc local escalation leads"),
     ("loot.ntds", "loot    NTDS secrets"),
 ]
 
