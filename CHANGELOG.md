@@ -52,6 +52,18 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
   by its strongest signal, dedupes, and returns the top findings. PowerUp and other
   interactive tools are staged + guided, not auto-run. `obol enum <tool> [host]` and
   web `GET /api/enum/tools`, `POST /api/run/enum`.
+- Added the **listener layer** (§8 fourth slice, closing the §6a reverse-shell gap):
+  `obol/listeners.py` catches a reverse shell back to obol. A listener is **live
+  state** (new `Workspace.listeners` + SQLite `listeners` table, status listening/
+  caught/closed). `start_listener` records one and hands back the exact listen command
+  (penelope default; nc/rlwrap or an msf handler as fallbacks) plus a matching
+  reverse-shell payload set for the target OS; `record_catch` flips it to caught and,
+  **only when given the shell's `id`/`whoami` output**, records the access fact from
+  that proof and registers a live `revshell` session — never invents access from the
+  listener's existence. Reverse-shell one-liners live as data
+  (`obol/payloads/reverse_shells.json`), reused by the exploit tier. `obol listener
+  start|catch|close|rm|list` and web `GET /api/listeners`, `POST
+  /api/listener/{start,catch,close}`, `DELETE /api/listener`.
 - Added a self-contained offline path graph for the static `obol web` snapshot
   (`graph.build_graph_svg`): the one-file snapshot now renders the shared graph model
   as inline SVG phase columns — no script, web font, or CDN — so its path graph works

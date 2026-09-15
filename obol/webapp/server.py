@@ -37,8 +37,9 @@ from pathlib import Path
 from typing import Optional
 
 from .. import (board, bloodhound, discovery, enumrun as enum_layer, library,
-                provision as material_cache, sessions as session_layer,
-                staging as staging_layer, tools as tool_inventory, tunnels as tunnel_layer)
+                listeners as listener_layer, provision as material_cache,
+                sessions as session_layer, staging as staging_layer, tools as tool_inventory,
+                tunnels as tunnel_layer)
 from ..sessions import SessionError
 from ..tunnels import TunnelError
 from ..graph import (
@@ -1470,6 +1471,56 @@ def create_app(base, *, token: Optional[str] = None):
             except RunnerError as exc:
                 raise HTTPException(400, str(exc))
         return res
+
+    # ── listeners (catch a reverse shell back to obol) ────────────────────────
+    @app.get("/api/listeners")
+    def api_listeners():
+        ws = active()
+        return {"listeners": ws.listeners, "kinds": [k.key for k in listener_layer.LISTENER_KINDS]}
+
+    @app.post("/api/listener/start")
+    def api_listener_start(payload: dict = Body(...)):
+        port = int((payload or {}).get("port", 0) or 0)
+        kind = (payload or {}).get("kind", "penelope")
+        os_name = (payload or {}).get("os", "linux")
+        host = (payload or {}).get("host", "")
+        lhost = (payload or {}).get("lhost", "")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return listener_layer.start_listener(ws, port, kind=kind, lhost=lhost,
+                                                     host=host, os_name=os_name)
+            except listener_layer.ListenerError as exc:
+                raise HTTPException(400, str(exc))
+
+    @app.post("/api/listener/catch")
+    def api_listener_catch(payload: dict = Body(...)):
+        lid = (payload or {}).get("id", "")
+        host = (payload or {}).get("host", "")
+        proof = (payload or {}).get("proof", "")
+        with _RUN_LOCK:
+            ws = active()
+            try:
+                return listener_layer.record_catch(ws, lid, host=host, proof_output=proof)
+            except listener_layer.ListenerError as exc:
+                raise HTTPException(400, str(exc))
+
+    @app.post("/api/listener/close")
+    def api_listener_close(payload: dict = Body(...)):
+        lid = (payload or {}).get("id", "")
+        with _RUN_LOCK:
+            ws = active()
+            if not listener_layer.close_listener(ws, lid):
+                raise HTTPException(404, f"no listener {lid!r}")
+        return {"ok": True}
+
+    @app.delete("/api/listener")
+    def api_listener_remove(id: str = Query(...)):
+        with _RUN_LOCK:
+            ws = active()
+            if not listener_layer.remove_listener(ws, id):
+                raise HTTPException(404, f"no listener {id!r}")
+        return {"ok": True, "id": id}
 
     @app.delete("/api/staged")
     def api_staged_rm(id: str = Query(...)):

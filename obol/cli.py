@@ -12,8 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import (__version__, board, discovery, enumrun, library, provision, quickstart,
-               service, sessions, staging, tunnels)
+from . import (__version__, board, discovery, enumrun, library, listeners, provision,
+               quickstart, service, sessions, staging, tunnels)
 from .facts import Fact, ProofState
 from .pack import friendly, load_packs, next_actions
 from .pivot import engagement_pivots, pivot_summary
@@ -1058,6 +1058,52 @@ def cmd_enum(args) -> None:
         print("no ranked findings — review the raw run output under .obol/runs/.")
 
 
+def cmd_listener(args) -> None:
+    """Manage reverse-shell listeners (live catch-a-shell state)."""
+    ws = _load_or_exit()
+    cmd = getattr(args, "listener_cmd", "list")
+    if cmd == "start":
+        try:
+            res = listeners.start_listener(ws, args.port, kind=args.kind, lhost=args.lhost,
+                                           host=args.target, os_name=args.os)
+        except listeners.ListenerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        ln = res["listener"]
+        print(f"{board.SYM_OK} listener {ln['id']} ({ln['kind']}) recorded — run it in a terminal:")
+        print(f"   $ {res['listen_command']}")
+        print(f"\nfire one of these on the {args.os} target (lhost {ln['lhost']}, lport {ln['port']}):")
+        for p in res["payloads"]:
+            print(f"   [{p['name']}] {p['command']}")
+        print(f"\nwhen it lands: obol listener catch {ln['id']} --host <target> --proof \"$(id)\"")
+        return
+    if cmd == "catch":
+        try:
+            res = listeners.record_catch(ws, args.id, host=args.host, proof_output=args.proof)
+        except listeners.ListenerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        if res["proof_fact"]:
+            print(f"{board.SYM_OK} caught + proved {res['proof_fact']} — session recorded.")
+        else:
+            print(f"{board.SYM_OK} marked caught (no proof output given — no fact recorded).")
+        return
+    if cmd in ("close", "rm"):
+        ok = listeners.close_listener(ws, args.id) if cmd == "close" else listeners.remove_listener(ws, args.id)
+        if not ok:
+            print(f"no listener {args.id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"{'closed' if cmd == 'close' else 'removed'} {args.id}")
+        return
+    # default: list
+    if not ws.listeners:
+        print("no listeners yet. start one with `obol listener start <port>`.")
+        return
+    print(f"{'ID':<20} {'KIND':<10} {'PORT':<6} {'STATUS':<10} LHOST")
+    for ln in ws.listeners:
+        print(f"{ln['id']:<20} {ln['kind']:<10} {ln['port']:<6} {ln['status']:<10} {ln.get('lhost', '')}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="obol",
@@ -1231,6 +1277,26 @@ try:
     penum.add_argument("tool", choices=list(enumrun.ENUM_TOOLS.keys()), help="enum tool")
     penum.add_argument("target", nargs="?", default="", help="foothold host (default: active target)")
     penum.set_defaults(func=cmd_enum)
+    plistener = sub.add_parser("listener", help="manage reverse-shell listeners (catch a shell back to obol)")
+    listener_sub = plistener.add_subparsers(dest="listener_cmd")
+    listener_sub.add_parser("list", help="list listeners").set_defaults(func=cmd_listener, listener_cmd="list")
+    l_start = listener_sub.add_parser("start", help="record a listener and get the listen command + payloads")
+    l_start.add_argument("port", type=int, help="listen port")
+    l_start.add_argument("--kind", default="penelope", choices=[k.key for k in listeners.LISTENER_KINDS])
+    l_start.add_argument("--lhost", default="", help="callback IP (default: auto-detect tun0/OBOL_LHOST)")
+    l_start.add_argument("--os", default="linux", choices=["linux", "windows"], help="target OS for the payload set")
+    l_start.add_argument("--target", default="", help="associate with a target host")
+    l_start.set_defaults(func=cmd_listener, listener_cmd="start")
+    l_catch = listener_sub.add_parser("catch", help="mark a listener as having caught a shell (record proof)")
+    l_catch.add_argument("id", help="listener id (see `obol listener`)")
+    l_catch.add_argument("--host", required=True, help="the target the shell came from")
+    l_catch.add_argument("--proof", default="", help="the shell's id/whoami output (records the access fact)")
+    l_catch.set_defaults(func=cmd_listener, listener_cmd="catch")
+    for name, helptext in (("close", "mark a listener closed"), ("rm", "remove a listener record")):
+        lp = listener_sub.add_parser(name, help=helptext)
+        lp.add_argument("id", help="listener id (see `obol listener`)")
+        lp.set_defaults(func=cmd_listener, listener_cmd=name)
+    plistener.set_defaults(func=cmd_listener, listener_cmd="list")
     sub.add_parser("staged", help="list material staged onto footholds").set_defaults(func=cmd_staged, staged_cmd="list")
     pstaged = sub.add_parser("unstage", help="remove a staged-material record (does not delete the file on the target)")
     pstaged.add_argument("id", help="staged record id (see `obol staged`)")

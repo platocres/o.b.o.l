@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS staged (
     updated_at REAL,
     data       TEXT
 );
+CREATE TABLE IF NOT EXISTS listeners (
+    id         TEXT PRIMARY KEY,
+    updated_at REAL,
+    data       TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts     REAL,
@@ -205,6 +210,8 @@ class Store:
                        conn.execute("SELECT data FROM tunnels ORDER BY updated_at, rowid")]
             staged = [json.loads(r["data"]) for r in
                       conn.execute("SELECT data FROM staged ORDER BY updated_at, rowid")]
+            listeners = [json.loads(r["data"]) for r in
+                         conn.execute("SELECT data FROM listeners ORDER BY updated_at, rowid")]
         finally:
             conn.close()
         return {
@@ -222,6 +229,7 @@ class Store:
             "sessions": sessions,
             "tunnels": tunnels,
             "staged": staged,
+            "listeners": listeners,
         }
 
     def data_version(self, conn: sqlite3.Connection | None = None) -> int:
@@ -267,7 +275,8 @@ class Store:
                   persisted_run_ids: set[str], deleted_targets: set[str],
                   deleted_evidence: set[str], deleted_sessions: set[str] = frozenset(),
                   deleted_tunnels: set[str] = frozenset(),
-                  deleted_staged: set[str] = frozenset()) -> list[dict]:
+                  deleted_staged: set[str] = frozenset(),
+                  deleted_listeners: set[str] = frozenset()) -> list[dict]:
         """Persist the in-memory engagement state in a single transaction, writing
         only what changed and never clobbering another process's concurrent rows.
 
@@ -482,6 +491,30 @@ class Store:
                     "target": sf.get("host", ""),
                     "detail": {"id": fid, "material": sf.get("material", ""),
                                "status": sf.get("status", "")},
+                })
+
+            # listeners (live catch-a-shell state: upsert by id) -------------------
+            for lid in deleted_listeners:
+                conn.execute("DELETE FROM listeners WHERE id=?", (lid,))
+                events.append({"type": "listener_removed", "target": "", "detail": {"id": lid}})
+            for ln in payload.get("listeners", []):
+                lid = ln.get("id")
+                if not lid:
+                    continue
+                new_data = json.dumps(ln, default=str)
+                row = conn.execute("SELECT data FROM listeners WHERE id=?", (lid,)).fetchone()
+                if row is not None and row["data"] == new_data:
+                    continue  # unchanged — no write, no event
+                conn.execute(
+                    "INSERT INTO listeners(id, updated_at, data) VALUES(?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data",
+                    (lid, ln.get("updated_at", time.time()), new_data),
+                )
+                events.append({
+                    "type": "listener_added" if row is None else "listener_updated",
+                    "target": ln.get("host", ""),
+                    "detail": {"id": lid, "kind": ln.get("kind", ""),
+                               "port": ln.get("port", 0), "status": ln.get("status", "")},
                 })
 
             # change feed ------------------------------------------------------

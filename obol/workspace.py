@@ -88,6 +88,7 @@ class Workspace:
         self.sessions: list[dict] = []   # [{id, host, kind, status, user, login_command, ...}]
         self.tunnels: list[dict] = []    # [{id, host, kind, transport, status, exposed_subnet, ...}]
         self.staged: list[dict] = []     # [{id, host, material, remote_path, status, ...}] — §8 staged material
+        self.listeners: list[dict] = []  # [{id, kind, port, status, host, ...}] — §8 reverse-shell listeners
         # persistence bookkeeping: what is already on disk, and what this session
         # has explicitly removed (so save() writes only diffs and never resurrects
         # or clobbers rows another process wrote).
@@ -98,6 +99,7 @@ class Workspace:
         self._deleted_sessions: set[str] = set()
         self._deleted_tunnels: set[str] = set()
         self._deleted_staged: set[str] = set()
+        self._deleted_listeners: set[str] = set()
 
     # ---- persistence ---------------------------------------------------------
     @property
@@ -145,12 +147,14 @@ class Workspace:
             deleted_sessions=self._deleted_sessions,
             deleted_tunnels=self._deleted_tunnels,
             deleted_staged=self._deleted_staged,
+            deleted_listeners=self._deleted_listeners,
         )
         self._deleted_targets.clear()
         self._deleted_evidence.clear()
         self._deleted_sessions.clear()
         self._deleted_tunnels.clear()
         self._deleted_staged.clear()
+        self._deleted_listeners.clear()
 
     # ---- JSON interchange (export / import / migration) ----------------------
     def to_payload(self) -> dict:
@@ -172,6 +176,7 @@ class Workspace:
             "sessions": self.sessions,
             "tunnels": self.tunnels,
             "staged": self.staged,
+            "listeners": self.listeners,
         }
 
     def apply_payload(self, data: dict) -> "Workspace":
@@ -195,6 +200,7 @@ class Workspace:
         self.sessions = list(data.get("sessions", []))
         self.tunnels = list(data.get("tunnels", []))
         self.staged = list(data.get("staged", []))
+        self.listeners = list(data.get("listeners", []))
         self._persisted_fact_hashes = {
             fact_hash(f.kind, f.scope, f.value) for f in self.facts.facts
         }
@@ -555,6 +561,46 @@ class Workspace:
             return False
         self.staged.remove(rec)
         self._deleted_staged.add(fid)
+        return True
+
+    # ---- listeners (live catch-a-shell state, not facts) ---------------------
+    # A listener is a reverse-shell catcher obol has the operator run on Kali. Like a
+    # session or tunnel it is live state with a mutable status (listening/caught/
+    # closed). Only the access a caught shell proves (from captured output) is a fact.
+    def get_listener(self, lid: str) -> dict | None:
+        for ln in self.listeners:
+            if ln.get("id") == lid:
+                return ln
+        return None
+
+    def add_listener(self, *, kind: str, port: int, lhost: str = "", host: str = "",
+                     status: str = "listening", listen_command: str = "", label: str = "") -> dict:
+        now = time.time()
+        lid = f"lsn{int(now * 1000)}_{len(self.listeners)}"
+        rec = {
+            "id": lid, "kind": kind, "port": port, "lhost": lhost,
+            "host": normalize_target(host) if host else "", "status": status,
+            "listen_command": listen_command, "label": label or f"{kind}:{port}",
+            "created_at": now, "updated_at": now,
+        }
+        self.listeners.append(rec)
+        self._deleted_listeners.discard(lid)
+        return rec
+
+    def update_listener(self, lid: str, **fields) -> dict | None:
+        rec = self.get_listener(lid)
+        if not rec:
+            return None
+        rec.update(fields)
+        rec["updated_at"] = time.time()
+        return rec
+
+    def remove_listener(self, lid: str) -> bool:
+        rec = self.get_listener(lid)
+        if not rec:
+            return False
+        self.listeners.remove(rec)
+        self._deleted_listeners.add(lid)
         return True
 
     # ---- activity ledger -----------------------------------------------------
