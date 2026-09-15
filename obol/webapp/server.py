@@ -1532,6 +1532,28 @@ def create_app(base, *, token: Optional[str] = None):
         h = host or ws.target or ""
         return {"host": h, "moves": [m.to_dict() for m in moves_layer.frontier_moves(ws, h)]}
 
+    @app.post("/api/move/run")
+    def api_move_run(payload: dict = Body(...)):
+        """Run one frontier move by id through its shared primitive (cruise pillars
+        I→II). Fact-gated: a move not currently offered/ready is a 400. Exploits are
+        crafted, never fired (the dispatcher's manual/approval posture)."""
+        from .. import dispatch
+        move_id = (payload or {}).get("id", "")
+        if not move_id:
+            raise HTTPException(422, "a move id is required")
+        host = (payload or {}).get("host", "")
+        dry_run = bool((payload or {}).get("dry_run", False))
+        approve = bool((payload or {}).get("approve", False))
+        params = (payload or {}).get("params", {}) or {}
+        with _RUN_LOCK:
+            ws = active()
+            h = host or ws.target or ""
+            try:
+                return dispatch.run_move(ws, move_id, host=h, dry_run=dry_run,
+                                         approve=approve, params=params, surface="web")
+            except dispatch.DispatchError as exc:
+                raise HTTPException(400, str(exc))
+
     # ── exploit tier (applicability-gated privesc + crafted commands) ─────────
     @app.get("/api/exploits")
     def api_exploits(host: str = Query(...)):

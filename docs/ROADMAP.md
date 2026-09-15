@@ -31,9 +31,18 @@ pillars:
   live actions with the login/enum/exploit/tunnel offers into one fact-gated,
   phase-ranked `Move` list (escalate/pivot moves gated on a proven foothold), surfaced as
   `obol moves [host] [--all]` and `GET /api/moves`. It enumerates and ranks only.
-  **Still open:** fold it into `obol next`/the web "next" surface, add the remaining
-  primitives as moves (listeners; staging as a sub-step of enum/exploit/tunnel), and give
-  each `Move` the execution handle pillar II's dispatcher will call.
+  The **execution handle** then landed alongside it: `obol/dispatch.py` —
+  `run_move(ws, id)` runs one frontier move by id through its existing shared primitive
+  (`service.run_action` / `sessions` / `enumrun` / `tunnels` / `exploits`), fact-gated (a
+  move must be offered *and* ready) and posture-tagged (`ran`/`dry-run`/`handoff`/`craft`
+  — the seed of pillar II's stop-contract), with exploits crafted, never auto-fired.
+  `obol do <id>` and `POST /api/move/run`. So a move can now be both *listed* and *run*
+  uniformly by id — the two calls `obol cruise` needs.
+  **Still open:** fold the frontier into `obol next`/the web "next" surface, add the
+  remaining primitives as moves (listeners; staging as a sub-step of enum/exploit/tunnel),
+  and classify per-move execution posture from data (which actions are noisy) so the
+  dispatcher's `approve` gate and cruise's checkpoints are driven by methodology, not
+  hardcoded.
 - **(II) Cruise control (`obol cruise`) — advance with a stop-contract.** A loop that
   repeatedly takes the top-ranked move, runs it through the one shared scope-enforced
   runner, re-parses, re-ranks, and continues **until a checkpoint**, in priority order:

@@ -251,8 +251,15 @@ obol/
                  fact-gated, phase-ranked list of candidate moves per host. Enumerates
                  and ranks only (never runs, produces no facts); the frontier `obol
                  cruise` will drive. `frontier_moves(ws, host)` -> [Move]
+  dispatch.py    move execution handle (cruise pillar I->II): run_move(ws, id) runs one
+                 frontier move by id through its existing shared primitive
+                 (service.run_action / sessions / enumrun / tunnels / exploits) — the
+                 uniform "run this move" call obol cruise will make, so the loop never
+                 branches per kind. Fact-gated (a move must be offered+ready to run) and
+                 posture-tagged (ran/dry-run/handoff/craft — the stop-contract seed);
+                 exploits are crafted, never auto-fired
   cli.py         subcommands: init / engagement / target / profile / scope / scan /
-                 overview / moves / next / explain / run / playbook(s) / sweep / login /
+                 overview / moves / do / next / explain / run / playbook(s) / sweep / login /
                  sessions / session / facts / report / serve / web / debug, plus
                  help/manual/version/info
   quickstart.py  shared nmap-first Quick Start action order + terminal runner used
