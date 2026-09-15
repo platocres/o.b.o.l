@@ -1,0 +1,7 @@
+$ curl -si 'http://api.corp.local/v2/account' \
+    -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJ1c2VyIjoiZ3Vlc3QiLCJyb2xlIjoiYWRtaW4ifQ.'
+HTTP/1.1 200 OK
+Server: Werkzeug/2.3.7 Python/3.11
+Content-Type: application/json
+
+{"user":"guest","role":"admin","isAdmin":true,"quota":"unlimited"}

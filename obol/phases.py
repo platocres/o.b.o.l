@@ -53,7 +53,8 @@ _PHASE_RULES: list[tuple[str, str]] = [
     ("vuln.", "escalate"), ("exploit.candidate", "escalate"),
     ("web.lfi_confirmed", "escalate"), ("web.sqli_confirmed", "escalate"),
     ("web.cmdi_confirmed", "escalate"), ("web.ssrf_confirmed", "escalate"),
-    ("web.upload_confirmed", "escalate"),
+    ("web.upload_confirmed", "escalate"), ("web.nosqli_confirmed", "escalate"),
+    ("web.jwt_secret", "creds"), ("web.authz_bypass", "escalate"),
     ("loot.", "loot"), ("persistence.", "loot"), ("db.creds", "loot"),
     ("cloud.", "loot"), ("config.", "loot"),
 ]

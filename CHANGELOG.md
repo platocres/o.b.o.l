@@ -7,6 +7,34 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added **Manual Web-Exploitation Success-Signal Parsers v2** (ROADMAP item 1 / §11):
+  the remaining explain-only Orange web cards now record proof-bound facts from a
+  hand-driven curl's *output shape*, each mapped to its narrowest fact and
+  test-locked against overclaim.
+  - **NoSQL injection** (`nosql-injection`) → `web.nosqli_confirmed`, recorded only
+    when **both** an operator payload (`[$ne]`, `{"$ne":…}`) is in the request **and**
+    an authentication-success shape is in the response (a `success`/`token` flag, or a
+    session cookie paired with a redirect to a logged-in area). A bypassed application
+    login is *web-app* authorization — never OS `access.admin`, a plaintext credential,
+    or a shell.
+  - **JWT attacks** (`jwt-attacks`): a recovered HMAC signing secret (jwt_tool
+    "is the CORRECT key", a hashcat `token:secret` crack) → `web.jwt_secret` plus a
+    `credential.candidate` of kind `jwt_signing_secret` — candidate *material* that
+    forges tokens, not a user's plaintext login or OS access; and a forged token
+    accepted (an `alg:none`/tampered token answered with an admin/authenticated
+    response) → `web.authz_bypass` (a web authorization bypass, not OS `access.admin`).
+  - **Insecure deserialization / Tomcat WAR deploy / Jenkins script console**
+    (`deserialization`, `tomcat-deploy`, `jenkins-access`) share the command-output
+    proof shape, so they now feed the existing `web.cmdi_confirmed` parser with a
+    distinct `method` — confirmed from captured `uid=…`/`nt authority\system` output,
+    never promoted to a caught interactive shell, a foothold, or admin/SYSTEM.
+  Wired friendly labels (`pack.friendly`), phase mapping (`phases.py`: the confirmed
+  web-RCE/bypass kinds rank in *escalate*, a recovered JWT secret in *creds*), added
+  golden fixtures to the manifest corpus, and a `tests/test_web_exploit_parsers_v2.py`
+  suite with positive and anti-overclaim cases (an operator payload with no success,
+  a valid login with no operator, a rejected forged token, a decode-only JWT run, a
+  reflected-but-not-executed payload). Still explain-only, as follow-ups: IDOR, XSS,
+  WordPress, and XXE's remaining branches.
 - Roadmap: added **§12 Phase playbooks & runbooks** — a design for phase-scoped, one-click,
   context-suggested runbooks per target, with all playbooks browsable/selectable in a
   dedicated site section and full terminal parity. Builds on the item-2 phase model

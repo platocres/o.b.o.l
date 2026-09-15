@@ -215,6 +215,57 @@ _IMDS_MARKER_RE = re.compile(
 _AWS_KEY_RE = re.compile(r'"AccessKeyId"\s*:\s*"(?P<akid>(?:AKIA|ASIA)[A-Z0-9]{8,})"')
 _AWS_SECRET_RE = re.compile(r'"SecretAccessKey"\s*:\s*"(?P<secret>[^"\n]{8,})"')
 _AWS_TOKEN_RE = re.compile(r'"Token"\s*:\s*"(?P<token>[^"\n]{16,})"')
+# --- NoSQL injection (nosql-injection card) --------------------------------- #
+# A NoSQL operator injection is confirmed only when BOTH sides are present: an
+# operator payload in the request AND an authentication-success shape in the
+# response. A `[$ne]` payload that just re-renders the login page is not a bypass.
+_NOSQL_OP_RE = re.compile(
+    r"\[\$(?:ne|gt|gte|lt|lte|regex|in|nin|where|exists)\]"
+    r'|"\$(?:ne|gt|gte|lt|lte|regex|in|nin|where|expr|function)"'
+    r"|%5[Bb]%24(?:ne|gt|gte|lt|lte|regex|in|nin|where)%5[Dd]",
+    re.IGNORECASE,
+)
+_NOSQL_SUCCESS_RE = re.compile(
+    r'"(?:success|authenticated|isAdmin|admin|loggedin|logged_in)"\s*:\s*true'
+    r'|"(?:token|jwt|session|auth_token|accessToken)"\s*:\s*"[^"\n]{8,}"'
+    r'|\bLogin successful\b|\bWelcome back\b|\bAuthentication succeeded\b',
+    re.IGNORECASE,
+)
+_SET_COOKIE_SESSION_RE = re.compile(
+    r"^Set-Cookie:\s*(?:session|connect\.sid|token|auth|PHPSESSID|jwt|jsessionid)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_LOGIN_REDIRECT_RE = re.compile(
+    r"^Location:\s*\S*/(?:admin|dashboard|home|profile|account|portal|welcome)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+# --- JWT attacks (jwt-attacks card) ----------------------------------------- #
+# jwt_tool / hashcat recover a weak HMAC signing secret. That secret is candidate
+# MATERIAL (it forges tokens) — never a user's plaintext login or OS access.
+_JWT_TOOL_KEY_RE = re.compile(
+    r"(?P<secret>\S{1,64})\s+is the CORRECT key"
+    r"|(?:key confirmed|correct key|signing key(?:\s+found)?)\s*[:=]\s*['\"]?(?P<secret2>\S{1,64})",
+    re.IGNORECASE,
+)
+# hashcat mode-16500 cracked line: `<full.jwt.token>:<secret>`.
+_JWT_HASHCAT_RE = re.compile(r"^ey[A-Za-z0-9_-]+\.ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+:(?P<secret>\S+)\s*$", re.MULTILINE)
+# A forged/tampered token: an unsigned `alg:none` token (raw or base64) or a
+# jwt_tool tamper/exploit flag in the request.
+_JWT_FORGE_RE = re.compile(
+    r'"alg"\s*:\s*"none"'
+    # base64 fragment shared by `{"alg":"none"}` and `{"typ":"JWT","alg":"none"}`
+    r"|hbGciOiJub25l"
+    r"|-X\s+a\b|--exploit\s+a\b|-I\s+-pc\b",
+    re.IGNORECASE,
+)
+# A privileged/authenticated response that proves the forged token was accepted.
+_WEB_AUTHZ_SUCCESS_RE = re.compile(
+    r'"(?:isAdmin|is_admin|admin)"\s*:\s*(?:true|"?admin(?:istrator)?"?)'
+    r'|"role"\s*:\s*"admin(?:istrator)?"'
+    r'|\bWelcome,?\s+admin(?:istrator)?\b'
+    r'|\bAdmin(?:istrator)?\s+(?:Dashboard|Panel|Console|Area)\b',
+    re.IGNORECASE,
+)
 _NIKTO_NOISE_PREFIXES = (
     "target ip", "target hostname", "target port", "start time", "end time",
     "server:", "ssl info", "root page", "retrieved", "no cgi", "scan terminated",
@@ -286,11 +337,20 @@ _WINDOWS_PRIVESC_ACTION_IDS = _PRIVESC_ACTION_IDS - _LINUX_PRIVESC_ACTION_IDS
 # action id (not just curl in the command) keeps generic web reads from being
 # misread as confirmed exploitation.
 _WEB_LFI_ACTION_IDS = {"lfi-probe", "xxe"}
-_WEB_CMDI_ACTION_IDS = {"command-injection", "ssti", "web-shells", "file-upload", "verb-tampering"}
+# Deserialization, Tomcat WAR deploy, and Jenkins script-console RCE all prove
+# themselves the same way command injection does — captured command output — so
+# they share the cmdi success-signal parser with a distinct method label.
+_WEB_CMDI_ACTION_IDS = {
+    "command-injection", "ssti", "web-shells", "file-upload", "verb-tampering",
+    "deserialization", "tomcat-deploy", "jenkins-access",
+}
 _WEB_SQLI_ACTION_IDS = {"sqli-basics"}
 _WEB_SSRF_ACTION_IDS = {"ssrf", "xxe"}
+_WEB_NOSQLI_ACTION_IDS = {"nosql-injection"}
+_WEB_JWT_ACTION_IDS = {"jwt-attacks"}
 _WEB_EXPLOIT_ACTION_IDS = (
-    _WEB_LFI_ACTION_IDS | _WEB_CMDI_ACTION_IDS | _WEB_SQLI_ACTION_IDS | _WEB_SSRF_ACTION_IDS
+    _WEB_LFI_ACTION_IDS | _WEB_CMDI_ACTION_IDS | _WEB_SQLI_ACTION_IDS
+    | _WEB_SSRF_ACTION_IDS | _WEB_NOSQLI_ACTION_IDS | _WEB_JWT_ACTION_IDS
 )
 _AD_ABUSE_ACTION_IDS = {
     "bloodyad-acl", "ad-acl-abuse", "delegation-abuse", "getst-impersonation",
@@ -2731,6 +2791,10 @@ def _parse_web_exploit_output(
         _parse_web_sqli_manual(text, ws, source, facts)
     if action_id in _WEB_SSRF_ACTION_IDS:
         _parse_web_ssrf(action_id, text, ws, command, source, facts)
+    if action_id in _WEB_NOSQLI_ACTION_IDS:
+        _parse_web_nosqli(text, ws, command, source, facts)
+    if action_id in _WEB_JWT_ACTION_IDS:
+        _parse_web_jwt(text, ws, command, source, facts)
 
 
 def _php_filter_source(text: str) -> bytes:
@@ -2847,6 +2911,9 @@ def _parse_web_cmdi(
         "ssti": "template_injection",
         "web-shells": "web_shell",
         "file-upload": "uploaded_web_shell",
+        "deserialization": "insecure_deserialization",
+        "tomcat-deploy": "tomcat_war_deploy",
+        "jenkins-access": "jenkins_script_console",
     }.get(action_id, action_id)
 
     uid = _CMDI_UID_RE.search(text)
@@ -2948,3 +3015,97 @@ def _parse_web_ssrf(
         if token:
             cred["session_token"] = token.group("token")
         _add(facts, Fact("credential.candidate", host, cred, ProofState.SUPPORTED, source))
+
+
+def _parse_web_nosqli(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """Manual NoSQL-operator injection confirmation (nosql-injection card).
+
+    Proof requires BOTH sides: a NoSQL operator payload (``[$ne]``, ``{"$ne":…}``)
+    in the request AND an authentication-success shape in the response — a success
+    flag / token in the body, or a session cookie paired with a redirect to a
+    logged-in area. A bypassed application login is *web-app* authorization, not
+    OS ``access.admin``; nothing here is a plaintext credential or a shell. The
+    pack card declares broader produces on purpose (aspirational); the parser
+    records only the narrow, proven fact.
+    """
+    if not _NOSQL_OP_RE.search(command):
+        return
+    success = _NOSQL_SUCCESS_RE.search(text)
+    redirect = _LOGIN_REDIRECT_RE.search(text)
+    cookie = _SET_COOKIE_SESSION_RE.search(text)
+    if success:
+        evidence = _line_for_match(text, success)
+    elif redirect and cookie:
+        evidence = _line_for_match(text, redirect)
+    else:
+        return
+    _add(
+        facts,
+        Fact(
+            "web.nosqli_confirmed",
+            f"host:{ws.target}",
+            {"method": "operator_injection", "vector": "authentication_bypass", "evidence": evidence},
+            ProofState.SUPPORTED,
+            source,
+        ),
+    )
+
+
+def _parse_web_jwt(text: str, ws: Workspace, command: str, source: str, facts: list[Fact]) -> None:
+    """JWT attack success signals (jwt-attacks card).
+
+    Two proven shapes, each mapped to its narrowest fact:
+
+    * A **recovered HMAC signing secret** (jwt_tool "is the CORRECT key", a
+      hashcat ``token:secret`` crack) → ``web.jwt_secret`` plus a
+      ``credential.candidate`` of kind ``jwt_signing_secret``. The secret forges
+      tokens, so it is candidate *material* — never a user's plaintext login or
+      OS access.
+    * A **forged token accepted** (an ``alg:none``/tampered token in the request
+      answered with an admin/authenticated response) → ``web.authz_bypass``. That
+      is a web-app authorization bypass, not OS ``access.admin``.
+    """
+    host = f"host:{ws.target}"
+    secret = ""
+    key = _JWT_TOOL_KEY_RE.search(text)
+    if key:
+        secret = key.group("secret") or key.group("secret2") or ""
+    if not secret:
+        cracked = _JWT_HASHCAT_RE.search(text)
+        if cracked:
+            secret = cracked.group("secret")
+    if secret:
+        _add(
+            facts,
+            Fact(
+                "web.jwt_secret",
+                host,
+                {"secret": secret, "algorithm": "HMAC", "tool": "jwt-crack"},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+        _add(
+            facts,
+            Fact(
+                "credential.candidate",
+                host,
+                {"kind": "jwt_signing_secret", "secret": secret},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )
+
+    forged = _JWT_FORGE_RE.search(command) or _JWT_FORGE_RE.search(text)
+    accepted = _WEB_AUTHZ_SUCCESS_RE.search(text)
+    if forged and accepted:
+        _add(
+            facts,
+            Fact(
+                "web.authz_bypass",
+                host,
+                {"method": "jwt", "vector": "forged_token", "evidence": _line_for_match(text, accepted)},
+                ProofState.SUPPORTED,
+                source,
+            ),
+        )

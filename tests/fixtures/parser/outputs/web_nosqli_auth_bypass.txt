@@ -1,0 +1,10 @@
+$ curl -si 'http://shop.local/api/session/login' \
+    -H 'Content-Type: application/json' \
+    --data '{"username":{"$ne":null},"password":{"$ne":null}}'
+HTTP/1.1 200 OK
+Server: Express
+Content-Type: application/json; charset=utf-8
+Set-Cookie: connect.sid=s%3Aqz9f1a3c8e7b2d0f4a6c.9K1lMnOpQrStUvWx; Path=/; HttpOnly
+X-Powered-By: Express
+
+{"success":true,"user":{"id":41,"role":"member"},"token":"eyJhbGciOiJIUzI1NiJ9.session.placeholder"}

