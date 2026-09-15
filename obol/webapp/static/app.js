@@ -649,6 +649,7 @@ function tabOverview(b) {
       <div class="card"><div class="panel-h"><h2>Where we are</h2></div><div class="muted">Phase: <b style="color:var(--text)">${esc(PHASE_LABEL[b.phase] || b.phase)}</b> · Access: <b style="color:var(--text)">${esc((ACCESS[b.access] || {}).t || b.access)}</b> · OS: <b style="color:var(--text)">${esc(b.meta.os || "unknown")}</b></div><div class="muted" style="margin-top:6px">${b.next.length} live moves · ${b.findings.length} findings · ${b.facts_total || 0} facts</div></div>
     </div>
     ${sessionsCard(b)}
+    ${pivotCard(b)}
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Useful facts</h2><span class="muted">operator memory and report source</span></div>${factsSummaryHtml(b.facts_summary)}</div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Path</h2></div><div class="flow-scroll">${flowSVG(b.graph)}</div></div>
     <div class="card" style="margin-top:16px"><div class="panel-h"><h2>Next moves — run from here</h2><span class="muted mono">${b.next.length}</span></div>${groups}</div>`;
@@ -682,6 +683,22 @@ function sessionsCard(b) {
     <div class="row" style="gap:6px;flex-wrap:wrap">${offers}</div>
     ${sessions.length ? `<div class="sess-list" style="margin-top:12px">${rows}</div>` : ""}
     <div class="muted" style="margin-top:10px;font-size:11px">obol validates access non-interactively, then hands you the ready-to-paste interactive command to run in your terminal.</div></div>`;
+}
+// ── pivot candidates (§6c: multi-homed + adjacent-subnet leads) ──────────────
+function pivotCard(b) {
+  const p = b.pivots;
+  if (!p || p.empty) return "";
+  const subs = (p.subnets || []).map((s) =>
+    `<span class="pill mono" title="${s.in_scope ? "already in scope" : "not yet in scope — a proven tunnel would authorize it"}">${esc(s.cidr)}${s.in_scope ? "" : ` <span class="muted">· not in scope</span>`}</span>`).join("");
+  const reasons = (p.reasons || []).length ? `<div class="muted" style="margin-top:6px;font-size:12px">${esc((p.reasons || []).join(" · "))}</div>` : "";
+  const dns = (p.dns_servers || []).length ? `<div class="muted" style="margin-top:6px;font-size:12px">internal DNS: ${p.dns_servers.map((d) => `<span class="mono">${esc(d)}</span>`).join(", ")}</div>` : "";
+  const head = p.multihomed
+    ? `multi-homed — ${p.interface_count} interfaces`
+    : "adjacent subnet lead";
+  return `<div class="card" style="margin-top:16px"><div class="panel-h"><h2>Pivot candidates</h2><span class="muted">${esc(head)}</span></div>
+    ${subs ? `<div class="row" style="gap:6px;flex-wrap:wrap">${subs}</div>` : `<div class="muted">Local enumeration found a pivot lead but no candidate subnet.</div>`}
+    ${reasons}${dns}
+    <div class="muted" style="margin-top:10px;font-size:11px">Candidate networks reachable from this foothold — not proven reachable through a working tunnel yet. Building a tunnel here would extend scope to an authorized candidate.</div></div>`;
 }
 async function runLogin(host, kind, method) {
   if (!host || !kind) return;

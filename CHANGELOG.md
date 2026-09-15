@@ -7,6 +7,17 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Surfaced post-foothold pivot candidates (§6c): a read-only projection
+  (`obol/pivot.py`) lifts the already-parsed `host.multihomed`,
+  `network.subnet_candidate`, and `pivot.candidate` lead facts into a single
+  "where you could pivot next" view — multi-homed status and the candidate
+  adjacent subnets, each tagged with whether it is already in scope (what a proven
+  tunnel would auto-extend). Shown on the web target Overview (a Pivot candidates
+  card), the terminal `obol overview`, the OSCP report's per-target section and
+  structured report context, and grouped under a dedicated "Pivot candidates"
+  category in the engagement findings roll-up. Stays proof-bound: a candidate
+  subnet is a lead, never a working tunnel or an authorization.
+
 - Added post-foothold flag capture: a thorough, non-interactive search for the
   well-known flag files (`user.txt`, `root.txt`, `local.txt`, `proof.txt`,
   `flag.txt`) run through the existing SSH/WinRM proof channel once a foothold is

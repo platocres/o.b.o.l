@@ -11,6 +11,7 @@ import re
 from .facts import FactSet
 from .graph import target_access_level, target_phase
 from .pack import Action, friendly, next_actions
+from .pivot import engagement_pivots
 from .workspace import Workspace
 
 SYM_NEXT = ">>"
@@ -244,6 +245,9 @@ def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
                 moves,
             )
         _console.print(Panel(t, title=f"{SYM_NEXT} engagement overview", border_style="cyan"))
+        pivots = _pivot_lines(ws)
+        if pivots:
+            _console.print(Panel("\n".join(pivots), title="pivot candidates", border_style="magenta"))
         _console.print("[dim]scan scope:[/dim] obol scan   [dim]active target:[/dim] obol target use <host>   [dim]next:[/dim] obol next")
         return
 
@@ -267,7 +271,26 @@ def render_overview(ws: Workspace, *, max_moves: int = 3) -> None:
         print(f"    domain: {rec.get('domain') or '-'}   os: {rec.get('os') or '-'}   state: {target_access_level(facts)} / {target_phase(facts)}")
         print(f"    ports:  {_services_line(facts)}")
         print(f"    next:   {moves}")
+    pivots = _pivot_lines(ws)
+    if pivots:
+        print("\nPIVOT CANDIDATES")
+        for line in pivots:
+            print(f"  {line}")
     print("\nscan scope: obol scan   |   active target: obol target use <host>   |   next: obol next\n")
+
+
+def _pivot_lines(ws: Workspace) -> list[str]:
+    """One line per host with a pivot-candidate lead — multi-homed status and the
+    candidate adjacent subnets, tagged when a subnet isn't in scope yet."""
+    lines: list[str] = []
+    for piv in engagement_pivots(ws):
+        subs = ", ".join(
+            s["cidr"] + ("" if s["in_scope"] else " (not in scope)")
+            for s in piv["subnets"][:6]
+        ) or "-"
+        tag = "multi-homed" if piv["multihomed"] else "adjacent subnet"
+        lines.append(f"{piv['host']:16} {tag}: {subs}")
+    return lines
 
 
 def render_step_command(step, action: Action, ws: Workspace) -> str:

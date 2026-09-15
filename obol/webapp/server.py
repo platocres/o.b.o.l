@@ -45,6 +45,7 @@ from ..graph import (
     target_phase,
 )
 from ..pack import friendly, load_packs, next_actions
+from ..pivot import pivot_summary
 from ..quickstart import (
     QUICKSTART_ACTION_IDS,
     action_done as _action_done,
@@ -425,6 +426,7 @@ CATEGORY_TITLE = {
     "ad": "Directory / AD",
     "credential": "Credentials & hashes",
     "access": "Access",
+    "pivot": "Pivot candidates",
     "privesc": "Privilege escalation",
     "objective": "Flags & objectives",
     "loot": "Loot",
@@ -738,6 +740,9 @@ def _target_bundle(ws: Workspace, host: str) -> dict:
         # logins are offerable now. Stored login_command is already redacted.
         "sessions": list(ws.sessions_for(host)),
         "logins": session_layer.eligible_sessions(ws, host),
+        # pivot candidates (§6c): multi-homed status + candidate adjacent subnets
+        # parsed from post-foothold local enum, the precondition for a tunnel.
+        "pivots": pivot_summary(ws, host),
     }
 
 
