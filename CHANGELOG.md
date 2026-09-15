@@ -7,6 +7,18 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **web cruise surface** — a **Cruise control** card on the per-target Overview
+  that brings `obol cruise` to the browser with full terminal parity. A ▶ Cruise button
+  runs cruise (`POST /api/cruise`) and renders the whole pause briefing as a live panel:
+  the **objective ladder** (§7), the **recap** (facts learned + the tools to install to
+  unblock more), and the **checkpoint** — its ask (approve/manual/input), the "why", a
+  command preview, and the risk — with an **Approve & run** button that runs the move
+  through `POST /api/move/run` and re-cruises from the new state, the other moves waiting,
+  and a pointer to Ingest/Assert for a checkpoint the operator handled by hand. Operator-
+  sourced findings also render with an `op-run` / `op-attested` badge (Build 1). Locked by
+  a `tests/test_webapp.py` case exercising `/api/cruise`, `/api/objectives`, `/api/ingest`,
+  and `/api/assert` (including the objective-complete stop and 422s).
+
 - Added the **per-target objective ladder** (`obol/objectives.py`, ROADMAP §7 promoted):
   initial access → privilege escalation → local flag → root flag, each rung reached
   **only by a proving fact** (a foothold, `access.admin`/`access.system`, or an

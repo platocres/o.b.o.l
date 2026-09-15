@@ -81,10 +81,17 @@ pillars:
   renders, never runs), the facts that triggered it, the ask (`approve`/`manual`/`input`),
   the risk (cleanup/scope), the resume path, and the other moves waiting — so the operator
   can decide what to do without reassembling context by hand.
-  **Still open:** a per-step live web view (it runs synchronously today, like a background
-  job would — §9), objective-complete detection (§7 ladder) as an explicit stop, and an
-  approve-a-checkpoint-and-continue flow (today: handle the checkpoint, then `obol cruise`
-  again).
+  A **web cruise surface** then landed: a **Cruise control** card on the per-target
+  Overview with a ▶ Cruise button (`POST /api/cruise`) that renders the full briefing —
+  the objective ladder, the recap (learned + tools to install), the checkpoint (ask /
+  why / command / risk) with an **Approve & run** button that runs the move
+  (`POST /api/move/run`) and re-cruises, the other moves waiting, and a pointer to Ingest /
+  Assert for a handled-by-hand checkpoint. Objective-complete detection also landed (§7
+  ladder — cruise stops `objective-complete` at the root objective). **Still open:** a
+  per-*step* live web view (cruise still runs synchronously per request, like a background
+  job would — §9), and the reverse ingest/assert forms as first-class web panels (today
+  the terminal has `obol ingest`/`obol assert`; the web has the endpoints + the briefing
+  pointer).
 - **(III) Resumable handoff + external-action ingestion (the anti-brittleness pillar).**
   The seam Charon lacked. When cruise stops stuck, the operator acts outside obol and
   re-enters from facts:
