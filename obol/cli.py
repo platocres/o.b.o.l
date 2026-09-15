@@ -273,6 +273,38 @@ def cmd_moves(args) -> None:
     print()
 
 
+def cmd_do(args) -> None:
+    from . import dispatch
+    ws = _load_or_exit()
+    host = args.host or ws.target
+    if not host:
+        print("no active target. add one with `obol target add <ip>` or pass a host.",
+              file=sys.stderr)
+        raise SystemExit(1)
+    params = {}
+    for k in ("method", "subnet", "outcome"):
+        v = getattr(args, k, "")
+        if v:
+            params[k] = v
+    try:
+        res = dispatch.run_move(ws, args.id, host=host, dry_run=args.dry_run, params=params)
+    except dispatch.DispatchError as exc:
+        print(f"cannot run {args.id!r}: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    tag = {"ran": "ran", "dry-run": "preview", "handoff": "handoff",
+           "craft": "crafted"}.get(res["posture"], res["posture"])
+    print(f"\n[{tag}] {res['label']}")
+    if res.get("summary"):
+        print(f"  {res['summary']}")
+    if res.get("command"):
+        print(f"  $ {res['command']}")
+    if res.get("added"):
+        print(f"  facts: {', '.join(res['added'])}")
+    if res["posture"] in ("handoff", "craft"):
+        print("  (obol prepared this — you launch/verify it, then `obol moves` for the next)")
+    print()
+
+
 def cmd_explain(args) -> None:
     ws = _load_or_exit()
     board.render_command(_pick(ws, args.n), ws)
@@ -1365,6 +1397,18 @@ try:
     pm.add_argument("--all", action="store_true",
                     help="also list moves waiting on one input, with the reason")
     pm.set_defaults(func=cmd_moves)
+
+    pd = sub.add_parser("do", help="run one move from the frontier by id (see `obol moves`)")
+    pd.add_argument("id", help="move id: a pack action id, or login:KIND / enum:TOOL / "
+                              "tunnel:KIND / exploit:KEY")
+    pd.add_argument("host", nargs="?", default="", help="target host (default: active target)")
+    pd.add_argument("--dry-run", action="store_true",
+                    help="preview an action/login command without executing")
+    pd.add_argument("--method", default="", help="login method: password|pth")
+    pd.add_argument("--subnet", default="", help="exposed subnet for a subnet-routing tunnel")
+    pd.add_argument("--outcome", default="",
+                    help="exploit outcome to craft: add-user|system-shell|revshell")
+    pd.set_defaults(func=cmd_do)
 
     pe = sub.add_parser("explain", help="show the full command card (hypothesis, commands, references) for action N")
     pe.add_argument("n", type=int)

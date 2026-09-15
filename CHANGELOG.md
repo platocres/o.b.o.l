@@ -7,6 +7,27 @@ for every user-facing, code, pack, parser, runner, report, or documentation buil
 
 ### Added
 
+- Added the **move execution handle** (`obol/dispatch.py`) — cruise-control **pillar
+  I→II** bridge. `run_move(ws, id)` runs any frontier move (from `moves.frontier_moves`)
+  by id through its **existing** shared primitive — `service.run_action` for a pack
+  action, `sessions.open_session` for a login, `enumrun.run_enum` for enum run-and-rank,
+  `tunnels.open_tunnel` for a pivot, `exploits.plan_exploit` to craft a privesc exploit —
+  so there is now one uniform "run this move" call (the terminal, the web, and later the
+  cruise loop all make it; the loop never branches per kind). It invents nothing: no new
+  runner/parser/store, and it is **fact-gated on execution** — a move can only be run if
+  the frontier currently *offers* it and (for a primitive needing input) it is *ready*,
+  otherwise a clear error says what is missing. Each result carries an honest **posture**
+  that seeds cruise's stop-contract: `ran` (a real command executed + facts ingested),
+  `dry-run` (preview only), `handoff` (proof/record ran, here's the interactive command to
+  launch — a login shell, a tunnel's setup), or `craft` (nothing executed, here's the
+  command to review). Privesc **exploits are crafted, never auto-fired** by the dispatcher
+  (the OSCP/manual posture); their execution stays on the dedicated `obol exploit --run`
+  path. Terminal `obol do <id> [--dry-run] [--method/--subnet/--outcome]` and web
+  `POST /api/move/run`, full parity. Locked by `tests/test_dispatch.py` (id parsing,
+  the offered-and-ready execution gate, action dry-run vs. real run through the shared
+  runner, a login's handoff with the access fact recorded, and exploit craft touching
+  no state).
+
 - Added the **unified move frontier** (`obol/moves.py`) — cruise-control **pillar I**,
   first slice. `frontier_moves(ws, host)` merges the packs' live actions
   (`pack.next_actions`) with the built-primitive offers — a session login (§6a), enum
